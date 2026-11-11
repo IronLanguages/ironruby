@@ -1293,6 +1293,7 @@ namespace IronRuby.Tests {
                 Enumerable_TallyBasicObject1,
                 Enumerable_InjectPrivateOp1,
                 HostingHelpOption1,
+                String_CompareInverse1,
             };
         }
     }

@@ -894,7 +894,23 @@ namespace IronRuby.Builtins {
             try {
                 var site = comparisonStorage.GetCallSite("<=>");
                 object answer = site.Target(site, other, self);
-                return (answer == null) ? null : Integer.TryUnaryMinus(answer);
+                if (answer == null) {
+                    return null;
+                }
+                // rb_invcmp answers -rb_cmpint(answer): -1, 0 or 1 whatever number the other side gave
+                // (2**100 is -1, not -(2**100)), asking a non-Integer how it compares with 0.
+                if (answer is int) {
+                    int i = (int)answer;
+                    return ScriptingRuntimeHelpers.Int32ToObject(i > 0 ? -1 : (i < 0 ? 1 : 0));
+                }
+                var context = comparisonStorage.Context;
+                var greaterThan = context.GetOrCreateSendSite<Func<CallSite, object, object, object>>(">", RubyCallSignature.Simple(1));
+                if (RubyOps.IsTrue(greaterThan.Target(greaterThan, answer, ScriptingRuntimeHelpers.Int32ToObject(0)))) {
+                    return ScriptingRuntimeHelpers.Int32ToObject(-1);
+                }
+                var lessThan = context.GetOrCreateSendSite<Func<CallSite, object, object, object>>("<", RubyCallSignature.Simple(1));
+                return ScriptingRuntimeHelpers.Int32ToObject(
+                    RubyOps.IsTrue(lessThan.Target(lessThan, answer, ScriptingRuntimeHelpers.Int32ToObject(0))) ? 1 : 0);
             } finally {
                 pending.RemoveRange(pending.Count - 2, 2);
             }

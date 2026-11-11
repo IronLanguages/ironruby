@@ -486,5 +486,29 @@ puts u.dump
 ""\x82\xA0\#{\""\\""
 ");
         }
+
+        /// <summary>
+        /// String#&lt;=&gt; with an object that cannot be a String asks it the other way round and answers -rb_cmpint of its
+        /// answer, as MRI's rb_invcmp does: -1, 0 or 1, whatever number came back. 2**100 came back as -(2**100).
+        /// </summary>
+        public void String_CompareInverse1() {
+            TestOutput(@"
+def cmp(answer)
+  o = Object.new
+  o.define_singleton_method(:<=>) { |_| answer }
+  'foo' <=> o
+rescue => e
+  e
+end
+p cmp(2**100), cmp(-(2**100)), cmp(1.5), cmp(0), cmp(nil), cmp('x')
+", @"
+-1
+1
+-1
+0
+nil
+#<ArgumentError: comparison of String with 0 failed>
+");
+        }
     }
 }
