@@ -646,5 +646,26 @@ p S2.new('abc', capacity: 5), S2.new(encoding: 'euc-jp').encoding
 #<Encoding:EUC-JP>
 ");
         }
+
+        /// <summary>
+        /// to_i, hex and oct read digits as ASCII bytes and refuse an encoding that does not write them so, as MRI's
+        /// rb_must_asciicompat does: "0" in UTF-32LE was 0.
+        /// </summary>
+        public void String_ToIntAsciiIncompatible1() {
+            TestOutput(@"
+require 'ruby4'
+def t; yield; rescue Exception => e; e; end
+p t { '0'.encode('utf-32le').to_i }, t { '12'.encode('utf-16be').to_i(16) }, t { '1'.encode('utf-16le').hex }, t { '7'.dup.force_encoding('ISO-2022-JP').oct }
+p '12'.to_i, '12'.b.to_i(16), 'ff'.hex
+", @"
+#<Encoding::CompatibilityError: ASCII incompatible encoding: UTF-32LE>
+#<Encoding::CompatibilityError: ASCII incompatible encoding: UTF-16BE>
+#<Encoding::CompatibilityError: ASCII incompatible encoding: UTF-16LE>
+#<Encoding::CompatibilityError: ASCII incompatible encoding: ISO-2022-JP>
+12
+18
+255
+");
+        }
     }
 }

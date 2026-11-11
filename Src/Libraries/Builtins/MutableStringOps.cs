@@ -5284,17 +5284,31 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("to_i")]
         public static object/*!*/ ToInteger(MutableString/*!*/ self, [DefaultProtocol, DefaultParameterValue(10)]int @base) {
+            if (@base >= 0) {
+                RequireAsciiCompatibleDigits(self);
+            }
             return ClrString.ToInteger(self.ConvertToString(), @base);
         }
 
         [RubyMethod("hex")]
         public static object/*!*/ ToIntegerHex(MutableString/*!*/ self) {
+            RequireAsciiCompatibleDigits(self);
             return ClrString.ToIntegerHex(self.ConvertToString());
         }
 
         [RubyMethod("oct")]
         public static object/*!*/ ToIntegerOctal(MutableString/*!*/ self) {
+            RequireAsciiCompatibleDigits(self);
             return ClrString.ToIntegerOctal(self.ConvertToString());
+        }
+
+        // MRI's rb_str_to_inum reads the digits as ASCII bytes and refuses an encoding that does not
+        // write them so (rb_must_asciicompat): "0".encode("UTF-32LE").to_i is an error, not 0.
+        private static void RequireAsciiCompatibleDigits(MutableString/*!*/ self) {
+            RubyEncoding encoding = self.Encoding;
+            if (!encoding.IsAsciiIdentity || encoding.IsDummy) {
+                throw new EncodingCompatibilityError(String.Format("ASCII incompatible encoding: {0}", encoding.Name));
+            }
         }
 
         #endregion

@@ -1300,6 +1300,7 @@ namespace IronRuby.Tests {
                 String_InspectDummyControl1,
                 String_StripInvalid1,
                 String_InitializeKeywords1,
+                String_ToIntAsciiIncompatible1,
             };
         }
     }
