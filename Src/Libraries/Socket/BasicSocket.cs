@@ -147,8 +147,9 @@ namespace IronRuby.StandardLibrary.Sockets {
                     return SetFileControlFlags(arg);
                 case LinuxGetFileFlags:
                     // Report the O_NONBLOCK bit io/nonblock's #nonblock? and #nonblock= read
-                    // back.  Not Socket.Blocking: that is the internal wait-or-not switch.
-                    return _nonBlocking ? LinuxNonBlock : 0;
+                    // back - the platform's (File::NONBLOCK), as io/nonblock tests it, not
+                    // Linux's.  Not Socket.Blocking: that is the internal wait-or-not switch.
+                    return _nonBlocking ? RubyFileOps.Constants.NONBLOCK : 0;
             }
             // Anything else (F_GETFD/F_SETFD for FD_CLOEXEC, ...) goes to the real descriptor.
             return NativeFileControl((int)Socket.Handle, commandId, arg);

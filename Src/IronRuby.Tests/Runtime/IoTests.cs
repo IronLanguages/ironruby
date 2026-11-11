@@ -61,6 +61,59 @@ end
 ");
         }
 
+        /// <summary>
+        /// IO.pipe, IO.popen, backquotes and spawn on pipe(2) and F_SETFD instead of pipe2(2), the path
+        /// macOS takes, whose libc has no pipe2: all four raised EntryPointNotFoundException there.
+        /// Both ends have to be close-on-exec, or a child inherits the write end and the read end never
+        /// sees end of file; an end the child is handed explicitly (w => w) is open in it.
+        /// </summary>
+        public void IO_PipeWithoutPipe2() {
+            if (OperatingSystem.IsWindows()) {
+                return;
+            }
+
+            var noPipe2 = typeof(RubyProcess).GetField("_noPipe2",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            Assert(noPipe2 != null);
+            object saved = noPipe2.GetValue(null);
+            noPipe2.SetValue(null, true);
+            try {
+                TestOutput(@"
+require 'ruby4'
+r, w = IO.pipe
+p [r.close_on_exec?, w.close_on_exec?]
+w.write 'piped'
+w.close
+p r.read
+r.close
+p IO.popen('echo popen', &:read), $?.success?
+p `echo back`
+r, w = IO.pipe
+pid = spawn('bash', '-c', ""echo given >&#{w.fileno}"", w => w)
+w.close
+Process.wait(pid)
+p r.read
+r.close
+r, w = IO.pipe
+pid = spawn('bash', '-c', ""exec 2>/dev/null; exec >&#{w.fileno} || exit 1; echo leaked"")
+w.close
+Process.wait(pid)
+p r.read, $?.success?
+", @"
+[true, true]
+""piped""
+""popen\n""
+true
+""back\n""
+""given\n""
+""""
+false
+");
+            } finally {
+                noPipe2.SetValue(null, saved);
+            }
+        }
+
         private class TestStream : MemoryStream {
             public TestStream(byte[] data) 
                 : base(data) {
