@@ -77,8 +77,10 @@ class FrozenError < RuntimeError; end unless defined?(FrozenError)
 module Kernel
   # #yield_self is an alias of #then (MRI's <internal:kernel>), so the two are one
   # entry, and the original name - the one an Enumerator and Method#name report - is :then.
+  # `defined?(yield)', as MRI writes it, rather than block_given?, which is a call: the
+  # method then runs without a scope when it is given a block (MethodDefinition.IsBlockGuard).
   def then
-    return to_enum(:then) { 1 } unless block_given?
+    return to_enum(:then) { 1 } unless defined?(yield)
     yield self
   end unless method_defined?(:then)
   alias :yield_self :then unless method_defined?(:yield_self)

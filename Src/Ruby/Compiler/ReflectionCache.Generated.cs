@@ -224,6 +224,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _EnterLoop;
         public static MethodInfo/*!*/ EnterRescue { get { return _EnterRescue ?? (_EnterRescue = CallInstruction.CacheAction<IronRuby.Runtime.RubyScope>(RubyOps.EnterRescue)); } }
         private static MethodInfo _EnterRescue;
+        public static MethodInfo/*!*/ EnterScopeFreeBlock { get { return _EnterScopeFreeBlock ?? (_EnterScopeFreeBlock = CallInstruction.CacheFunc<System.Boolean>(RubyOps.EnterScopeFreeBlock)); } }
+        private static MethodInfo _EnterScopeFreeBlock;
         public static MethodInfo/*!*/ EvalBreak { get { return _EvalBreak ?? (_EvalBreak = CallInstruction.CacheAction<IronRuby.Runtime.RubyScope, System.Object>(RubyOps.EvalBreak)); } }
         private static MethodInfo _EvalBreak;
         public static MethodInfo/*!*/ EvalNext { get { return _EvalNext ?? (_EvalNext = CallInstruction.CacheAction<IronRuby.Runtime.RubyScope, System.Object>(RubyOps.EvalNext)); } }
@@ -402,6 +404,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _IsLambdaScopeUnwinderTarget;
         public static MethodInfo/*!*/ IsLambdaUnwinderTarget { get { return _IsLambdaUnwinderTarget ?? (_IsLambdaUnwinderTarget = CallInstruction.CacheFunc<IronRuby.Runtime.BlockParam, System.Exception, System.Boolean>(RubyOps.IsLambdaUnwinderTarget)); } }
         private static MethodInfo _IsLambdaUnwinderTarget;
+        public static MethodInfo/*!*/ IsMethodCallTraced { get { return _IsMethodCallTraced ?? (_IsMethodCallTraced = CallInstruction.CacheFunc<System.Boolean>(RubyOps.IsMethodCallTraced)); } }
+        private static MethodInfo _IsMethodCallTraced;
         public static MethodInfo/*!*/ IsMethodUnwinderTargetFrame { get { return _IsMethodUnwinderTargetFrame ?? (_IsMethodUnwinderTargetFrame = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Exception, System.Boolean>(RubyOps.IsMethodUnwinderTargetFrame)); } }
         private static MethodInfo _IsMethodUnwinderTargetFrame;
         public static MethodInfo/*!*/ IsObjectFrozen { get { return _IsObjectFrozen ?? (_IsObjectFrozen = CallInstruction.CacheFunc<IronRuby.Runtime.RubyInstanceData, System.Boolean>(RubyOps.IsObjectFrozen)); } }
@@ -676,6 +680,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _ToUInt32Validator;
         public static MethodInfo/*!*/ ToUInt64Validator { get { return _ToUInt64Validator ?? (_ToUInt64Validator = CallInstruction.CacheFunc<System.String, System.Object, System.UInt64>(RubyOps.ToUInt64Validator)); } }
         private static MethodInfo _ToUInt64Validator;
+        public static MethodInfo/*!*/ TraceBlockCall { get { return _TraceBlockCall ?? (_TraceBlockCall = CallInstruction.CacheFunc<IronRuby.Runtime.RubyBlockScope, IronRuby.Runtime.RubyBlockScope>(RubyOps.TraceBlockCall)); } }
+        private static MethodInfo _TraceBlockCall;
         public static MethodInfo/*!*/ TraceClassEvent { get { return _TraceClassEvent ?? (_TraceClassEvent = CallInstruction.CacheAction<IronRuby.Runtime.RubyScope, System.String, System.Int32>(RubyOps.TraceClassEvent)); } }
         private static MethodInfo _TraceClassEvent;
         public static MethodInfo/*!*/ TraceLibraryCall { get { return _TraceLibraryCall ?? (_TraceLibraryCall = CallInstruction.CacheAction<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Runtime.Calls.RubyMemberInfo, System.String>(RubyOps.TraceLibraryCall)); } }

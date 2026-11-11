@@ -430,7 +430,38 @@ namespace IronRuby.Prism {
 
         // regex literals become $_ matches, ranges become flip-flops, etc.
         private Expression/*!*/ Condition(Pm.PmNode/*!*/ predicate) {
-            return Expr(predicate).ToCondition(CurrentScope);
+            return UnfrozenDefined(Expr(predicate)).ToCondition(CurrentScope);
+        }
+
+        /// <summary>
+        /// `if defined?(x)', `while defined?(x) && ...': in a condition only whether the answer is nil counts, so the string
+        /// need not be frozen by a call to #freeze (see Freeze) - which CRuby's defined? does not make at all, and which, being a
+        /// call, made the method it is in need its scope (`return ... unless defined?(yield)', MethodDefinition.IsBlockGuard).
+        /// The operands of &amp;&amp;, || and ! in a condition are conditions too: what one of them gives back is only tested.
+        /// </summary>
+        private static Expression/*!*/ UnfrozenDefined(Expression/*!*/ condition) {
+            switch (condition) {
+                case MethodCall call when call.MethodName == "freeze" && call.Target is IsDefinedExpression &&
+                    call.Arguments == null && call.Block == null:
+                    return call.Target;
+
+                case AndExpression and: {
+                    var left = UnfrozenDefined(and.Left);
+                    var right = UnfrozenDefined(and.Right);
+                    return (left == and.Left && right == and.Right) ? condition : new AndExpression(left, right, and.Location);
+                }
+                case OrExpression or: {
+                    var left = UnfrozenDefined(or.Left);
+                    var right = UnfrozenDefined(or.Right);
+                    return (left == or.Left && right == or.Right) ? condition : new OrExpression(left, right, or.Location);
+                }
+                case NotExpression not: {
+                    var operand = UnfrozenDefined(not.Expression);
+                    return (operand == not.Expression) ? condition : new NotExpression(operand, not.Location);
+                }
+                default:
+                    return condition;
+            }
         }
 
         // ---- program / statements ----

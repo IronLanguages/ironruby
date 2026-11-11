@@ -323,9 +323,22 @@ namespace IronRuby.Compiler.Ast {
                 }
             }
 
+            // A light frame keeps its locals in CLR variables if it can: `def one(x); yield x; end' would otherwise allocate their
+            // tuple on every call.
+            MSA.Expression enter = null;
+            if (light != null) {
+                var registerBody = scope.TryUseRegisterLocals(body);
+                if (registerBody != null) {
+                    body = registerBody;
+                    enter = light.EnterWithRegisterLocals(scope);
+                } else {
+                    enter = light.Enter(scope);
+                }
+            }
+
             body = scope.CreateScope(
                 scopeVariable,
-                (light != null) ? light.Enter(scope) : Methods.CreateMethodScope.OpCall(new AstExpressions {
+                enter ?? Methods.CreateMethodScope.OpCall(new AstExpressions {
                     scope.MakeLocalsStorage(),
                     variableNames,
                     Ast.Constant(visiblePrameterCountAndSignatureFlags),
@@ -360,7 +373,7 @@ namespace IronRuby.Compiler.Ast {
             internal MSA.ParameterExpression/*!*/ Callee;
             internal MSA.Expression/*!*/ LazyScope;
             internal Func<MSA.Expression>/*!*/ MakeScope;
-            internal Func<MSA.Expression>/*!*/ MakeScopeIfTraced;
+            internal Func<MSA.Expression, MSA.Expression>/*!*/ MakeScopeIfTraced;
             internal MSA.Expression/*!*/ Name;
 
             /// <summary>
@@ -372,7 +385,23 @@ namespace IronRuby.Compiler.Ast {
                     scope.MakeLocalsStorage(),
                     Ast.Assign(Rfc, Methods.EnterLightMethod.OpCall(_blockParameter)),
                     Ast.Assign(Callee, Methods.TakePendingCallee.OpCall(Name)),
-                    MakeScopeIfTraced()
+                    MakeScopeIfTraced(scope.LocalsTupleVariable)
+                );
+            }
+
+            /// <summary>
+            /// <see cref="Enter"/> of a body that keeps its locals in CLR variables (ScopeBuilder.TryUseRegisterLocals): their
+            /// tuple is made only for the scope a TracePoint listening for calls has made at the entry.
+            /// </summary>
+            internal MSA.Expression/*!*/ EnterWithRegisterLocals(ScopeBuilder/*!*/ scope) {
+                return Ast.Block(
+                    scope.MakeRegisterLocalsStorage(),
+                    Ast.Assign(Rfc, Methods.EnterLightMethod.OpCall(_blockParameter)),
+                    Ast.Assign(Callee, Methods.TakePendingCallee.OpCall(Name)),
+                    Ast.Condition(Methods.IsMethodCallTraced.OpCall(),
+                        MakeScopeIfTraced(scope.MaterializeLocals()),
+                        AstUtils.Constant(null, typeof(RubyMethodScope))
+                    )
                 );
             }
 
@@ -407,13 +436,37 @@ namespace IronRuby.Compiler.Ast {
                 return false;
             }
             if (body.Statements != null) {
+                bool first = true;
                 foreach (var statement in body.Statements) {
-                    if (!IsScopeFree(statement)) {
+                    if (!IsScopeFree(statement) && !(first && IsBlockGuard(statement))) {
                         return false;
                     }
+                    first = false;
                 }
             }
             return true;
+        }
+
+        /// <summary>
+        /// `return ... unless defined?(yield)' - CRuby's `then' (<internal:kernel>), and IronRuby's in ruby4.rb - as the first
+        /// statement of a light frame: only a call without a block runs it, and there it may make the scope on demand (see
+        /// LightFrameRewriter), as a TracePoint hook does, for whatever it calls. A call with a block never makes one.
+        /// </summary>
+        private static bool IsBlockGuard(Expression/*!*/ node) {
+            var unless = node as UnlessExpression;
+            if (unless == null || unless.ElseClause != null || unless.Statements.Count != 1 || !(unless.Statements.First is ReturnStatement)) {
+                return false;
+            }
+            var defined = unless.Condition as IsDefinedExpression;
+            var yieldCall = (defined != null) ? defined.Expression as YieldCall : null;
+            return yieldCall != null && yieldCall.Arguments == null && yieldCall.Block == null;
+        }
+
+        private bool HasBlockGuard {
+            get {
+                var statements = Body.Statements;
+                return statements != null && statements.Count > 0 && IsBlockGuard(statements.First);
+            }
         }
 
         private static bool IsScopeFree(Expression/*!*/ node) {
@@ -491,15 +544,15 @@ namespace IronRuby.Compiler.Ast {
             light._blockParameter = blockParameter;
 
             var shape = Ast.Constant(new MethodFrameShape((string[])names.Value, visibleParameterCountAndSignatureFlags, _name));
-            Func<MethodInfo, MSA.Expression> make = method => method.OpCall(new AstExpressions {
-                shape, declaringScope, declaringModule, scope.LocalsTupleVariable, selfParameter, blockParameter,
+            Func<MethodInfo, MSA.Expression, MSA.Expression> make = (method, locals) => method.OpCall(new AstExpressions {
+                shape, declaringScope, declaringModule, locals, selfParameter, blockParameter,
                 EnterInterpretedFrameExpression.Instance, light.Rfc, light.Callee
             });
-            light.MakeScope = () => make(Methods.CreateMethodScopeLazy);
-            light.MakeScopeIfTraced = () => make(Methods.CreateMethodScopeIfTraced);
+            light.MakeScope = () => make(Methods.CreateMethodScopeLazy, scope.LocalsTupleVariable);
+            light.MakeScopeIfTraced = locals => make(Methods.CreateMethodScopeIfTraced, locals);
             light.LazyScope = Ast.Coalesce(scopeVariable, Ast.Assign(scopeVariable, light.MakeScope()));
 
-            var rewriter = new LightFrameRewriter(scopeVariable, light.LazyScope, light.Rfc, declaringScope);
+            var rewriter = new LightFrameRewriter(scopeVariable, light.LazyScope, light.Rfc, declaringScope, HasBlockGuard);
             var rewritten = rewriter.Visit(statements);
             if (LightFramesVerbose) {
                 Console.Error.WriteLine("[light] {0} {1} ({2}:{3})", rewriter.NeedsScope ? "needs scope:" : "light:", _name, gen.SourcePath, Location.Start.Line);
@@ -523,10 +576,15 @@ namespace IronRuby.Compiler.Ast {
             private readonly MSA.Expression/*!*/ _declaringScope;
             private int _inTraceHook;
 
+            // The body starts with a block guard (IsBlockGuard), the only statement IsLightFrameCandidate let through that may use
+            // the scope: every use of it is a use of the scope made on demand, and the calls it makes are looked into.
+            private readonly bool _lazyUses;
+
             internal bool NeedsScope;
 
             internal LightFrameRewriter(MSA.ParameterExpression/*!*/ scope, MSA.Expression/*!*/ lazyScope, MSA.Expression/*!*/ rfc,
-                MSA.Expression/*!*/ declaringScope) {
+                MSA.Expression/*!*/ declaringScope, bool lazyUses) {
+                _lazyUses = lazyUses;
                 _scope = scope;
                 _lazyScope = lazyScope;
                 _rfc = rfc;
@@ -555,7 +613,7 @@ namespace IronRuby.Compiler.Ast {
 
             protected override MSA.Expression/*!*/ VisitParameter(MSA.ParameterExpression/*!*/ node) {
                 if (node == _scope) {
-                    if (_inTraceHook > 0) {
+                    if (_inTraceHook > 0 || _lazyUses) {
                         return _lazyScope;
                     }
                     NeedsScope = true;
@@ -604,7 +662,7 @@ namespace IronRuby.Compiler.Ast {
                 if (node is EnterInterpretedFrameExpression || node is SourceLineMarker) {
                     return node;
                 }
-                if (node is CompiledFrameExpression) {
+                if (node is CompiledFrameExpression || (_lazyUses && node is Microsoft.Scripting.Ast.LightDynamicExpression)) {
                     return base.VisitExtension(node);
                 }
                 NeedsScope = true;
