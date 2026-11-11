@@ -3467,6 +3467,7 @@ class String
     end
     out = +""
     unicode_escape = false
+    hex_escape = false # a \x escape of a non-ASCII byte
     i = 0
     while i < body.length
       c = body[i]
@@ -3493,9 +3494,14 @@ class String
         when "x"
           hex = body[(i + 1), 2]
           ::Kernel.raise(::RuntimeError, "invalid hex escape") unless hex =~ /\A[0-9a-fA-F]{2}\z/
+          if hex.to_i(16) > 0x7f
+            ::Kernel.raise(::RuntimeError, "hex escape and Unicode escape are mixed") if unicode_escape
+            hex_escape = true
+          end
           out << hex.to_i(16).chr
           i += 2
         when "u"
+          ::Kernel.raise(::RuntimeError, "hex escape and Unicode escape are mixed") if hex_escape
           unicode_escape = true
           if body[i + 1] == "{"
             close = body.index("}", i + 1)
@@ -3523,9 +3529,10 @@ class String
       ::Kernel.raise(::RuntimeError, "dumped string contained Unicode escape but used force_encoding")
     end
     # Without a .force_encoding(...) suffix the answer carries the receiver's
-    # own encoding, not UTF-8.
+    # own encoding - or UTF-8 once a \u escape has been read, as MRI's
+    # undump_after_backslash switches it to.
     if out.respond_to?(:force_encoding)
-      out.force_encoding(forced || encoding)
+      out.force_encoding(forced || (unicode_escape ? ::Encoding::UTF_8 : encoding))
     end
     out
   end unless method_defined?(:undump)

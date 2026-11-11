@@ -667,5 +667,24 @@ p '12'.to_i, '12'.b.to_i(16), 'ff'.hex
 255
 ");
         }
+
+        /// <summary>
+        /// String#undump answers UTF-8 once it has read a \u escape, whatever the receiver's encoding, and refuses \u
+        /// next to a \x escape of a non-ASCII byte, as MRI's undump_after_backslash does.
+        /// </summary>
+        public void String_UndumpUnicodeEncoding1() {
+            TestOutput(@"
+require 'ruby4'
+def t; yield; rescue Exception => e; e; end
+p t { '""\\u3042""'.encode('EUC-JP').undump.encoding }, t { '""\\xA4\\xA2""'.encode('EUC-JP').undump.encoding }
+p t { '""\\xE3\\u3042""'.undump }, t { '""\\u3042\\xE3""'.undump }, t { '""\\x41\\u0042""'.undump }
+", @"
+#<Encoding:UTF-8>
+#<Encoding:EUC-JP>
+#<RuntimeError: hex escape and Unicode escape are mixed>
+#<RuntimeError: hex escape and Unicode escape are mixed>
+""AB""
+");
+        }
     }
 }

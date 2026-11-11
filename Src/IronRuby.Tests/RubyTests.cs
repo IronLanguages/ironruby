@@ -1301,6 +1301,7 @@ namespace IronRuby.Tests {
                 String_StripInvalid1,
                 String_InitializeKeywords1,
                 String_ToIntAsciiIncompatible1,
+                String_UndumpUnicodeEncoding1,
             };
         }
     }
