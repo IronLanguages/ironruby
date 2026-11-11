@@ -210,6 +210,9 @@ namespace IronRuby.Builtins {
                     ascii = (encoding == RubyEncoding.UTF8 || encoding == RubyEncoding.Binary || encoding == RubyEncoding.Ascii) &&
                         System.Text.Ascii.IsValid(bytes);
                 }
+                if (!ascii && encoding == RubyEncoding.UTF8 && TryHashUtf8(bytes, out int utf8Hash)) {
+                    return utf8Hash;
+                }
                 int charCount = ascii ? _count : encoding.EscapingEncoding.GetCharCount(_data, _start, _count);
 
                 // EscapingEncoding implements only the array overloads: the span ones would go
@@ -231,6 +234,32 @@ namespace IronRuby.Builtins {
                         ArrayPool<char>.Shared.Return(rented);
                     }
                 }
+            }
+
+            /// <summary>
+            /// The hash of UTF-8 bytes that are not all ASCII, if they are valid: the hash of the characters they decode to, as
+            /// CalculateHashCode's general path gives, but decoded in one pass. The escaping encoding validates the bytes again
+            /// for the count and once more for the characters, which made #hash of a non-ASCII UTF-8 string held as bytes
+            /// cost about five times as much as of the same string held as characters.
+            /// </summary>
+            [SkipLocalsInit]
+            private static bool TryHashUtf8(ReadOnlySpan<byte> bytes, out int hash) {
+                // valid UTF-8 never decodes to more UTF-16 units than it has bytes
+                char[] rented = null;
+                Span<char> chars = (bytes.Length <= 256) ? stackalloc char[256] : (rented = ArrayPool<char>.Shared.Rent(bytes.Length));
+                try {
+                    if (System.Text.Unicode.Utf8.ToUtf16(bytes, chars, out _, out int written, replaceInvalidSequences: false) == OperationStatus.Done) {
+                        // not all ASCII, so HashCharacters would hash them as they are
+                        hash = String.GetHashCode(chars.Slice(0, written));
+                        return true;
+                    }
+                } finally {
+                    if (rented != null) {
+                        ArrayPool<char>.Shared.Return(rented);
+                    }
+                }
+                hash = 0;
+                return false;
             }
 
             public override int Count {
