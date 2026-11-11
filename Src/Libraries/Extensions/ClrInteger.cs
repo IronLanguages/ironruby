@@ -174,8 +174,10 @@ namespace IronRuby.Builtins {
         /// the failed allocation MRI reports (NoMemoryError): 1 &lt;&lt; 2**31 is a NoMemoryError.
         /// </summary>
         internal static BigInteger ShiftLeftOrFail(BigInteger value, int shift) {
-            // GetBitLength is the two's complement width: -2**k has k, its magnitude k + 1 bits
-            if (shift > 0 && !value.IsZero && (long)value.GetBitLength() + (value.Sign < 0 ? 1 : 0) + shift > MaxBigIntegerBits) {
+            // the magnitude's bits, which BigInteger stores: GetBitLength is the two's complement width, a bit
+            // short for -2**k (-1 has 0)
+            if (shift > 0 && !value.IsZero &&
+                (long)(value.Sign < 0 ? BigInteger.Abs(value) : value).GetBitLength() + shift > MaxBigIntegerBits) {
                 throw new OutOfMemoryException("failed to allocate memory");
             }
             try {

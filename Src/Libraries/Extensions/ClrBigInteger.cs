@@ -978,6 +978,10 @@ namespace IronRuby.Builtins {
         /// </remarks>
         [RubyMethod(">>")]
         public static object/*!*/ RightShift(BigInteger/*!*/ self, int other) {
+            if (other < 0) {
+                // a left shift, held to the BigInteger size limit as << is (ClrInteger.ShiftLeftOrFail)
+                return (other == Int32.MinValue) ? ClrInteger.ShiftBeyondInt32(self, BigInteger.One << 31) : LeftShift(self, -other);
+            }
             BigInteger result = self >> other;
             result = ShiftOverflowCheck(self, result);
             return Protocols.Normalize(result);
