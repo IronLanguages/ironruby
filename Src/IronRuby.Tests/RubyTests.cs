@@ -1279,6 +1279,7 @@ namespace IronRuby.Tests {
                 Continuation_Escape1,
                 RbConfig_ExecutableExts1,
                 IOBuffer_ExperimentalWarning1,
+                Array_Cycle1,
             };
         }
     }

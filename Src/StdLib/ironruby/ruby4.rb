@@ -4338,6 +4338,39 @@ class Array
   end
   private :__repeat__
 
+  # MRI's rb_ary_cycle walks the array as it is on each pass, where Enumerable#cycle
+  # yields what the first pass saw: `a.cycle { a.clear }` stops after one element
+  # instead of cycling forever over a copy.
+  def cycle(*args)
+    unless block_given?
+      enum = super(*args)
+      return to_enum(:cycle, *args) { enum.size }
+    end
+    if args.size > 1
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
+    end
+    n = args[0]
+    if n.nil?
+      n = -1
+    else
+      count = n
+      n = ::Math.__send__(:__int__, count)
+      unless n.is_a?(::Integer)
+        ::Kernel.raise(::TypeError,
+          "can't convert #{count.class} to Integer (#{count.class}#to_int gives #{__ir_conversion_result_name__(n)})")
+      end
+      return nil if n <= 0
+    end
+    while size > 0 && (n < 0 || (n -= 1) >= 0)
+      i = 0
+      while i < size
+        yield self[i]
+        i += 1
+      end
+    end
+    nil
+  end
+
   def to_h
     result = {}
     each_with_index do |pair, index|
