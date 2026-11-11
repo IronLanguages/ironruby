@@ -530,5 +530,31 @@ p ""a\n\n\nb\n"".lines(''), ""a\nb\n\nc"".lines('', chomp: true)
 [""a\nb"", ""c""]
 ");
         }
+
+        /// <summary>
+        /// String#upto (MRI's str_upto_each) yields a copy of the receiver and works out the next string before the
+        /// block runs, so a block that changes the string it got changes neither the receiver nor the walk; and the walk
+        /// starts whenever the receiver sorts before the end, a longer receiver included.
+        /// </summary>
+        public void String_UptoCopies1() {
+            TestOutput(@"
+require 'ruby4'
+first = +""ぁ""
+count = 0
+r = first.upto(""ん"") { |s| count += 1; s.replace(""ん"") }
+p r.equal?(first), first == ""\u3041"", count
+def t(a, b, *x) = (r = []; a.upto(b, *x) { |s| r << s }; r)
+p t('aa', 'b'), t('b', 'aa'), t('az', 'bb', true), t('y', 'ab'), t('a', 'a', true)
+", @"
+true
+true
+83
+[""aa""]
+[]
+[""az"", ""ba""]
+[]
+[]
+");
+        }
     }
 }

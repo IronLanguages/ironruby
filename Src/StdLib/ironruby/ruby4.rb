@@ -6550,15 +6550,21 @@ class String
       return self
     end
 
-    return self if length > stop.length || (length == stop.length && self > stop)
-
-    current = self
-    loop do
-      break if exclusive && current == stop
+    # MRI's str_upto_each: the block gets a copy of the receiver and then each
+    # #succ, and the next string is worked out before the block runs, so a block that
+    # changes the string it was given changes neither the receiver nor the walk. The
+    # walk ends at stop.succ, or once a string is longer than stop in bytes.
+    n = self <=> stop
+    return self if n > 0 || (exclusive && n == 0)
+    after_end = stop.succ
+    current = ::String.new(self)
+    until current == after_end
+      following = (exclusive || current != stop) ? current.succ : nil
       block.call(current)
-      break if current == stop
-      current = current.succ
-      break if current.bytesize > stop.bytesize
+      break if following.nil?
+      current = following
+      break if exclusive && current == stop
+      break if current.bytesize > stop.bytesize || current.bytesize == 0
     end
     self
   end

@@ -1295,6 +1295,7 @@ namespace IronRuby.Tests {
                 HostingHelpOption1,
                 String_CompareInverse1,
                 String_EachLineParagraphChomp1,
+                String_UptoCopies1,
             };
         }
     }
