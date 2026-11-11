@@ -1299,6 +1299,7 @@ namespace IronRuby.Tests {
                 String_StartWithRegexpLastMatch1,
                 String_InspectDummyControl1,
                 String_StripInvalid1,
+                String_InitializeKeywords1,
             };
         }
     }

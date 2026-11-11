@@ -611,5 +611,40 @@ p((j.rstrip rescue $!), (j.strip rescue $!), j.lstrip.bytes)
 [97, 98, 32]
 ");
         }
+
+        /// <summary>
+        /// String#initialize takes encoding: and capacity:, as MRI's rb_str_init does, so a subclass's super and a call
+        /// through #send can give them: the keywords and the argument are checked first, then a frozen receiver is a
+        /// FrozenError, and the string is emptied when there is nothing to copy. They were "no implicit conversion of
+        /// Hash into String".
+        /// </summary>
+        public void String_InitializeKeywords1() {
+            TestOutput(@"
+require 'ruby4'
+def t; yield; rescue Exception => e; e; end
+s = +'abc'
+p t { s.send(:initialize, capacity: 10) }, s
+p t { s.send(:initialize, 'xy', encoding: 'euc-jp', capacity: 3) }, s.encoding
+p t { s.send(:initialize, foo: 1, bar: 2) }, t { s.send(:initialize, 1, capacity: 1) }, t { s.send(:initialize, 'a', capacity: 'x') }
+f = 'x'.freeze
+p t { f.send(:initialize, capacity: 1) }, t { f.send(:initialize, encoding: 'utf-8') }, t { f.send(:initialize, foo: 1) }, t { f.send(:initialize) }
+class S2 < String; def initialize(*a, **k); super; @x = 1; end; end
+p S2.new('abc', capacity: 5), S2.new(encoding: 'euc-jp').encoding
+", @"
+""""
+""""
+""xy""
+#<Encoding:EUC-JP>
+#<ArgumentError: unknown keywords: :foo, :bar>
+#<TypeError: no implicit conversion of Integer into String>
+#<TypeError: no implicit conversion of String into Integer>
+#<FrozenError: can't modify frozen String: ""x"">
+#<FrozenError: can't modify frozen String: ""x"">
+#<ArgumentError: unknown keyword: :foo>
+""x""
+""abc""
+#<Encoding:EUC-JP>
+");
+        }
     }
 }

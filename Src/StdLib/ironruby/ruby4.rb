@@ -1675,6 +1675,40 @@ class Hash
 end
 
 class String
+  # The library String#initialize takes the string to copy and no keywords; String.new's
+  # encoding: and capacity: are the constructor's. MRI's rb_str_init takes them in
+  # #initialize too, as a subclass's super or a call through #send does: the keywords and
+  # the argument are checked first, then a frozen receiver is a FrozenError, and the string
+  # is emptied when there is nothing to copy (capacity is only a size hint).
+  alias_method :__ir_initialize__, :initialize
+  private :__ir_initialize__
+
+  def initialize(*args, **opts)
+    return __ir_initialize__(*args) if opts.empty?
+    if args.size > 1
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
+    end
+    unknown = opts.keys - [:encoding, :capacity]
+    unless unknown.empty?
+      ::Kernel.raise(::ArgumentError,
+        "unknown keyword#{unknown.size > 1 ? 's' : ''}: #{unknown.map(&:inspect).join(', ')}")
+    end
+    encoding = opts[:encoding]
+    encoding = ::Encoding.find(encoding) unless encoding.nil? || encoding.is_a?(::Encoding)
+    ::Math.__send__(:__int__, opts[:capacity]) unless opts[:capacity].nil?
+    unless args.empty? || args[0].is_a?(::String)
+      converted = args[0].respond_to?(:to_str) ? args[0].to_str : nil
+      unless converted.is_a?(::String)
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_type_name__(args[0])} into String")
+      end
+      args = [converted]
+    end
+    ::Kernel.raise(::FrozenError.new("can't modify frozen String: #{inspect}", receiver: self)) if frozen?
+    args.empty? ? clear : __ir_initialize__(args[0])
+    force_encoding(encoding) if encoding
+    self
+  end
+
   # Both take a String or something with #to_str, and both answer a copy when
   # there is nothing to remove - including for an empty affix, where
   # "self[0...-0]" would otherwise answer "".
