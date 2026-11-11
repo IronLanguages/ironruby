@@ -533,5 +533,26 @@ SubH
 {}
 ");
         }
+
+        /// <summary>
+        /// Hash#update and #merge store a String key as a frozen copy, as Hash#[]= does: a key taken from an identity
+        /// hash stayed the caller's string, and changing that string lost the entry.
+        /// </summary>
+        public void Hash_UpdateStringKey1() {
+            TestOutput(@"
+key = +'a'
+i = {}.compare_by_identity
+i[key] = 0
+h = {}.update(i)
+m = {}.merge(i) { }
+key.upcase!
+p h.fetch('a'), m['a'], h.keys[0].frozen?, i.keys[0].frozen?
+", @"
+0
+0
+true
+false
+");
+        }
     }
 }

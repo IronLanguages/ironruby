@@ -644,9 +644,12 @@ namespace IronRuby.Builtins {
                     hash = site.Target(site, other);
                 }
 
+                // A String key is stored as a frozen copy, as by Hash#[]= (rb_hash_update's tbl_update
+                // goes through hash_aset_str): a key taken from an identity hash would otherwise stay the
+                // caller's string, and changing that string would lose the entry.
                 if (block == null) {
                     foreach (var pair in CopyKeyValuePairs(hash)) {
-                        self[CustomStringDictionary.NullToObj(pair.Key)] = pair.Value;
+                        RubyUtils.SetHashElement(toHash.Context, self, CustomStringDictionary.ObjToNull(pair.Key), pair.Value);
                     }
                 } else {
                     var selfHash = self as Hash;
@@ -669,7 +672,7 @@ namespace IronRuby.Builtins {
                             // rb_hash_modify's check)
                             (self as Hash)?.RequireNotFrozen();
                         }
-                        self[key] = newValue;
+                        RubyUtils.SetHashElement(toHash.Context, self, CustomStringDictionary.ObjToNull(key), newValue);
                     }
                 }
             }
