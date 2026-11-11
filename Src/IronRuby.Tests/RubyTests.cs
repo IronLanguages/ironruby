@@ -1288,6 +1288,7 @@ namespace IronRuby.Tests {
                 Hash_FetchErrorEllipsis1,
                 Hash_InitializeCopyIsReplace1,
                 Hash_UpdateStringKey1,
+                Hash_EqlHashRehash1,
             };
         }
     }

@@ -685,7 +685,15 @@ namespace IronRuby.Builtins {
             if (self.IsIterating) {
                 throw RubyExceptions.CreateRuntimeError("rehash during iteration");
             }
-            return Rehash((IDictionary<object, object>)self);
+            // MRI builds the new table while the old one is still in place and swaps them (rb_hash_rehash):
+            // a key that is the hash itself is hashed as the full hash, not as one emptied for the rebuild,
+            // and is found again afterwards.
+            var rebuilt = new Hash(self.Comparer, self.Count);
+            foreach (var pair in CopyKeyValuePairs(self)) {
+                rebuilt[pair.Key] = pair.Value;
+            }
+            self.TryCopyEntriesFrom(rebuilt);
+            return self;
         }
 
         [RubyMethod("rehash")]

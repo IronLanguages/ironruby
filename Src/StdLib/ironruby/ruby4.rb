@@ -10976,7 +10976,11 @@ class Hash
   # mutually recursive hashes terminate.
   def eql?(other)
     return true if equal?(other)
-    return false unless other.is_a?(Hash)
+    unless other.is_a?(Hash)
+      # rb_hash_eql hands an object that converts to a Hash the question the other way round
+      return false unless other.respond_to?(:to_hash)
+      return other.eql?(self) ? true : false
+    end
     return false if size != other.size
     # two non-empty hashes of different kinds (one compares by identity) are never eql
     return false if size != 0 && compare_by_identity? != other.compare_by_identity?

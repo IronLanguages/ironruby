@@ -554,5 +554,33 @@ true
 false
 ");
         }
+
+        /// <summary>
+        /// Hash#eql? asks an object that converts to a Hash the question the other way round (rb_hash_eql); an empty
+        /// Hash does not hash to 0 ([Bug #9231]); and #rehash builds the new table before it lets go of the old one
+        /// (rb_hash_rehash), so a hash that is its own key is still found after it.
+        /// </summary>
+        public void Hash_EqlHashRehash1() {
+            TestOutput(@"
+require 'ruby4'
+o = Object.new
+def o.to_hash; {}; end
+def o.eql?(x); true; end
+p({}.eql?(o), {}.eql?(Object.new), {} == o)
+p({}.hash != 0, {}.hash == {}.hash)
+h = {}
+h[h] = :foo
+h.rehash
+p h[h], h.size
+", @"
+true
+false
+false
+true
+true
+:foo
+1
+");
+        }
     }
 }
