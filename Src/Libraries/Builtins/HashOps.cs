@@ -209,10 +209,10 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
         public static Hash/*!*/ InitializeCopy(RubyContext/*!*/ context, Hash/*!*/ self, [NotNull]Hash/*!*/ source) {
-            self.DefaultProc = source.DefaultProc;
-            self.DefaultValue = source.DefaultValue;
-            IDictionaryOps.ReplaceData(self, source);
-            return self;
+            // MRI's initialize_copy is #replace (rb_hash_replace): copying a hash onto itself leaves it as it
+            // is rather than emptying it first, and the copy takes the compare_by_identity flag, so the #dup
+            // of a subclass's identity hash compares by identity too.
+            return Replace(context, self, source);
         }
 
         #endregion

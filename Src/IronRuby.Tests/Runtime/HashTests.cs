@@ -510,5 +510,28 @@ key not found: ""ggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
 key not found: :a
 ");
         }
+
+        /// <summary>
+        /// Hash#initialize_copy is #replace (rb_hash_replace): copying a hash onto itself keeps its pairs, and a copy
+        /// takes the compare_by_identity flag, which the #dup or #merge of a subclass's identity hash lost.
+        /// </summary>
+        public void Hash_InitializeCopyIsReplace1() {
+            TestOutput(@"
+class SubH < Hash; end
+s = SubH[1 => 2].compare_by_identity
+p s.dup.compare_by_identity?, s.merge({}).compare_by_identity?, s.dup.class
+h = {1 => 2}
+h.instance_eval { initialize_copy(h) }
+p h
+h.instance_eval { initialize_copy({}) }
+p h
+", @"
+true
+true
+SubH
+{1 => 2}
+{}
+");
+        }
     }
 }
