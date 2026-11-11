@@ -56,9 +56,6 @@ namespace IronRuby.Builtins {
         [DllImport("libc", SetLastError = true, EntryPoint = "close")]
         private static extern int sys_close(int fd);
 
-        [DllImport("libc", SetLastError = true, EntryPoint = "fcntl")]
-        private static extern int sys_fcntl(int fd, int cmd, int arg);
-
         [DllImport("libc", SetLastError = true, EntryPoint = "open")]
         private static extern int sys_open(string path, int flags);
 
@@ -388,9 +385,9 @@ namespace IronRuby.Builtins {
         /// like MRI, leaves it there, which is what io/nonblock then reports.
         /// </summary>
         private void SetNonBlocking() {
-            int flags = sys_fcntl(_descriptor, F_GETFL, 0);
+            int flags = LibcVariadic.Fcntl(_descriptor, F_GETFL, 0);
             if (flags >= 0 && (flags & IOModeNative.NonBlocking) == 0) {
-                sys_fcntl(_descriptor, F_SETFL, flags | IOModeNative.NonBlocking);
+                LibcVariadic.Fcntl(_descriptor, F_SETFL, flags | IOModeNative.NonBlocking);
             }
         }
 

@@ -90,6 +90,9 @@ namespace IronRuby.Builtins {
         [DllImport("libc", SetLastError = true, EntryPoint = "pipe2")]
         private static extern int SysPipe2(int[] fds, int flags);
 
+        [DllImport("libc", SetLastError = true, EntryPoint = "pipe")]
+        private static extern int SysPipe(int[] fds);
+
         [DllImport("libc", SetLastError = true, EntryPoint = "read")]
         private static extern IntPtr SysRead(int fd, byte[] buffer, IntPtr count);
 
@@ -101,12 +104,6 @@ namespace IronRuby.Builtins {
 
         [DllImport("libc", SetLastError = true, EntryPoint = "dup2")]
         private static extern int SysDup2(int fd, int newFd);
-
-        [DllImport("libc", SetLastError = true, EntryPoint = "open")]
-        private static extern int SysOpen(IntPtr path, int flags, uint mode);
-
-        [DllImport("libc", SetLastError = true, EntryPoint = "fcntl")]
-        private static extern int SysFcntl(int fd, int command, int argument);
 
         [DllImport("libc", EntryPoint = "getppid")]
         private static extern int SysGetPpid();
@@ -125,14 +122,15 @@ namespace IronRuby.Builtins {
         // TIOCSCTTY, which no file action can issue).
         private static readonly short POSIX_SPAWN_SETSID =
             RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? (short)0x400 : (short)0x80;
-        // The value differs by kernel: Linux's 0x80000 is not O_CLOEXEC on macOS, whose
-        // pipe2 rejects it with EINVAL - which broke every pipe to a child there.
+        // The value differs by kernel (0x80000 on Linux, 0x100000 on FreeBSD), and another
+        // kernel's value is EINVAL from pipe2. macOS has no pipe2: see CloseOnExecPipe.
         private static readonly int O_CLOEXEC = IOModeNative.CloseOnExec;
         private const int F_GETFD = 1;
         private const int F_SETFD = 2;
         private const int FD_CLOEXEC = 1;
         private const int X_OK = 1;
         private const int EINTR = 4;
+        private const int EINVAL = 22;
         private const int WNOHANG = 1;
 
         #endregion
@@ -213,6 +211,11 @@ namespace IronRuby.Builtins {
         private const int ActionOpen = 2;
         private const int ActionChdir = 3;
 
+        [DllImport("libc", EntryPoint = "posix_spawn_file_actions_addinherit_np")]
+        private static extern int SysFileActionsAddInherit(IntPtr actions, int fd);
+
+        private static readonly bool IsMac = RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
+
         private static int ApplyActions(IntPtr fileActions, NativeStrings/*!*/ strings, RubyArray actions) {
             if (actions == null) {
                 return 0;
@@ -225,8 +228,15 @@ namespace IronRuby.Builtins {
                         // No need to clear FD_CLOEXEC on the source here: the action runs in
                         // the child between fork and exec, where the flag has not taken effect
                         // yet, and glibc handles "dup2 a descriptor to itself" by clearing it.
-                        error = SysFileActionsAddDup2(fileActions,
-                            ToInt(action[2]), ToInt(action[1]));
+                        // macOS's dup2 action to itself is the no-op dup2(2) is, which would
+                        // leave the flag on and the descriptor closed in the child; its own way
+                        // of saying "let the child have this one" is the inherit action.
+                        if (IsMac && ToInt(action[2]) == ToInt(action[1])) {
+                            error = SysFileActionsAddInherit(fileActions, ToInt(action[1]));
+                        } else {
+                            error = SysFileActionsAddDup2(fileActions,
+                                ToInt(action[2]), ToInt(action[1]));
+                        }
                         break;
 
                     case ActionClose:
@@ -273,7 +283,7 @@ namespace IronRuby.Builtins {
             // would need a descriptor of its own; asking the kernel about each in turn is a
             // cheap syscall and the limit is a thousand or so in practice.
             for (int fd = 3; fd < 4096; fd++) {
-                if (keep.Contains(fd) || SysFcntl(fd, F_GETFD, 0) < 0) {
+                if (keep.Contains(fd) || LibcVariadic.Fcntl(fd, F_GETFD, 0) < 0) {
                     continue;
                 }
                 int error = SysFileActionsAddClose(fileActions, fd);
@@ -363,7 +373,18 @@ namespace IronRuby.Builtins {
 
                 IntPtr path = strings.Allocate(file);
                 int pid;
-                error = SysPosixSpawn(out pid, path, fileActions, attributes, argvVector.Vector, envpVector.Vector);
+                if (_noPipe2 && !HasOpenAction(actions)) {
+                    // Not while another thread holds a pipe whose ends are not close-on-exec yet.
+                    // A spawn that opens a file can wait in posix_spawn (a FIFO waits for its
+                    // other end), and holding the lock for that could deadlock against a thread
+                    // that needs a pipe before it opens the other end; such a spawn goes
+                    // unserialised and keeps the (small) window.
+                    lock (_pipeLock) {
+                        error = SysPosixSpawn(out pid, path, fileActions, attributes, argvVector.Vector, envpVector.Vector);
+                    }
+                } else {
+                    error = SysPosixSpawn(out pid, path, fileActions, attributes, argvVector.Vector, envpVector.Vector);
+                }
 
                 if (error != 0) {
                     return -error;
@@ -441,8 +462,8 @@ namespace IronRuby.Builtins {
                                 break;
 
                             default:
-                                int opened = SysOpen(strings.Allocate(action[2]),
-                                    ToInt(action[3]), (uint)ToInt(action[4]));
+                                int opened = LibcVariadic.Open(strings.Allocate(action[2]),
+                                    ToInt(action[3]), ToInt(action[4]));
                                 if (opened < 0) {
                                     return ScriptingRuntimeHelpers.Int32ToObject(Failure());
                                 }
@@ -519,9 +540,9 @@ namespace IronRuby.Builtins {
             if (IsWindows) {
                 return;
             }
-            int flags = SysFcntl(fd, F_GETFD, 0);
+            int flags = LibcVariadic.Fcntl(fd, F_GETFD, 0);
             if (flags >= 0 && (flags & FD_CLOEXEC) != 0) {
-                SysFcntl(fd, F_SETFD, flags & ~FD_CLOEXEC);
+                LibcVariadic.Fcntl(fd, F_SETFD, flags & ~FD_CLOEXEC);
             }
         }
 
@@ -539,7 +560,7 @@ namespace IronRuby.Builtins {
             if (native < 0) {
                 return null;
             }
-            int flags = SysFcntl(native, F_GETFD, 0);
+            int flags = LibcVariadic.Fcntl(native, F_GETFD, 0);
             return (flags < 0) ? null : (object)((flags & FD_CLOEXEC) != 0);
         }
 
@@ -554,9 +575,9 @@ namespace IronRuby.Builtins {
             if (nativeDescriptor < 0) {
                 return;
             }
-            int flags = SysFcntl(nativeDescriptor, F_GETFD, 0);
+            int flags = LibcVariadic.Fcntl(nativeDescriptor, F_GETFD, 0);
             if (flags >= 0) {
-                SysFcntl(nativeDescriptor, F_SETFD, flags | FD_CLOEXEC);
+                LibcVariadic.Fcntl(nativeDescriptor, F_SETFD, flags | FD_CLOEXEC);
             }
         }
 
@@ -572,12 +593,12 @@ namespace IronRuby.Builtins {
             if (native < 0) {
                 return null;
             }
-            int flags = SysFcntl(native, F_GETFD, 0);
+            int flags = LibcVariadic.Fcntl(native, F_GETFD, 0);
             if (flags < 0) {
                 return null;
             }
             flags = value ? (flags | FD_CLOEXEC) : (flags & ~FD_CLOEXEC);
-            return (SysFcntl(native, F_SETFD, flags) < 0) ? null : (object)value;
+            return (LibcVariadic.Fcntl(native, F_SETFD, flags) < 0) ? null : (object)value;
         }
 
         /// <summary>A Process::Status that did not come from a wait, for Process::Status.wait's
@@ -629,11 +650,12 @@ namespace IronRuby.Builtins {
                 return WindowsSpawn.OsPipe(context);
             }
 
-            // O_CLOEXEC, so that our end of the pipe does not leak into the child: a child
+            // Close-on-exec, so that our end of the pipe does not leak into the child: a child
             // that holds the write end open means the read end never reaches end of file.
             int[] fds = new int[2];
-            if (SysPipe2(fds, O_CLOEXEC) != 0) {
-                throw RubyExceptions.CreateEINVAL("pipe");
+            int errno = CloseOnExecPipe(fds);
+            if (errno != 0) {
+                throw RubyExceptions.CreateErrno(context, errno, null);
             }
             // Not a FileStream: a read that is already blocked has to be interruptible by a
             // close from another thread, which is what Ruby's IO#close promises.
@@ -645,6 +667,71 @@ namespace IronRuby.Builtins {
             reading.SetEncodings(null, null);
             writing.SetEncodings(null, null);
             return new RubyArray { reading, writing };
+        }
+
+        /// <summary>
+        /// Whether pipe2(2) is to be skipped for pipe(2) and fcntl(2). macOS's libc has no pipe2
+        /// at all, so calling it there is an EntryPointNotFoundException (which IO.pipe, IO.popen
+        /// and every backquote raised); any other libc without one finds out on the first call.
+        /// IR_NO_PIPE2=1 forces the fallback where pipe2 exists, which is how it is tested
+        /// off macOS (IronRuby.Tests sets this field instead).
+        /// </summary>
+        internal static volatile bool _noPipe2 =
+            RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ||
+            Environment.GetEnvironmentVariable("IR_NO_PIPE2") == "1";
+
+        /// <summary>
+        /// pipe(2) with FD_CLOEXEC on both ends, MRI's rb_cloexec_pipe: pipe2(O_CLOEXEC) where
+        /// libc has it, which sets the flag atomically, and otherwise pipe(2) followed by
+        /// F_SETFD on each end. Between the two a child spawned by another thread would inherit
+        /// both ends - and one holding a write end keeps the reader from ever seeing end of file.
+        /// MRI holds the GVL across both, so only a non-Ruby thread can get in there; with no
+        /// GVL here, the fallback and posix_spawn take <see cref="_pipeLock"/> instead (all but
+        /// a spawn that opens a file, which may wait for a FIFO's other end). Returns
+        /// 0, or the errno, with no descriptor left open.
+        /// </summary>
+        private static int CloseOnExecPipe(int[]/*!*/ fds) {
+            if (!_noPipe2) {
+                try {
+                    return (SysPipe2(fds, O_CLOEXEC) == 0) ? 0 : LastErrno();
+                } catch (EntryPointNotFoundException) {
+                    _noPipe2 = true;
+                }
+            }
+
+            lock (_pipeLock) {
+                if (SysPipe(fds) != 0) {
+                    return LastErrno();
+                }
+                for (int i = 0; i < 2; i++) {
+                    int flags = LibcVariadic.Fcntl(fds[i], F_GETFD, 0);
+                    if (flags < 0 || LibcVariadic.Fcntl(fds[i], F_SETFD, flags | FD_CLOEXEC) < 0) {
+                        int errno = LastErrno();
+                        SysClose(fds[0]);
+                        SysClose(fds[1]);
+                        return errno;
+                    }
+                }
+                return 0;
+            }
+        }
+
+        private static readonly object _pipeLock = new object();
+
+        private static bool HasOpenAction(RubyArray actions) {
+            if (actions != null) {
+                foreach (var item in actions) {
+                    if (ToInt(((RubyArray)item)[0]) == ActionOpen) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static int LastErrno() {
+            int errno = Marshal.GetLastWin32Error();
+            return (errno == 0) ? EINVAL : errno;
         }
 
         /// <summary>
@@ -705,8 +792,9 @@ namespace IronRuby.Builtins {
             }
 
             int[] fds = new int[2];
-            if (SysPipe2(fds, O_CLOEXEC) != 0) {
-                throw RubyExceptions.CreateEINVAL("pipe");
+            int errno = CloseOnExecPipe(fds);
+            if (errno != 0) {
+                throw RubyExceptions.CreateErrno(context, errno, null);
             }
 
             int pid;
