@@ -96,6 +96,6 @@ if ! "$AOT" startup -o "$OUT" --tfm "$TFM" $R2R --host "$HOST" ${RID:+--rid "$RI
   cat "$OUT/log" >&2
   exit 1
 fi
-grep -E "^(wrote|cached|r2r|retargeted)|UNRELOCATABLE|UNSUPPORTED" "$OUT/log"
+grep -E "^(wrote|cached|r2r|retargeted|verified)|UNRELOCATABLE|UNSUPPORTED|ExceptionClauses" "$OUT/log"
 cp "$OUT"/IronRuby.Startup*.dll "$HOST/" || exit 1
 echo "build-startup.sh: installed $HOST/IronRuby.Startup.dll"

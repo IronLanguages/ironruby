@@ -375,6 +375,16 @@ Where it is built:
   code holds (`__FILE__`, a method's or block's file) is compiled as a call of
   `PrecompiledCode.Rooted`, and backtrace frames are rebased. So the library works wherever the
   archive is unpacked.
+- **Exception clause order.** PersistedAssemblyBuilder writes a try block nested in a handler
+  (a `begin`/`rescue` in an `ensure`, and since #204 every `ensure` that runs Ruby code: its
+  finally holds a try with a filter) after the clause of that handler. ECMA-335 wants inner
+  clauses first, and the JIT rejects such a method with InvalidProgramException at its first
+  call - in 4.0.5's library 43 of them, `IO.pipe`, a Fiber's block (the fiber then hung) and
+  `Tempfile.create` among them. `ExceptionClauses.Reorder` puts every method's clauses in
+  nesting order in the saved file, in place. Then the compiler JIT-compiles every method of the
+  library once (`RuntimeHelpers.PrepareMethod`, ~17 s) and refuses the library if the JIT
+  rejects any (`IR_AOT_VERIFY=0` skips that): a method compiled wrong passes every startup check,
+  because nothing calls it at startup.
 - **arm64** (osx-arm64). RyuJIT's arm64 code for a method over 1 MB reaches the method's
   read-only data with `adrp`+`add` computed as if it knew where in the image the method lands,
   which in a ReadyToRun image it does not. ruby4.rb's top level is such a method (~480 KB of IL,

@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -137,6 +138,10 @@ namespace IronRuby.Aot {
             if (cache != null) {
                 var k = new StringBuilder();
                 k.Append("v1\n").Append(tfm).Append(' ').Append(rid).Append(' ').Append(r2r).Append(' ').Append(selfContained).Append('\n');
+                // the switches that change what the compiler makes
+                foreach (var name in new[] { "IR_AOT_SPLIT", "IR_AOT_LARGE_JIT", "IR_AOT_LOOP_JIT", "IR_AOT_THREAD_FRAMES", "IR_AOT_VERIFY" }) {
+                    k.Append(name).Append('=').Append(Environment.GetEnvironmentVariable(name)).Append('\n');
+                }
                 k.Append(Path.GetRelativePath(host, root)).Append('\n').Append(root).Append('\n');
                 foreach (var id in ids) k.Append(id).Append('\n');
                 foreach (var a in new[] { typeof(StartupCommand).Assembly, typeof(PrecompiledCode).Assembly, typeof(IronRuby.Builtins.KernelOps).Assembly,
@@ -185,6 +190,17 @@ namespace IronRuby.Aot {
 
             var outputs = new List<string> { dll };
             outputs.AddRange(compiler.ExtraAssemblies);
+            // Every method JIT-compiled once, here: the saved IL of one is only compiled at its first call, so a method the
+            // compiler got wrong passes every startup check and throws InvalidProgramException the day a program calls it
+            // (a fiber's block in 4.0.5's ruby4.rb, which then hung). IR_AOT_VERIFY=0 skips it.
+            if (Environment.GetEnvironmentVariable("IR_AOT_VERIFY") != "0") {
+                var invalid = VerifyIL(outputs);
+                if (invalid.Count > 0) {
+                    Console.Error.WriteLine($"{invalid.Count} methods of {dll} have IL the JIT rejects; no library rather than a broken one:");
+                    foreach (var line in invalid.Take(50)) Console.Error.WriteLine("  " + line);
+                    return 1;
+                }
+            }
             if (major != Environment.Version.Major) {
                 foreach (var asm in outputs) {
                     Console.Error.WriteLine($"retargeted {Path.GetFileName(asm)}: {Retarget(asm, Environment.Version.Major, major)} framework references -> {major}.0");
@@ -203,6 +219,43 @@ namespace IronRuby.Aot {
                 File.WriteAllText(Path.Combine(cache, "key"), key + "\n");
             }
             return 0;
+        }
+
+        /// <summary>
+        /// JIT-compiles every method of the saved assemblies (RuntimeHelpers.PrepareMethod) in a load context of their own,
+        /// from their bytes (no file lock), and returns the ones the JIT rejects. The IronRuby and DLR they call are this
+        /// process's, the same builds the library is made against.
+        /// </summary>
+        private static List<string> VerifyIL(List<string> assemblies) {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var context = new System.Runtime.Loader.AssemblyLoadContext("IronRuby.Startup verification", isCollectible: true);
+            var byName = new Dictionary<string, Assembly>(StringComparer.Ordinal);
+            context.Resolving += (ctx, name) => byName.TryGetValue(name.Name, out var a) ? a : null;
+            foreach (var path in assemblies.Skip(1).Append(assemblies[0])) {
+                using var stream = new MemoryStream(File.ReadAllBytes(path));
+                var a = context.LoadFromStream(stream);
+                byName[a.GetName().Name] = a;
+            }
+            var invalid = new List<string>();
+            int count = 0;
+            var all = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance | BindingFlags.DeclaredOnly;
+            foreach (var a in byName.Values) {
+                foreach (var type in a.GetTypes()) {
+                    if (type.ContainsGenericParameters) continue;
+                    foreach (var m in type.GetMethods(all).Cast<MethodBase>().Concat(type.GetConstructors(all))) {
+                        if (m.IsAbstract || m.ContainsGenericParameters || (m.MethodImplementationFlags & MethodImplAttributes.Runtime) != 0) continue;
+                        count++;
+                        try {
+                            RuntimeHelpers.PrepareMethod(m.MethodHandle);
+                        } catch (Exception e) {
+                            invalid.Add($"{type.FullName}::{m.Name}: {e.GetType().Name}: {e.Message}");
+                        }
+                    }
+                }
+            }
+            context.Unload();
+            Console.Error.WriteLine($"verified {count} methods in {sw.ElapsedMilliseconds} ms: {invalid.Count} rejected by the JIT");
+            return invalid;
         }
 
         internal const int LargeMethodILBytes = 128 * 1024;
@@ -295,7 +348,7 @@ namespace IronRuby.Aot {
                     .Select(m => m.Groups[2].Value + " (" + Convert.ToInt64(m.Groups[1].Value, 16).ToString("N0") + " bytes)").ToList();
                 File.Delete(map);
                 // a map this cannot read (another crossgen2's format) proves nothing: no library then either
-                if (methods.Any(m => !m.Success)) {
+                if (methods.Count == 0 || methods.Any(m => !m.Success)) {
                     File.Delete(tmp);
                     Console.Error.WriteLine("crossgen2's map lists methods this cannot read the size of: no arm64 library unchecked");
                     return false;
