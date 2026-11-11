@@ -211,6 +211,11 @@ namespace IronRuby.Builtins {
         private const int ActionOpen = 2;
         private const int ActionChdir = 3;
 
+        [DllImport("libc", EntryPoint = "posix_spawn_file_actions_addinherit_np")]
+        private static extern int SysFileActionsAddInherit(IntPtr actions, int fd);
+
+        private static readonly bool IsMac = RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
+
         private static int ApplyActions(IntPtr fileActions, NativeStrings/*!*/ strings, RubyArray actions) {
             if (actions == null) {
                 return 0;
@@ -223,8 +228,15 @@ namespace IronRuby.Builtins {
                         // No need to clear FD_CLOEXEC on the source here: the action runs in
                         // the child between fork and exec, where the flag has not taken effect
                         // yet, and glibc handles "dup2 a descriptor to itself" by clearing it.
-                        error = SysFileActionsAddDup2(fileActions,
-                            ToInt(action[2]), ToInt(action[1]));
+                        // macOS's dup2 action to itself is the no-op dup2(2) is, which would
+                        // leave the flag on and the descriptor closed in the child; its own way
+                        // of saying "let the child have this one" is the inherit action.
+                        if (IsMac && ToInt(action[2]) == ToInt(action[1])) {
+                            error = SysFileActionsAddInherit(fileActions, ToInt(action[1]));
+                        } else {
+                            error = SysFileActionsAddDup2(fileActions,
+                                ToInt(action[2]), ToInt(action[1]));
+                        }
                         break;
 
                     case ActionClose:
