@@ -6966,5 +6966,16 @@ false
 true
 ");
         }
+
+        /// <summary>
+        /// RbConfig::CONFIG["EXECUTABLE_EXTS"] was missing, and CRuby's tool/lib/find_executable.rb splits it, which
+        /// stopped test_rubyoptions before its first test. configure sets it on Windows only.
+        /// </summary>
+        public void RbConfig_ExecutableExts1() {
+            TestOutput(@"
+require 'rbconfig'
+p RbConfig::CONFIG['EXECUTABLE_EXTS'].split | [RbConfig::CONFIG['EXEEXT']]
+", Environment.OSVersion.Platform == PlatformID.Win32NT ? @"["".exe"", "".com"", "".cmd"", "".bat""]" : @"[""""]");
+        }
     }
 }
