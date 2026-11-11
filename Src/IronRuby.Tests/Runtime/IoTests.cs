@@ -95,7 +95,7 @@ Process.wait(pid)
 p r.read
 r.close
 r, w = IO.pipe
-pid = spawn('bash', '-c', ""echo leaked >&#{w.fileno}"", err: File::NULL)
+pid = spawn('bash', '-c', ""exec 2>/dev/null; exec >&#{w.fileno} || exit 1; echo leaked"")
 w.close
 Process.wait(pid)
 p r.read, $?.success?

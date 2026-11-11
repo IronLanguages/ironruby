@@ -60,7 +60,8 @@ check("spawn fd => fd", "via fd\n") do
 end
 check("spawn leaves our pipe out", ["", false]) do
   r, w = IO.pipe
-  pid = spawn("bash", "-c", "echo leaked >&#{w.fileno}", err: File::NULL)
+  # (exec, so that bash does not first save stdout above 9, where it could reuse our closed number)
+  pid = spawn("bash", "-c", "exec 2>/dev/null; exec >&#{w.fileno} || exit 1; echo leaked")
   w.close
   Process.wait(pid)
   [r.read.tap { r.close }, $?.success?]
@@ -90,15 +91,17 @@ check("spawn pgroup", true) do
   pgid == pid
 end
 
-# (not what a new pipe answers, which is true in MRI: on macOS IronRuby's File::Stat cannot tell a pipe yet, so
-# io/nonblock asks the descriptor, which pipe(2) made blocking)
+# the descriptor's own flag, with F_GETFL: #nonblock? on a pipe can answer from what it was last told (and not what
+# a new pipe answers, which is true in MRI: on macOS IronRuby's File::Stat cannot tell a pipe yet)
 require "io/nonblock"
-check("nonblock=", [false, true]) do
+require "fcntl"
+check("nonblock=", [false, false, true, true]) do
   IO.pipe do |r, _w|
+    flag = -> { r.fcntl(Fcntl::F_GETFL) & File::NONBLOCK != 0 }
     r.nonblock = false
-    a = r.nonblock?
+    a = [r.nonblock?, flag.call]
     r.nonblock = true
-    [a, r.nonblock?]
+    a + [r.nonblock?, flag.call]
   end
 end
 
