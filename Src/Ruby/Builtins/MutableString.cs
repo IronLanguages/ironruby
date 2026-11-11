@@ -919,6 +919,12 @@ namespace IronRuby.Builtins {
             Mutate();
 
             if (isAscii) {
+                // ASCII bytes are the target's only if it is ASCII compatible: a string held as bytes
+                // (a long ASCII sum, say) goes over to characters for UTF-16 and UTF-32, whose bytes
+                // are then made from them, as for a string held as characters.
+                if (IsBinary && !toEncoding.AsciiRoundTrips) {
+                    _content = _content.SwitchToStringContent();
+                }
                 SetEncoding(toEncoding);
                 return;
             }

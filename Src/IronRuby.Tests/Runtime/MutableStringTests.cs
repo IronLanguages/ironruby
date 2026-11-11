@@ -1693,6 +1693,24 @@ true
         }
 
         /// <summary>
+        /// Review of #207. Transcoding an ASCII string held as bytes (a long sum) to UTF-16 makes its
+        /// bytes UTF-16 ones rather than relabelling the ASCII bytes. A BINARY string held as
+        /// characters slices a character above 0xFF to its low byte, as GetByte reads it.
+        /// </summary>
+        public void MutableString_ConcatAscii2() {
+            var a = MutableString.CreateMutable(RubyEncoding.UTF8).Append(new String('a', 2000));
+            var sum = a.Concat(MutableString.CreateMutable(RubyEncoding.UTF8).Append("x"));
+            Assert(sum.IsBinary);
+            var utf16 = RubyEncoding.FindByName("UTF-16LE");
+            sum.Transcode(RubyEncoding.UTF8, utf16);
+            Assert(sum.Encoding == utf16 && sum.GetByteCount() == 4002 && sum.GetByte(0) == (byte)'a' && sum.GetByte(1) == 0);
+
+            var binary = MutableString.CreateMutable(RubyEncoding.Binary).Append("\u0100ab");
+            byte[] slice = binary.GetBinarySlice(0, 3);
+            Assert(binary.GetByte(0) == 0 && slice[0] == 0 && slice[1] == (byte)'a' && slice[2] == (byte)'b');
+        }
+
+        /// <summary>
         /// A slice from an offset that is appended to is copied once, with room for what is appended,
         /// rather than copied and then grown (#89); so is a CLR string content, and a byteslice of a
         /// string held as characters is not copied a second time. The Ruby half is CRuby 4.0's output.

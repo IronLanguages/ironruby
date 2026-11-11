@@ -59,6 +59,7 @@ namespace IronRuby.Tests {
                 MutableString_GetHashCode2,
                 MutableString_GetHashCode3,
                 MutableString_ConcatAscii1,
+                MutableString_ConcatAscii2,
                 MutableString_SliceAppend1,
                 MutableString_SipHash1,
                 RubyArray_Ctors,
