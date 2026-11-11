@@ -7,7 +7,7 @@ class MSpecScript
 
   windows = File::ALT_SEPARATOR == "\\"
   exe = windows ? "ir.exe" : "ir"
-  bin = File.join(ir_root, "Src", "Console", "bin", "Debug", "net8.0")
+  bin = File.join(ir_root, "Src", "Console", "bin", "Debug", "net10.0")
   # A tree cross-published for Windows puts the host one level deeper.
   bin = File.join(bin, "win-x64") if windows && !File.exist?(File.join(bin, exe))
 

@@ -1140,7 +1140,8 @@ namespace IronRuby.Builtins {
         /// Where Integer.sqrt's Newton iteration starts for n &gt;= 2**62: the double's root of the leading ~1000 bits,
         /// raised by more than that root's rounding error so that it is above the true root, and shifted back. It is
         /// already right to ~50 bits, so 2**70 settles in one division instead of seven. The shifts are counted in a
-        /// long and made in Int32-sized steps: a .NET 8 BigInteger can have more than 2**32 bits.
+        /// long and made in Int32-sized steps, so no bit count can wrap them (.NET 8's BigInteger could pass 2**32 bits;
+        /// .NET 9 and later cap it at about 2**31).
         /// </summary>
         public static BigInteger SqrtSeed(BigInteger n) {
             long bits = n.GetBitLength();

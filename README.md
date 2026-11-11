@@ -6,7 +6,7 @@
 ![IronRuby 4.0: Ruby 4.0 on .NET 8 and 10. IronRuby is back.](media/social/twitter-card.png)
 
 A fork of [IronRuby](https://github.com/IronLanguages/ironruby) — Ruby on the .NET CLR —
-brought back to life: it **builds and runs on .NET 8 and 10**, and it parses Ruby with
+brought back to life: it **builds and runs on .NET 10 and 11**, and it parses Ruby with
 **[prism](https://github.com/ruby/prism), CRuby's own parser**, instead of the hand-ported
 Ruby 1.9 grammar it shipped with in 2011.
 
@@ -32,10 +32,10 @@ not kept.
 [all releases](https://github.com/Largo/ironruby/releases) · [getting started](#binary-releases)
 
 > **4.0.4 is the last release that supports .NET 8.** Its downloads are built for `net8.0`
-> and carry the .NET 8 runtime, and the source still builds for `net8.0` and `net10.0`.
-> .NET 8 reached the end of Microsoft support on 10 November 2026. From the next release,
-> IronRuby targets .NET 10 only: the self-contained downloads will be built on .NET 10, and
-> the `net8.0` build goes away, so a program that hosts IronRuby will need .NET 10.
+> and carry the .NET 8 runtime. .NET 8 reached the end of Microsoft support on 10 November
+> 2026, and the source no longer builds for it: it builds for `net10.0` (LTS) and `net11.0`,
+> and from the next release the self-contained downloads are built on .NET 10, so a program
+> that hosts IronRuby needs .NET 10 or later.
 > [More in the 4.0.4 release notes](https://github.com/Largo/ironruby/releases/tag/v4.0.4).
 
 [![IronRuby 4.0 launch video: the title, an irb session, Windows Forms and the Notepad sample](media/launch/teaser.webp)](https://github.com/Largo/ironruby/releases/download/v4.0.0/ironruby-4-launch.mp4)
@@ -73,7 +73,7 @@ drives it in CI with nobody at the keyboard.*
 ```console
 $ ./iirb.sh
 irb(main):001> RUBY_DESCRIPTION
-=> "IronRuby 4.0.4 (4.0.0) on .NET 8.0.31 [x86_64-linux]"
+=> "IronRuby 4.0.4 (4.0.0) on .NET 10.0.12 [x86_64-linux]"
 irb(main):002> def fib(n) = n < 2 ? n : fib(n - 1) + fib(n - 2)
 => :fib
 irb(main):003> (1..10).map { fib(_1) }
@@ -215,7 +215,7 @@ version (`4.0.0`).
 
 | | before | after |
 |---|---|---|
-| Runtime | .NET Framework 4 | **.NET 8** (Linux, macOS, Windows) |
+| Runtime | .NET Framework 4 | **.NET 10 and 11** (Linux, macOS, Windows) |
 | Build | legacy msbuild, 12 configurations | SDK-style `dotnet build` |
 | Parser | hand-ported 1.9 grammar (~13k lines) | **prism** — the parser CRuby uses |
 | `RUBY_VERSION` | `1.9.2` | `4.0.0` |
@@ -647,16 +647,18 @@ Rails templates and mspec do not handle. Nothing in that directory is named like
 launcher, so CRuby's `ruby`, `irb` and `gem` are not affected. `Util/installer/build-installer.sh` makes
 it from the zip with [Inno Setup](https://jrsoftware.org/isinfo.php), from
 `Util/installer/ironruby.iss`. The archive has the same layout as a checkout, with the
-Release build in `Src/Console/bin/Release/net8.0`, so everything above applies to it
-unchanged. `irubyc` works too, but it still needs the .NET SDK to compile the application.
+Release build in `Src/Console/bin/Release/net8.0` (4.0.4; `net10.0` from the next release),
+so everything above applies to it unchanged. `irubyc` works too, but it still needs the .NET SDK to compile the application.
 The Windows archive also carries the Windows Desktop runtime, for Windows Forms and WPF, and
 `Samples/`. `License/` holds IronRuby's licenses and, for each .NET framework an archive
 bundles, Microsoft's license and third-party notices.
 
-`Util/package-release.sh <rid>` builds such an archive from a checkout, and
-`.github/workflows/release.yml` builds all three, and the Windows installer from the zip,
+`Util/package-release.sh <rid>` builds such an archive from a checkout (on `net10.0`; `IR_TFM`
+picks another), and `.github/workflows/release.yml` builds all three, and the Windows installer from the zip,
 installs and uninstalls it once for the current user and once for all users, and
-publishes them when a `v*` tag is pushed; the [launch video](media/launch) is rendered and
+publishes them when a `v*` tag is pushed - but only once CI's full .NET 10 test set has
+passed for that tag. (Pull requests test .NET 11 only; the release PR, from a `release/*`
+branch, tests .NET 10 as well, and so does a run of the CI workflow by hand.) The [launch video](media/launch) is rendered and
 added by hand.
 
 Releases from 4.0.2 on carry a signed [build provenance attestation](https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds)
@@ -683,7 +685,10 @@ SQLite); and the .NET runtime. The repository itself holds no programs - no `.ex
 
 ## Building
 
-Requires the .NET SDK, plus Ruby and a C compiler to build prism.
+Requires the .NET 11 SDK (it builds both `net10.0` and `net11.0`; the .NET 10 SDK builds
+`-p:IronRubyTargetFrameworks=net10.0` alone), plus Ruby and a C compiler to build prism.
+Running the `net10.0` build needs the .NET 10 runtime, the `net11.0` build .NET 11's;
+`IR_TFM=net11.0` makes `ir.sh` and the other launchers run the latter (`net10.0` is the default).
 
 ```console
 $ git clone https://github.com/IronLanguages/dlr ../dlr          # modern DLR, referenced as source
@@ -717,7 +722,7 @@ $ Util/gems/run.sh                      # default/bundled gems, each with its ow
 ### Windows
 
 Windows needs `prism.dll` instead of `libprism.so`, and nothing else: `ir.exe` is an
-ordinary framework-dependent .NET 8 app, so it can be published from Linux and run on a box
+ordinary framework-dependent .NET app, so it can be published from Linux and run on a box
 that has only the **runtime** installed. Build prism with the RubyInstaller DevKit's MinGW
 (`make shared` names its output after RbConfig's `SOEXT`, so there it is `libprism.dll`):
 
@@ -736,14 +741,14 @@ Windows; `IronRuby.Prism.csproj` ships whichever shared libraries are there and
 $ dotnet build Src/Console/Ruby.Console.csproj -c Release -r win-x64 --self-contained false
 ```
 
-Copy `Src/Console/bin/Release/net8.0/win-x64/`, `Src/StdLib/`, `ironruby.cmd`, `ir.cmd` and `iirb.cmd` to the
+Copy `Src/Console/bin/Release/net10.0/win-x64/`, `Src/StdLib/`, `ironruby.cmd`, `ir.cmd` and `iirb.cmd` to the
 Windows machine, keeping the same relative layout (`ir.cmd` finds the binaries under
-`Src\Console\bin\%IR_CONFIG%\net8.0\`, with or without a `win-x64` level). Then:
+`Src\Console\bin\%IR_CONFIG%\%IR_TFM%\` (`net10.0` by default), with or without a `win-x64` level). Then:
 
 ```
 C:\ir> set IR_CONFIG=Release
 C:\ir> ir.cmd -e "puts RUBY_DESCRIPTION"
-IronRuby 4.0.4 (4.0.0) on .NET 8.0.31 [x64-mswin64]
+IronRuby 4.0.4 (4.0.0) on .NET 10.0.12 [x64-mswin64]
 C:\ir> iirb.cmd
 C:\ir> set RUBY_EXE=C:\ir\ir.cmd
 C:\ir> ir.cmd -Imspec/lib mspec/bin/mspec-run spec/language
@@ -776,7 +781,7 @@ are skipped there as they are on CRuby;
 `-X:ObjectSpace`, as on Linux.
 
 **`zlib`** on Windows runs on the zlib inside .NET itself (`System.IO.Compression.Native`:
-zlib-ng from .NET 9 on, Intel's zlib in .NET 8), since there is no libz to bind to. It
+zlib-ng), since there is no libz to bind to. It
 inflates and deflates, gzip included, but its compressed bytes are that compressor's: zlib-ng's
 differ from classic zlib's (the 2 `library/zlib` failures on .NET 10 compare exact bytes), and what .NET does not
 export raises `NotImplementedError`: `set_dictionary`, `Deflate#params` once data has gone in,

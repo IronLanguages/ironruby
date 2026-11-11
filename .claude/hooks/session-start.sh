@@ -4,7 +4,7 @@
 # Prepares what building IronRuby needs next to the checkout, as .github/workflows/ci.yml
 # does: ../dlr at DLR_REF with Build/dlr-patches applied, ../prism at PRISM_REF with
 # libprism built, and the native libraries for markly and rbs. The system toolchain
-# (.NET 10 SDK + .NET 8 runtime, Ruby 4) comes from the environment's setup script.
+# (.NET 11 SDK + .NET 10 runtime, Ruby 4) comes from the environment's setup script.
 #
 # Each step leaves a stamp in the directory it fills and runs again only when the stamp no
 # longer matches (a new ref or patch in ci.yml, a changed build script, a new container).

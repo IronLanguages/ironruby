@@ -741,7 +741,7 @@ namespace IronRuby.Hosting {
         };
 
         /// <summary>
-        /// Whether every private field ResetConsole puts back exists in this runtime (.NET 8's System.Console,
+        /// Whether every private field ResetConsole puts back exists in this runtime (System.Console's,
         /// the DLR's SharedIO). A worker on a runtime where one is missing would run programs with
         /// streams still bound to the broker's /dev/null, so it never offers itself.
         /// </summary>

@@ -572,7 +572,7 @@ namespace IronRuby.Builtins {
         }
 
         [Serializable]
-#pragma warning disable SYSLIB0050 // IObjectReference: BinaryFormatter gets the RubyEncoding singleton back (net8.0, Serialization1)
+#pragma warning disable SYSLIB0050 // IObjectReference: BinaryFormatter gets the RubyEncoding singleton back (.NET 8 and earlier; .NET 9 removed BinaryFormatter)
         internal sealed class Deserializer : ISerializable, IObjectReference {
 #pragma warning restore SYSLIB0050
             private readonly int _codePage;

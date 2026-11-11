@@ -4,8 +4,6 @@
     <OutputType>Exe</OutputType>
     <AssemblyName>IronRuby.Tests</AssemblyName>
     <RootNamespace>IronRuby.Tests</RootNamespace>
-    <EnableUnsafeBinaryFormatterSerialization>true</EnableUnsafeBinaryFormatterSerialization>
-    <NoWarn>$(NoWarn);SYSLIB0011</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <RuntimeHostConfigurationOption Include="System.Text.Encoding.EnableUnsafeUTF7Encoding" Value="true" />

@@ -475,8 +475,8 @@ true
         /// Integer#** past 2**31 result bits (#89). MRI computes 2 ** (2**31), and refuses ("exponent is too large")
         /// only when the base's bit length times the exponent passes 2**34 - for a Fixnum base, the base and
         /// exponent int_pow has reached when it gives up squaring in a long, which is why 2 ** (2**34 - 1) is
-        /// refused. IronRuby refused anything past 2**31 bits. The expected output is CRuby 4.0.9's; on .NET 9
-        /// and later a result past the BigInteger cap (about 2**31 bits) is NoMemoryError, as for a shift.
+        /// refused. IronRuby refused anything past 2**31 bits. The expected output is CRuby 4.0.9's, except that
+        /// a result past .NET's BigInteger cap (about 2**31 bits) is NoMemoryError, as for a shift.
         /// </summary>
         public void Integer_HugePower1() {
             TestOutput(@"
@@ -496,24 +496,12 @@ p 3 ** 40, (-3) ** 41, 2 ** 63, (-2) ** 63, 7 ** 2**10 == (7 ** 2**9) ** 2, (-(2
 true
 true
 ");
-            if (Environment.Version.Major >= 9) {
-                TestOutput(@"
+            TestOutput(@"
 def e; yield; rescue NoMemoryError => x; x.class; end
 p e { 2 ** (2**31) }, e { 4 ** (2**30) }
 ", @"
 NoMemoryError
 NoMemoryError
-");
-                return;
-            }
-            TestOutput(@"
-b = 2 ** (2**31)
-p b.bit_length, b == 1 << 2**31, 4 ** (2**30) == b, ((-2) ** (2**31 + 1)) == -(b << 1)
-", @"
-2147483649
-true
-true
-true
 ");
         }
 
@@ -678,12 +666,11 @@ nil
         /// raised RangeError. Shifts back by such widths, and bit references at such indexes, reach the real bits.
         /// From 2**32 on, a non-MRI implementation may say "shift width too big" (ruby/spec's left_shift_spec).
         /// The expected output is CRuby 4.0's, except for the 2**32 line (CRuby would try to allocate 512 MB).
-        /// .NET 9 and later cap a BigInteger at about 2**31 bits, so there such results are the NoMemoryError MRI
+        /// .NET caps a BigInteger at about 2**31 bits (since .NET 9), so such results are the NoMemoryError MRI
         /// raises for an allocation that fails, not a raw OverflowException.
         /// </summary>
         public void Integer_HugeShifts1() {
-            if (Environment.Version.Major >= 9) {
-                TestOutput(@"
+            TestOutput(@"
 def e; yield; rescue NoMemoryError => x; x.class; end
 p e { 1 << 2**31 }, e { 1 << (2**31 - 33) }, e { (2**64) << (2**31 + 1) }, e { 3 >> -(2**31) }
 p 7 << -(2**31), -7 << -(2**31), 2**40 << -(2**31), -(2**40) >> 2**31, 1 >> 2**64, -1 >> 2**64, 0 << 2**64
@@ -700,44 +687,6 @@ NoMemoryError
 0
 -1
 0
-#<RangeError: shift width too big>
-#<RangeError: shift width too big>
-");
-                return;
-            }
-            TestOutput(@"
-def big(x) = [x.bit_length, x & 0xffff, x >> (x.bit_length - 8)]
-b = 1 << 2**31
-p big(b), big(-3 << 2**31), big(3 >> -(2**31)), big((2**64 + 3) << (2**31 + 1))
-p b >> 2**31, (-b - 1) >> 2**31, (-b) >> 2**31, b >> (2**31 + 1), (b + 5) << -(2**31), (-b + 5) << -(2**31)
-p b[2**31], b[2**31 - 1], (-b)[2**31 + 5], (-b - 1)[2**31], (b + 1)[2**64], (-b)[2**64]
-p 7 << -(2**31), -7 << -(2**31), 2**40 << -(2**31), -(2**40) >> 2**31, 1 >> 2**64, -1 >> 2**64, 0 << 2**64
-p((1 << 2**32 rescue $!), (-1 >> -(2**64) rescue $!), (b << 2**70 rescue $!))
-", @"
-[2147483649, 0, 128]
-[2147483650, 0, -192]
-[2147483650, 0, 192]
-[2147483714, 0, 128]
-1
--2
--1
-0
-1
--1
-1
-0
-1
-0
-0
-1
-0
--1
-0
--1
-0
--1
-0
-#<RangeError: shift width too big>
 #<RangeError: shift width too big>
 #<RangeError: shift width too big>
 ");
@@ -1272,22 +1221,19 @@ end
         }
 
         /// <summary>
-        /// Integer.sqrt's starting point for a value of more than 2**31 + 1000 bits, which only .NET 8's BigInteger can
-        /// hold: its shifts counted 2 * halfShift in an int, which wrapped negative, so the right shift became a left one
-        /// and the seed was huge or infinite. The seed must be at or above the root and within a bit of it.
+        /// Integer.sqrt's starting point. Its shifts once counted 2 * halfShift in an int, which wrapped negative for a
+        /// value of more than 2**31 + 1000 bits (which only .NET 8's BigInteger could hold), so the right shift became a
+        /// left one and the seed was huge or infinite. The seed must be at or above the root and within a bit of it.
         /// </summary>
         public void Integer_SqrtSeedHuge1() {
-            if (Environment.Version.Major >= 9) {
-                return;
+            foreach (long exponent in new long[] { 2048, 100_000, 1_000_000 }) {
+                BigInteger n = BigInteger.One << (int)exponent;
+                Assert(n.GetBitLength() == exponent + 1);
+                BigInteger root = BigInteger.One << (int)(exponent / 2);
+                BigInteger seed = IronRuby.Builtins.Integer.SqrtSeed(n);
+                Assert(seed >= root);
+                Assert(seed.GetBitLength() <= root.GetBitLength() + 1);
             }
-            long exponent = (1L << 31) + 1024;
-            BigInteger n = BigInteger.One << (int)(exponent / 2);
-            n <<= (int)(exponent / 2);
-            Assert(n.GetBitLength() == exponent + 1);
-            BigInteger root = BigInteger.One << (int)(exponent / 2);
-            BigInteger seed = IronRuby.Builtins.Integer.SqrtSeed(n);
-            Assert(seed >= root);
-            Assert(seed.GetBitLength() <= root.GetBitLength() + 1);
 
             for (int bits = 63; bits < 5000; bits += 97) {
                 BigInteger m = (BigInteger.One << bits) + 12345;

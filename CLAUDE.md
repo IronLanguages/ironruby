@@ -1,6 +1,6 @@
 # IronRuby: notes for Claude
 
-IronRuby is Ruby on .NET: a C# interpreter/compiler on the DLR, built for .NET 8 and .NET 10,
+IronRuby is Ruby on .NET: a C# interpreter/compiler on the DLR, built for .NET 10 and .NET 11,
 parsing with prism (CRuby's parser) through a native `libprism`. README.md has the user-facing
 story; this file is what you need to work on the code.
 
@@ -69,8 +69,8 @@ dotnet build Src/Console/Ruby.Console.csproj -p:IronRubyTargetFrameworks=net10.0
   new patch in `Build/dlr-patches` must be applied to existing checkouts by hand. Off Windows the
   build runs it and fails on a DLR that lacks one (`-p:CheckDlrPatches=false` skips it): a build
   against a stale DLR used to succeed and differ from CI only in a test or two (issue 132).
-- `IronRubyTargetFrameworks=net10.0` (or `net8.0`) builds one framework; the default builds
-  both. CI tests both.
+- `IronRubyTargetFrameworks=net11.0` (or `net10.0`) builds one framework; the default builds
+  both (it needs the .NET 11 SDK). CI tests both.
 - Apphosts (`ir`, `IronRuby.Tests`) need `DOTNET_ROOT` when .NET is not installed system-wide.
 - `make`, `make test`, `make spec` are shortcuts for the CI commands (see the Makefile).
 
@@ -87,8 +87,8 @@ as CI does): they pass `-X:StdLib` `;`-separated, while the shell launchers' `:`
 breaks at drive letters.
 
 `ir.sh` runs `./ironruby`, which runs the in-place build under
-`Src/Console/bin/$IR_CONFIG/$IR_TFM/`. `IR_TFM` defaults to **net8.0**: after building only
-net10.0, set `IR_TFM=net10.0` or you run a stale build (or none). `IR_CONFIG` defaults to
+`Src/Console/bin/$IR_CONFIG/$IR_TFM/`. `IR_TFM` defaults to **net10.0**: after building only
+net11.0, set `IR_TFM=net11.0` or you run a stale build (or none). `IR_CONFIG` defaults to
 Debug. The stdlib is read from `Src/StdLib` at startup: editing a `.rb` there needs no
 rebuild, a `.cs` change does.
 
@@ -180,8 +180,16 @@ diff touches only what you changed.
 
 ## Pull requests
 
-- CI (`.github/workflows/ci.yml`) builds and tests Ubuntu and Windows, net8.0 and net10.0, plus
-  ruby/spec's language suite. The Windows jobs run the full IronRuby.Tests suite too.
+- CI (`.github/workflows/ci.yml`) builds and tests Ubuntu and Windows, plus ruby/spec's language
+  suite. The Windows jobs run the full IronRuby.Tests suite too. A PR or push tests **net11.0
+  only**; net10.0 (what the downloads are built on) runs on a PR from a `release/*` branch, on a
+  run by hand (`gh workflow run ci.yml --ref <branch> -f tfms=net10.0`, or `both`), and as the
+  gate a `v*` tag's release.yml must pass before it publishes. A net10.0-only regression can
+  therefore sit on master until the next release PR; run the workflow by hand when in doubt.
+- Cutting a release: a "Release X.Y.Z" PR from `release/vX.Y.Z` (version files, README, and
+  `Docs/releases/vX.Y.Z.md`), whose CI runs net10.0 and net11.0; merge it, then push an annotated
+  tag `vX.Y.Z` on the merge commit. release.yml runs ci.yml's net10.0 test set and packages the
+  net10.0 downloads, and publishes only if both succeed.
 - A PR whose branch conflicts with master gets **no** `pull_request` CI run at all, silently.
   Merge master into the branch, or dispatch the workflow on the branch (`workflow_dispatch`).
 - CodeRabbit reviews every PR. Read the review **bodies** too: findings on lines outside the

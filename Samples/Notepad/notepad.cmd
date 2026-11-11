@@ -13,7 +13,7 @@ setlocal
 set "IR_ROOT=%~dp0..\.."
 if "%IR_CONFIG%"=="" if not exist "%IR_ROOT%\Src\Console\bin\Debug\" if exist "%IR_ROOT%\Src\Console\bin\Release\" set "IR_CONFIG=Release"
 if "%IR_CONFIG%"=="" set "IR_CONFIG=Debug"
-if "%IR_TFM%"=="" set "IR_TFM=net8.0"
+if "%IR_TFM%"=="" set "IR_TFM=net10.0"
 set "IR_DIR=%IR_ROOT%\Src\Console\bin\%IR_CONFIG%\%IR_TFM%\win-x64"
 if not exist "%IR_DIR%\ir.exe" set "IR_DIR=%IR_ROOT%\Src\Console\bin\%IR_CONFIG%\%IR_TFM%"
 set "S=%IR_ROOT%\Src\StdLib"

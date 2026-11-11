@@ -404,8 +404,8 @@ namespace IronRuby.Builtins {
         ///
         /// Refuses what MRI refuses ("exponent is too large", <see cref="PowerIsTooLarge"/>) and
         /// computes everything else, as MRI does: 2 ** (2**31) is a 2**31+1-bit Integer. A power of
-        /// two is a shift, linear instead of quadratic, so even 2 ** 40_000_000 is quick. .NET 9 and
-        /// later cap a BigInteger at about 2**31 bits; there a larger result is the failed
+        /// two is a shift, linear instead of quadratic, so even 2 ** 40_000_000 is quick. .NET caps a
+        /// BigInteger at about 2**31 bits; a larger result is the failed
         /// allocation MRI reports (NoMemoryError), as it is for a shift (<see cref="ShiftLeftOrFail"/>).
         /// </summary>
         internal static object/*!*/ PowerNonNegative(BigInteger/*!*/ self, BigInteger/*!*/ exponent) {
@@ -430,6 +430,12 @@ namespace IronRuby.Builtins {
             long magnitudeBits = magnitude.GetBitLength();
             bool negateResult = self.Sign < 0 && !exponent.IsEven;
             long exp = (long)exponent;
+
+            // the result has at least (magnitudeBits - 1) * exp + 1 bits: past the largest BigInteger it is
+            // NoMemoryError up front, rather than after computing it (and .NET 11's Pow may not check)
+            if ((magnitudeBits - 1) * exp + 1 > ClrInteger.MaxBigIntegerBits) {
+                throw new OutOfMemoryException("failed to allocate memory");
+            }
 
             BigInteger result;
             try {
@@ -461,7 +467,7 @@ namespace IronRuby.Builtins {
                     }
                 }
             } catch (OverflowException) {
-                // past the largest BigInteger (.NET 9 and later)
+                // past the largest BigInteger
                 throw new OutOfMemoryException("failed to allocate memory");
             }
 
@@ -1234,10 +1240,9 @@ namespace IronRuby.Builtins {
         }
 
         // From this many bits on, MathUtils.ToString beats BigInteger.ToString in radix 10. Measured (Release,
-        // one core) on random values: on .NET 8 the two are level at ~64-96k bits, where BigInteger.ToString
-        // takes ~6-13 ms, and MathUtils (Barrett division) is twice as fast at 256k bits; .NET 9 and later
-        // divide in subquadratic time and format more slowly, and are level at ~4-32k bits.
-        private static readonly long DecimalSplitBits = (Environment.Version.Major >= 9) ? 32 * 1024 : 96 * 1024;
+        // one core) on random values: .NET 9 and later divide in subquadratic time and format slowly, and the
+        // two are level at ~4-32k bits (on .NET 8 it was ~64-96k bits).
+        private const long DecimalSplitBits = 32 * 1024;
 
         private static string/*!*/ ToPowerOfTwoRadixString(BigInteger value, int radix) {
             bool negative = value.Sign < 0;

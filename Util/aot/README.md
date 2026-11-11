@@ -340,7 +340,7 @@ parsing, bridging, transforming and LightCompiling the source.
 dotnet build Src/Console/Ruby.Console.csproj -c Release -p:DlrSourceDir=...  # the R2R host, with its library
 IR_CONFIG=R2R ./ir.sh -e 1                          # uses it; IR_STARTUP_DLL=none turns it off
 IR_STARTUP_DLL_TRACE=1 IR_CONFIG=R2R ./ir.sh -e 1   # what it registered, what is still parsed
-DLR_SOURCE_DIR=... Util/aot/build-startup.sh        # by hand, into Src/Console/bin/R2R/net8.0
+DLR_SOURCE_DIR=... Util/aot/build-startup.sh        # by hand, into Src/Console/bin/R2R/net10.0
 ```
 
 Where it is built:
@@ -349,13 +349,15 @@ Where it is built:
   the R2R host to `bin/R2R/<tfm>.new`, runs `build-startup.sh --host` on that directory, and only
   then swaps it in, so a host and its library always go in together.
   `-p:IronRubyStartupLibrary=false` leaves the library out (and `-p:IronRubyR2R=false` skips the
-  whole R2R step). The compiler, IronRuby.Aot, is a net10.0 program because it needs
-  `PersistedAssemblyBuilder`. Without the .NET 10 SDK and runtime the script says so and exits 3.
+  whole R2R step). The compiler, IronRuby.Aot, targets the host's framework (net10.0 or net11.0;
+  it needs `PersistedAssemblyBuilder`, .NET 9+). Without an SDK and runtime of that version the
+  script says so and exits 3.
   If it fails, the build only warns. Either way the host runs without the library, which costs only
   the speedup.
 - **How the compiler builds it.** It runs the host's own IronRuby and DLR builds
-  (`IronRubyAotHostTfm`, net8.0), so the saved IL calls exactly those assemblies. It retargets the
-  library's framework references to the host's major version. It crossgen2's the library with the
+  (`IronRubyAotHostTfm`, net10.0 by default), so the saved IL calls exactly those assemblies. If it
+  runs on a later runtime than the host's, it retargets the library's framework references to the
+  host's major version. It crossgen2's the library with the
   crossgen2 of that version, against the host's own framework. A rebuild that changed nothing the
   library is made from copies the last one from `Util/aot/IronRuby.Aot/obj/startup/`, in about 1 s.
   Otherwise the library adds about 20 s to the build: 8 s to compile and 10 s for crossgen2.

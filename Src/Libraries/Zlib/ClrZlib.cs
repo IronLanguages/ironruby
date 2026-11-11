@@ -13,7 +13,7 @@ namespace IronRuby.StandardLibrary.Zlib {
     /// <summary>
     /// zlib on Windows. There is no libz there, but every .NET runtime carries zlib in
     /// System.IO.Compression.Native, the one DeflateStream runs on (zlib-ng in zlib-compat mode
-    /// since .NET 9, Intel's fork of zlib 1.2 in .NET 8). What it exports is narrower than libz:
+    /// since .NET 9). What it exports is narrower than libz:
     /// init, deflate/inflate and end over its own PAL_ZStream, plus crc32.
     ///
     /// This runs LibZ's z_stream-shaped record over those exports, so ZStream cannot tell the
@@ -30,7 +30,7 @@ namespace IronRuby.StandardLibrary.Zlib {
 
         /// <summary>The zlib API version behind the exports; libz's would come from zlibVersion().</summary>
         internal static string/*!*/ Version {
-            get { return Environment.Version.Major >= 9 ? "1.3.1.zlib-ng" : "1.2.13"; }
+            get { return "1.3.1.zlib-ng"; }
         }
 
         /// <summary>PAL_ZStream from System.IO.Compression.Native's pal_zlib.h.</summary>
@@ -174,8 +174,8 @@ namespace IronRuby.StandardLibrary.Zlib {
             if (s == null) {
                 return LibZ.Z_STREAM_ERROR;
             }
-            // .NET 8 exports no inflateReset and no runtime exports deflateReset; a stream begun
-            // again with the same parameters is what a reset leaves.
+            // .NET 10 exports only InflateReset2_ and no deflateReset (.NET 11 adds DeflateReset);
+            // a stream begun again with the same parameters is what a reset leaves, on either.
             s.End();
             int err = s.Init();
             rec.msg = s.Pal.msg;

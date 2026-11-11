@@ -42,24 +42,24 @@ S="$IR_ROOT/Src/StdLib"
 # build is newer than it, since that build has changes the host does not have.
 if [ -z "$IR_CONFIG" ]; then
   IR_CONFIG=Debug
-  if [ ! -x "$IR_ROOT/Src/Console/bin/Debug/${IR_TFM:-net8.0}/ir" ] &&
-     [ -x "$IR_ROOT/Src/Console/bin/Release/${IR_TFM:-net8.0}/ir" ]; then
+  if [ ! -x "$IR_ROOT/Src/Console/bin/Debug/${IR_TFM:-net10.0}/ir" ] &&
+     [ -x "$IR_ROOT/Src/Console/bin/Release/${IR_TFM:-net10.0}/ir" ]; then
     IR_CONFIG=Release
   fi
-  R2R_DLL="$IR_ROOT/Src/Console/bin/R2R/${IR_TFM:-net8.0}/ir.dll"
-  if [ -x "$IR_ROOT/Src/Console/bin/R2R/${IR_TFM:-net8.0}/ir" ] &&
-     [ -z "$(find "$IR_ROOT/Src/Console/bin/Debug/${IR_TFM:-net8.0}/ir.dll" \
-                  "$IR_ROOT/Src/Console/bin/Release/${IR_TFM:-net8.0}/ir.dll" \
+  R2R_DLL="$IR_ROOT/Src/Console/bin/R2R/${IR_TFM:-net10.0}/ir.dll"
+  if [ -x "$IR_ROOT/Src/Console/bin/R2R/${IR_TFM:-net10.0}/ir" ] &&
+     [ -z "$(find "$IR_ROOT/Src/Console/bin/Debug/${IR_TFM:-net10.0}/ir.dll" \
+                  "$IR_ROOT/Src/Console/bin/Release/${IR_TFM:-net10.0}/ir.dll" \
                   -maxdepth 0 -newer "$R2R_DLL" 2>/dev/null)" ]; then
     IR_CONFIG=R2R
   fi
 fi
 
 # IR_TFM picks the target framework, the same way IR_CONFIG picks the configuration.  The
-# tree multi-targets net8.0;net10.0 (Directory.Build.props), so one `dotnet build` leaves
-# both side by side and IR_TFM=net10.0 runs the same IL on the .NET 10 runtime.  net8.0
-# stays the default: it is what every worktree, agent script and baseline was taken on.
-: "${IR_TFM:=net8.0}"
+# tree multi-targets net10.0;net11.0 (Directory.Build.props), so one `dotnet build` leaves
+# both side by side and IR_TFM=net11.0 runs the .NET 11 build.  net10.0 (LTS) is the
+# default, and what the release downloads are built on.
+: "${IR_TFM:=net10.0}"
 
 IR_BIN="$IR_ROOT/Src/Console/bin/$IR_CONFIG/$IR_TFM/ir"
 # Say which configuration is missing rather than let the shell's "not found" - which a

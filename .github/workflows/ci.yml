@@ -1,13 +1,32 @@
 name: CI
 
+# Which target frameworks are tested (the `tfms` job below decides):
+# - every pull request and every push: net11.0 only, the newest runtime, where new
+#   breakage shows first;
+# - a pull request from a release/* branch (the "Release X.Y.Z" PR), a run by hand
+#   (workflow_dispatch, `tfms` input, both by default) and the gate in release.yml
+#   (workflow_call on a v* tag): net10.0 as well, the LTS the downloads are built on.
 on:
   push:
     branches: [master, modernize, 'ci/**']
   pull_request:
   workflow_dispatch:
+    inputs:
+      tfms:
+        description: Target frameworks to build and test
+        type: choice
+        options: [both, net10.0, net11.0]
+        default: both
+  workflow_call:
+    inputs:
+      tfms:
+        description: Target frameworks to build and test (both, net10.0 or net11.0)
+        type: string
+        default: net10.0
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # a run called from release.yml is a group of its own, apart from a push's run on the same ref
+  group: ci-${{ github.ref }}-${{ inputs.tfms || 'auto' }}
   cancel-in-progress: true
 
 env:
@@ -28,6 +47,32 @@ env:
   MSPEC_REF: b79c65ed28b00f0869ad82b0e3dceef0d943cd58
 
 jobs:
+  tfms:
+    name: target frameworks
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.pick.outputs.list }}
+    steps:
+      - id: pick
+        env:
+          REQUESTED: ${{ inputs.tfms }}
+          EVENT: ${{ github.event_name }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          case "$REQUESTED" in
+            both) list='["net10.0","net11.0"]' ;;
+            net10.0|net11.0) list="[\"$REQUESTED\"]" ;;
+            '')
+              if [ "$EVENT" = pull_request ] && [[ "$HEAD_REF" == release/* ]]; then
+                list='["net10.0","net11.0"]'
+              else
+                list='["net11.0"]'
+              fi ;;
+            *) echo "::error::unknown tfms input: $REQUESTED"; exit 1 ;;
+          esac
+          echo "testing $list"
+          echo "list=$list" >> "$GITHUB_OUTPUT"
+
   # The repository holds no programs - no .exe, .dll, .so or other binary that runs - so all
   # of it can be read; Util/check-no-executables.rb says why and how it tells them apart.
   no-executables:
@@ -40,33 +85,20 @@ jobs:
 
   build-and-test:
     name: ${{ matrix.os }} ${{ matrix.tfm }}
+    needs: tfms
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        tfm: [net8.0, net10.0]
-        include:
-          # IronRuby.Tests "> FAILED" line counts. They are the exact current
-          # numbers, not head-room: the job fails as soon as one more line
-          # appears. 0 since 2026-09-27 (measured on Linux, net8.0 and net10.0):
-          # any failure line fails the job.
-          - os: ubuntu-latest
-            tfm: net8.0
-            baseline: 0
-          - os: ubuntu-latest
-            tfm: net10.0
-            baseline: 0
-          - os: windows-latest
-            tfm: net8.0
-            baseline: 0
-          - os: windows-latest
-            tfm: net10.0
-            baseline: 0
+        tfm: ${{ fromJSON(needs.tfms.outputs.list) }}
     env:
       TFM: ${{ matrix.tfm }}
       IR_TFM: ${{ matrix.tfm }}
-      BASELINE: ${{ matrix.baseline }}
+      # The IronRuby.Tests "> FAILED" line count allowed: the exact current number, not
+      # head-room, so the job fails as soon as one more line appears. 0 since 2026-09-27
+      # (then net8.0 and net10.0; net10.0 and net11.0 since 2026-11-11) on Linux and Windows.
+      BASELINE: 0
     defaults:
       run:
         shell: bash
@@ -111,13 +143,13 @@ jobs:
             git -C dlr apply "../$patch"
           done
 
-      # Both runtimes are installed on every matrix entry: the SDK builds either
-      # target framework, but running the net8.0 output needs the .NET 8 runtime.
+      # Both SDKs are installed on every matrix entry: the .NET 11 SDK builds either
+      # target framework, but running the net10.0 output needs the .NET 10 runtime.
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |
-            8.0.x
             10.0.x
+            11.0.x
 
       - uses: ruby/setup-ruby@v1
         with:
@@ -471,11 +503,12 @@ jobs:
 
   ruby-spec:
     name: ruby/spec ${{ matrix.tfm }}
+    needs: tfms
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        tfm: [net8.0, net10.0]
+        tfm: ${{ fromJSON(needs.tfms.outputs.list) }}
     env:
       TFM: ${{ matrix.tfm }}
       IR_TFM: ${{ matrix.tfm }}
@@ -515,8 +548,8 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |
-            8.0.x
             10.0.x
+            11.0.x
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: '3.3'

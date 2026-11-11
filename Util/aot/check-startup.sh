@@ -13,7 +13,7 @@
 IR_ROOT="$(dirname "$(dirname "$(dirname "$(readlink -f "$0")")")")"
 IR_CONFIG="${IR_CONFIG:-R2R}"
 export IR_CONFIG
-TFM="${IR_TFM:-net8.0}"
+TFM="${IR_TFM:-net10.0}"
 HOST="Src/Console/bin/$IR_CONFIG/$TFM"
 if [ ! -f "$IR_ROOT/$HOST/IronRuby.Startup.dll" ]; then
   echo "check-startup.sh: no library in $IR_ROOT/$HOST (build -c Release on Linux)" >&2

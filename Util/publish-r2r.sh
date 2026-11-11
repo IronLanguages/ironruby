@@ -27,9 +27,9 @@ export DOTNET_ROOT=/usr/local/dotnet
 export PATH=/usr/local/dotnet:$PATH
 : "${DLR_SOURCE_DIR:=/root/workspace/dlr/src/core}"
 : "${RID:=linux-x64}"
-# Which framework to precompile for; crossgen2 has to pick one.  net8.0 is the default
-# everything else uses, IR_TFM=net10.0 publishes the .NET 10 one next to it.
-: "${IR_TFM:=net8.0}"
+# Which framework to precompile for; crossgen2 has to pick one.  net10.0 is the default
+# everything else uses, IR_TFM=net11.0 publishes the .NET 11 one next to it.
+: "${IR_TFM:=net10.0}"
 
 cd "$IR_ROOT" || exit 1
 dotnet publish Src/Console/Ruby.Console.csproj \

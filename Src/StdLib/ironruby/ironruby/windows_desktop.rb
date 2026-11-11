@@ -2,7 +2,7 @@
 #
 # On .NET Framework these sat in the GAC of every Windows machine, and the shims that
 # load them (System.Windows.Forms.rb, PresentationCore.rb, PresentationFramework.rb)
-# chose the version by the CLR's. On .NET 8 they belong to Microsoft.WindowsDesktop.App,
+# chose the version by the CLR's. On .NET 5 and later they belong to Microsoft.WindowsDesktop.App,
 # a framework of its own that ir has only when it was built for Windows (see
 # Src/Console/Ruby.Console.csproj). A missing one used to surface as "cannot load such
 # file -- System.Windows.Forms, Version=2.0.0.0, ...", a version number that sent people

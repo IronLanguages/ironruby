@@ -234,7 +234,7 @@ namespace IronRuby.Runtime {
             }
             }
 
-        // bin/<config>/net8.0 of a project under Src/: the nearest ancestor with a StdLib/ironruby directory.
+        // bin/<config>/<tfm> of a project under Src/: the nearest ancestor with a StdLib/ironruby directory.
         // Returns null outside a source tree (a deployed layout), where the "../Lib" fallback is right.
         private static string FindSourceTreeStandardLibrary() {
             try {

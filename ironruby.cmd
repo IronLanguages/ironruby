@@ -17,9 +17,9 @@ rem IR_CONFIG is not set and there is no Debug build, run that one.
 if "%IR_CONFIG%"=="" if not exist "%IR_ROOT%\Src\Console\bin\Debug\" if exist "%IR_ROOT%\Src\Console\bin\Release\" set "IR_CONFIG=Release"
 if "%IR_CONFIG%"=="" set "IR_CONFIG=Debug"
 
-rem IR_TFM picks the target framework out of the multi-targeted build (net8.0;net10.0),
-rem exactly as in ironruby. net8.0 stays the default.
-if "%IR_TFM%"=="" set "IR_TFM=net8.0"
+rem IR_TFM picks the target framework out of the multi-targeted build (net10.0;net11.0),
+rem exactly as in ironruby. net10.0 is the default.
+if "%IR_TFM%"=="" set "IR_TFM=net10.0"
 
 rem A tree built on Windows puts ir.exe straight in %IR_TFM%; one cross-published from
 rem Linux with -r win-x64 puts it in %IR_TFM%\win-x64. Take whichever exists.

@@ -30,7 +30,7 @@ set -euo pipefail
 RID=${1:?usage: Util/package-release.sh RID [OUTDIR]}
 IR_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUT=$(mkdir -p "${2:-dist}" && cd "${2:-dist}" && pwd)
-: "${IR_TFM:=net8.0}"
+: "${IR_TFM:=net10.0}"
 VERSION=${IR_VERSION:-$(sed -n 's/.*DisplayVersion = "\(.*\)";.*/\1/p' "$IR_ROOT/Src/Ruby/CurrentVersion.cs")}
 NAME="ironruby-$VERSION-$RID"
 STAGE="$OUT/$NAME"

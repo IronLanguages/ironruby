@@ -2634,7 +2634,7 @@ $d = D.new { |foo, bar| $foo = foo; $bar = bar; 777 }
         /// A block handler for a standard (sender, EventArgs) event, closing over a local and
         /// calling back into the sender. This used to require WinForms (by its .NET 2.0 strong
         /// name), show a real Form and run Application.Run on it. WinForms is Windows-only and
-        /// is not referenced by this net8.0/net10.0 project, so it failed with a LoadError on
+        /// is not referenced by this net10.0/net11.0 project, so it failed with a LoadError on
         /// every platform; EventsForm1 stands in for the form, and the Ruby side is unchanged.
         /// </summary>
         public void ClrEvents1() {
@@ -4217,7 +4217,7 @@ p Inst.Double(2.0), Inst.Double(4), Inst.Double(System::Byte.new(8)), Inst.Doubl
 ");
             
             // primitive numerics. The Complex parameter is System.Numerics.Complex, which p shows
-            // through its own ToString: "<10; 0>" on .NET 8 and 10, where the "(10+0j)" this once
+            // through its own ToString: "<10; 0>" on .NET 8 and later, where the "(10+0j)" this once
             // expected was the Python-style formatting of the DLR's old Complex64.
             TestOutput(@"
 p(*Inst.numerics(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11))
