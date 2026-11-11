@@ -1,9 +1,9 @@
 /* ****************************************************************************
  *
- * fcntl(2) and open(2) for P/Invoke, on every Unix including Apple silicon.
+ * fcntl(2), open(2) and ioctl(2) for P/Invoke, on every Unix including Apple silicon.
  *
- * Both are variadic in C: int fcntl(int fd, int cmd, ...) and
- * int open(const char *path, int flags, ...). A DllImport cannot say so, and
+ * All three are variadic in C: int fcntl(int fd, int cmd, ...),
+ * int open(const char *path, int flags, ...) and int ioctl(int fd, unsigned long request, ...). A DllImport cannot say so, and
  * declaring the optional argument as an ordinary int works wherever variadic
  * arguments travel the way named ones do - Linux on every architecture, and
  * macOS on x64. Apple's arm64 ABI is the exception: every variadic argument goes
@@ -45,6 +45,38 @@ namespace IronRuby.Builtins {
         [DllImport("libc", SetLastError = true, EntryPoint = "open")]
         private static extern int sys_open_stack(IntPtr path, int flags,
             IntPtr r2, IntPtr r3, IntPtr r4, IntPtr r5, IntPtr r6, IntPtr r7, long mode);
+
+        [DllImport("libc", SetLastError = true, EntryPoint = "ioctl")]
+        private static extern int sys_ioctl(int fd, UIntPtr request, IntPtr argument);
+
+        [DllImport("libc", SetLastError = true, EntryPoint = "ioctl")]
+        private static extern int sys_ioctl_stack(int fd, UIntPtr request,
+            IntPtr r2, IntPtr r3, IntPtr r4, IntPtr r5, IntPtr r6, IntPtr r7, IntPtr argument);
+
+        [DllImport("libc", SetLastError = true, EntryPoint = "ioctl")]
+        private static extern int sys_ioctl(int fd, UIntPtr request, byte[] argument);
+
+        [DllImport("libc", SetLastError = true, EntryPoint = "ioctl")]
+        private static extern int sys_ioctl_stack(int fd, UIntPtr request,
+            IntPtr r2, IntPtr r3, IntPtr r4, IntPtr r5, IntPtr r6, IntPtr r7, byte[] argument);
+
+        /// <summary>ioctl(2) with an integer (or pointer-sized) argument.</summary>
+        public static int Ioctl(int fd, UIntPtr request, IntPtr argument) {
+            if (VariadicOnStack) {
+                return sys_ioctl_stack(fd, request,
+                    IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, argument);
+            }
+            return sys_ioctl(fd, request, argument);
+        }
+
+        /// <summary>ioctl(2) with a pointer to a buffer the call reads or fills.</summary>
+        public static int Ioctl(int fd, UIntPtr request, byte[] argument) {
+            if (VariadicOnStack) {
+                return sys_ioctl_stack(fd, request,
+                    IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, argument);
+            }
+            return sys_ioctl(fd, request, argument);
+        }
 
         /// <summary>fcntl(2) with an int argument (F_GETFD, F_SETFD, F_GETFL, F_SETFL, F_DUPFD...).
         /// The commands that take no argument ignore it.</summary>
