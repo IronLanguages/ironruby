@@ -102,12 +102,6 @@ namespace IronRuby.Builtins {
         [DllImport("libc", SetLastError = true, EntryPoint = "dup2")]
         private static extern int SysDup2(int fd, int newFd);
 
-        [DllImport("libc", SetLastError = true, EntryPoint = "open")]
-        private static extern int SysOpen(IntPtr path, int flags, uint mode);
-
-        [DllImport("libc", SetLastError = true, EntryPoint = "fcntl")]
-        private static extern int SysFcntl(int fd, int command, int argument);
-
         [DllImport("libc", EntryPoint = "getppid")]
         private static extern int SysGetPpid();
 
@@ -273,7 +267,7 @@ namespace IronRuby.Builtins {
             // would need a descriptor of its own; asking the kernel about each in turn is a
             // cheap syscall and the limit is a thousand or so in practice.
             for (int fd = 3; fd < 4096; fd++) {
-                if (keep.Contains(fd) || SysFcntl(fd, F_GETFD, 0) < 0) {
+                if (keep.Contains(fd) || LibcVariadic.Fcntl(fd, F_GETFD, 0) < 0) {
                     continue;
                 }
                 int error = SysFileActionsAddClose(fileActions, fd);
@@ -441,8 +435,8 @@ namespace IronRuby.Builtins {
                                 break;
 
                             default:
-                                int opened = SysOpen(strings.Allocate(action[2]),
-                                    ToInt(action[3]), (uint)ToInt(action[4]));
+                                int opened = LibcVariadic.Open(strings.Allocate(action[2]),
+                                    ToInt(action[3]), ToInt(action[4]));
                                 if (opened < 0) {
                                     return ScriptingRuntimeHelpers.Int32ToObject(Failure());
                                 }
@@ -519,9 +513,9 @@ namespace IronRuby.Builtins {
             if (IsWindows) {
                 return;
             }
-            int flags = SysFcntl(fd, F_GETFD, 0);
+            int flags = LibcVariadic.Fcntl(fd, F_GETFD, 0);
             if (flags >= 0 && (flags & FD_CLOEXEC) != 0) {
-                SysFcntl(fd, F_SETFD, flags & ~FD_CLOEXEC);
+                LibcVariadic.Fcntl(fd, F_SETFD, flags & ~FD_CLOEXEC);
             }
         }
 
@@ -539,7 +533,7 @@ namespace IronRuby.Builtins {
             if (native < 0) {
                 return null;
             }
-            int flags = SysFcntl(native, F_GETFD, 0);
+            int flags = LibcVariadic.Fcntl(native, F_GETFD, 0);
             return (flags < 0) ? null : (object)((flags & FD_CLOEXEC) != 0);
         }
 
@@ -554,9 +548,9 @@ namespace IronRuby.Builtins {
             if (nativeDescriptor < 0) {
                 return;
             }
-            int flags = SysFcntl(nativeDescriptor, F_GETFD, 0);
+            int flags = LibcVariadic.Fcntl(nativeDescriptor, F_GETFD, 0);
             if (flags >= 0) {
-                SysFcntl(nativeDescriptor, F_SETFD, flags | FD_CLOEXEC);
+                LibcVariadic.Fcntl(nativeDescriptor, F_SETFD, flags | FD_CLOEXEC);
             }
         }
 
@@ -572,12 +566,12 @@ namespace IronRuby.Builtins {
             if (native < 0) {
                 return null;
             }
-            int flags = SysFcntl(native, F_GETFD, 0);
+            int flags = LibcVariadic.Fcntl(native, F_GETFD, 0);
             if (flags < 0) {
                 return null;
             }
             flags = value ? (flags | FD_CLOEXEC) : (flags & ~FD_CLOEXEC);
-            return (SysFcntl(native, F_SETFD, flags) < 0) ? null : (object)value;
+            return (LibcVariadic.Fcntl(native, F_SETFD, flags) < 0) ? null : (object)value;
         }
 
         /// <summary>A Process::Status that did not come from a wait, for Process::Status.wait's

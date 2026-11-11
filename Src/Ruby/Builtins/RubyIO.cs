@@ -851,7 +851,7 @@ namespace IronRuby.Builtins {
             if (!_hasFileControl || descriptor < 0) {
                 return false;
             }
-            int flags = sys_fcntl(descriptor, F_GETFL, 0);
+            int flags = LibcVariadic.Fcntl(descriptor, F_GETFL, 0);
             if (flags < 0) {
                 return false;
             }
@@ -1013,9 +1013,6 @@ namespace IronRuby.Builtins {
 
         private static readonly bool _hasFileControl = System.IO.Path.DirectorySeparatorChar == '/';
 
-        [DllImport("libc", EntryPoint = "fcntl", SetLastError = true)]
-        private static extern int sys_fcntl(int fd, int cmd, int arg);
-
         /// <summary>
         /// fcntl(2) on the underlying descriptor. Only the descriptor flags can be asked for or
         /// set this way, which is what io/nonblock needs; a platform without fcntl still gets
@@ -1049,7 +1046,7 @@ namespace IronRuby.Builtins {
             if (!_hasFileControl || fd < 0) {
                 throw new NotSupportedException();
             }
-            int result = sys_fcntl(fd, commandId, arg);
+            int result = LibcVariadic.Fcntl(fd, commandId, arg);
             if (result < 0) {
                 throw RubyExceptions.CreateEBADF();
             }
