@@ -3290,6 +3290,10 @@ namespace IronRuby.Runtime {
         private Dictionary<string/*!*/, List<object>/*!*/> _globalVariableTraces;
         private volatile bool _anyGlobalVariableTraced;
 
+        // Whether any trace_var handler is registered: the method JIT's assignment of a global deopts while one is
+        // (JitRuntime.SetGlobal), so the generic code fires the handlers.
+        internal bool AnyGlobalVariableTraced { get { return _anyGlobalVariableTraced; } }
+
         /// <summary>A trace_var handler given as a string, with the context it is evaluated in.</summary>
         public sealed class GlobalVariableTraceCommand {
             public readonly MutableString/*!*/ Code;
