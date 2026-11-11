@@ -61,9 +61,6 @@ namespace IronRuby.StandardLibrary.Pty {
         [DllImport("libc", SetLastError = true, EntryPoint = "chmod")]
         private static extern int sys_chmod(byte[] path, uint mode);
 
-        [DllImport("libc", SetLastError = true, EntryPoint = "fcntl")]
-        private static extern int sys_fcntl(int fd, int command, int argument);
-
         private static readonly bool IsMac = RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
 
         private const int O_RDWR = 2;
@@ -227,7 +224,7 @@ namespace IronRuby.StandardLibrary.Pty {
                 return ScriptingRuntimeHelpers.Int32ToObject(pid);
             }
 
-            int writer = sys_fcntl(master, F_DUPFD_CLOEXEC, 0);
+            int writer = LibcVariadic.Fcntl(master, F_DUPFD_CLOEXEC, 0);
             if (writer < 0) {
                 int errno = Marshal.GetLastWin32Error();
                 sys_close(master);
