@@ -344,12 +344,13 @@ jobs:
         with:
           sparse-checkout: Docs/releases
 
-      # ironruby-* only: the archives of every RID and framework and the installer, not the
-      # review stills (the video is not rendered here). SHA256SUMS lists all of them.
+      # ironruby-<rid>-net* only: the archives of every RID and framework and the installer.
+      # Not the review stills, the video, or the test output of the tests job above, which
+      # 4.0.5 published as results.txt when the pattern was ironruby-*. SHA256SUMS lists all of them.
       - uses: actions/download-artifact@v8
         with:
           path: dist
-          pattern: ironruby-*
+          pattern: ironruby-*-net*
           merge-multiple: true
 
       - name: Checksums

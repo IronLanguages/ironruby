@@ -65,11 +65,21 @@ r2r_obj="$IR_ROOT/Src/Console/obj/Release/$IR_TFM/$RID/R2R"
 rm -rf "$r2r_obj"
 # also when the publish fails part way (set -e): stale composite stubs would disable R2R in the next publish
 trap 'rm -rf "$r2r_obj"' EXIT
-dotnet publish "$IR_ROOT/Src/Console/Ruby.Console.csproj" \
-  -c Release -r "$RID" --self-contained true -f "$IR_TFM" \
-  -p:IronRubyTargetFrameworks="$IR_TFM" -p:PublishReadyToRun=true \
-  $composite \
-  -o "$STAGE/Src/Console/bin/Release/$IR_TFM"
+publish() {
+  dotnet publish "$IR_ROOT/Src/Console/Ruby.Console.csproj" \
+    -c Release -r "$RID" --self-contained true -f "$IR_TFM" \
+    -p:IronRubyTargetFrameworks="$IR_TFM" -p:PublishReadyToRun=true \
+    $composite \
+    -o "$STAGE/Src/Console/bin/Release/$IR_TFM"
+}
+# Once more if it fails: on the macOS runners the parallel build sometimes copies IronRuby.Prism's
+# apphost (or its runtimeconfig.json) before it is written (MSB3030 / "being used by another
+# process"); 4.0.5's osx-arm64 net10.0 archive was lost to it. A real error fails the second time too.
+if ! publish; then
+  echo "package-release: publish failed, retrying once" >&2
+  rm -rf "$r2r_obj"
+  publish
+fi
 rm -rf "$r2r_obj"
 rm -f "$STAGE/Src/Console/bin/Release/$IR_TFM"/*.pdb
 

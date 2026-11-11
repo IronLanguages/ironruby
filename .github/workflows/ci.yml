@@ -498,7 +498,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: ironruby-tests-${{ matrix.os }}-${{ matrix.tfm }}
+          # Not ironruby-*: release.yml publishes the artifacts it downloads by that name.
+          name: tests-${{ matrix.os }}-${{ matrix.tfm }}
           path: ironruby/Src/IronRuby.Tests/bin/Debug/${{ matrix.tfm }}/results.txt
           if-no-files-found: ignore
 
