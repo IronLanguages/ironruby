@@ -666,7 +666,8 @@ nil
         /// options (MRI's rb_str_split_m, SPLIT_TYPE_STRING): / /x splits at each space, as / / does,
         /// although its pattern matches only the empty string. IronRuby split "a  b" by / /x into
         /// ["a", " ", " ", "b"] (it came up in #188). / /x does not search, so $~ is left alone. Two spaces under /x
-        /// are a regexp again. The expected output is CRuby 4.0.9's.
+        /// are a regexp again. An encoding error names the source's encoding, US-ASCII. The expected
+        /// output is CRuby 4.0.9's.
         /// </summary>
         public void String_SplitSpaceRegexp1() {
             TestOutput(@"
@@ -681,6 +682,7 @@ p ""a  b"".split(/  /x)
 p ""a b"".split(/ /), ""a b"".split("" ""), ""a  b"".split("" "")
 ""zz"" =~ /z/; ""a b"".split(/ /x); p $~
 p ""a b"".split(/ /x) { |s| print s, "","" }
+(""a b"".encode(""UTF-16LE"").split(/ /x) rescue p $!)
 ", @"
 [""a"", """", ""b""]
 ["""", ""a"", """", ""b""]
@@ -695,6 +697,7 @@ p ""a b"".split(/ /x) { |s| print s, "","" }
 [""a"", ""b""]
 #<MatchData ""z"">
 a,b,""a b""
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and US-ASCII>
 ");
         }
 

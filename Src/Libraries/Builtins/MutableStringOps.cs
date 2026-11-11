@@ -4755,7 +4755,10 @@ namespace IronRuby.Builtins {
                 // MRI's rb_str_split_m splits at a Regexp whose source is a single space as at that
                 // source taken literally (SPLIT_TYPE_STRING, not " "'s awk-style split), whatever its
                 // options: / /x, whose pattern matches only the empty string, splits at each space.
-                return LiteralSplit(self, regexp.Pattern, limit);
+                // The source is in the regexp's encoding (Regexp#source), which an encoding error names.
+                MutableString source = MutableString.CreateAscii(" ");
+                source.ForceEncoding(regexp.Encoding);
+                return LiteralSplit(self, source, limit);
             }
 
             RubyArray fields = RegexSplit(self, regexp, limit, out lastMatch);
