@@ -583,6 +583,7 @@ p c(""1+2i""), c(""-i""), c("" 2j ""), c(""""), c(""7__9""), c(""1_i""), c(""1+x
 p c(""\xff1+2i""), c(""1+2i\xff""), c(""1+2i\xff"".dup.force_encoding(""BINARY"")), c(""１+2i""), c(""1+2iü"".dup.force_encoding(""BINARY"").force_encoding(""UTF-8""))
 p Complex.__ir_scan__(""1.5e3-2/3i"", false), Complex.__ir_scan__(""1@2"", false), Complex.__ir_scan__(""1e+i"", false), Complex.__ir_scan__(""1+2/0x"", false)
 p Complex.__ir_scan__(""7__9"", true)[0], Complex.__ir_scan__(""1+2i x"", true)[0], Complex.__ir_scan__(""1+2i "", true)[0]
+p c(("" "" * 140) + ""-45+7i""), c(""1_2+3_4i"" + "" "" * 200)
 ", @"
 [1, 2]
 [0, -1]
@@ -605,6 +606,8 @@ p Complex.__ir_scan__(""7__9"", true)[0], Complex.__ir_scan__(""1+2i x"", true)[
 false
 false
 true
+[-45, 7]
+[12, 34]
 ");
         }
 

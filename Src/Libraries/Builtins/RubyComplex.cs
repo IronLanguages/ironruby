@@ -377,40 +377,58 @@ namespace IronRuby.Builtins {
         }
 
         private static RubyArray/*!*/ ScanParts(MutableString/*!*/ str, bool strict) {
-            char[] text;
+            ReadOnlySpan<char> text;
             if (str.IsBinary) {
                 // Held as bytes, which need not be its characters one for one (invalid or multi-byte
                 // UTF-8): only ASCII characters take part in the scan, and any other byte is just not
                 // one of them. (GetCharacterData is only for a string PrepareForCharacterRead has made
                 // characters of, which would raise for an invalid one: MRI's scan does not.)
                 byte[] bytes = str.ToByteArray();
-                text = new char[bytes.Length];
+                var chars = new char[bytes.Length];
                 for (int k = 0; k < bytes.Length; k++) {
-                    text[k] = (char)bytes[k];
+                    chars[k] = (char)bytes[k];
                 }
+                text = chars;
             } else {
                 ReadOnlySpan<char> chars;
                 ReadOnlySpan<byte> bytes;
                 str.GetCharacterData(out chars, out bytes);
-                text = chars.ToArray();
+                text = chars;
             }
-            var scanner = new ComplexScanner(text, strict);
+            // What str2num is to read is made of characters read from the text, each once; a short text's
+            // goes on the stack (it was a StringBuilder, and the text a copy, each on the heap).
+            var scanner = new ComplexScanner(text, text.Length <= 128 ? stackalloc char[text.Length] : new char[text.Length], strict);
             return scanner.Parse();
         }
 
-        private sealed class ComplexScanner {
-            private readonly char[]/*!*/ _s;
+        private ref struct ComplexScanner {
+            private readonly ReadOnlySpan<char> _s;
             private readonly int _n;
             private readonly bool _strict;
-            private readonly System.Text.StringBuilder/*!*/ _b = new System.Text.StringBuilder();
+            // the characters read so far for str2num, _length of them
+            private Span<char> _b;
+            private int _length;
             private int _i;
 
-            public ComplexScanner(char[]/*!*/ s, bool strict) {
+            public ComplexScanner(ReadOnlySpan<char> s, Span<char> buffer, bool strict) {
                 _s = s;
                 // complex.c works on a C string, so an embedded NUL ends the input
-                int nul = Array.IndexOf(s, '\0');
+                int nul = s.IndexOf('\0');
                 _n = nul >= 0 ? nul : s.Length;
                 _strict = strict;
+                _b = buffer;
+                _length = 0;
+                _i = 0;
+            }
+
+            private void Append(char c) {
+                if (_length == _b.Length) {
+                    // not expected - each character is read once - but a full buffer only grows
+                    var larger = new char[_b.Length * 2 + 8];
+                    _b.CopyTo(larger);
+                    _b = larger;
+                }
+                _b[_length++] = c;
             }
 
             // nul ends the input, as it does for the C code
@@ -424,7 +442,7 @@ namespace IronRuby.Builtins {
             private char ReadSign() {
                 char c = Cur;
                 if (IsSign(c)) {
-                    _b.Append(c);
+                    Append(c);
                     _i++;
                     return c;
                 }
@@ -446,7 +464,7 @@ namespace IronRuby.Builtins {
                         }
                         us = true;
                     } else {
-                        _b.Append(Cur);
+                        Append(Cur);
                         us = false;
                     }
                     _i++;
@@ -461,7 +479,7 @@ namespace IronRuby.Builtins {
             }
 
             private void Unappend() {
-                _b.Length--;
+                _length--;
             }
 
             private bool ReadNum() {
@@ -471,7 +489,7 @@ namespace IronRuby.Builtins {
                     }
                 }
                 if (Cur == '.') {
-                    _b.Append('.');
+                    Append('.');
                     _i++;
                     if (!ReadDigits()) {
                         Unappend();
@@ -479,7 +497,7 @@ namespace IronRuby.Builtins {
                     }
                 }
                 if (Cur == 'e' || Cur == 'E') {
-                    _b.Append(Cur);
+                    Append(Cur);
                     _i++;
                     ReadSign();
                     if (!ReadDigits()) {
@@ -495,7 +513,7 @@ namespace IronRuby.Builtins {
                     return false;
                 }
                 if (Cur == '/') {
-                    _b.Append('/');
+                    Append('/');
                     _i++;
                     if (!ReadDigits()) {
                         Unappend();
@@ -513,23 +531,23 @@ namespace IronRuby.Builtins {
             // The text read since from, for str2num; or, when it is a sign and up to 18 digits (str2num's
             // rb_cstr_to_inum, for which an empty text is 0), the Integer it reads as.
             private object/*!*/ Buffered(int from) {
-                int length = _b.Length - from;
+                int length = _length - from;
                 int i = from;
                 bool negative = false;
                 if (length > 0 && IsSign(_b[i])) {
                     negative = _b[i] == '-';
                     i++;
                 }
-                if (_b.Length - i <= 18) {
+                if (_length - i <= 18) {
                     long value = 0;
-                    for (; i < _b.Length && IsDigit(_b[i]); i++) {
+                    for (; i < _length && IsDigit(_b[i]); i++) {
                         value = value * 10 + (_b[i] - '0');
                     }
-                    if (i == _b.Length) {
+                    if (i == _length) {
                         return ClrInteger.Narrow(negative ? -value : value);
                     }
                 }
-                return MutableString.CreateAscii(_b.ToString(from, length));
+                return MutableString.CreateAscii(new string(_b.Slice(from, length)));
             }
 
             private static RubyArray/*!*/ Result(bool ok, int kind, object x, object y = null) {
@@ -546,7 +564,7 @@ namespace IronRuby.Builtins {
             }
 
             private RubyArray/*!*/ ReadComplex() {
-                int bb = _b.Length;
+                int bb = _length;
                 char sign = ReadSign();
 
                 if (IsImaginaryUnit(Cur)) {
@@ -566,16 +584,16 @@ namespace IronRuby.Builtins {
 
                 if (Cur == '@') {
                     _i++;
-                    bb = _b.Length;
+                    bb = _length;
                     bool st = ReadRational();
-                    if (_b.Length == bb || !IsDigit(_b[_b.Length - 1])) {
+                    if (_length == bb || !IsDigit(_b[_length - 1])) {
                         return Result(false, ScanReal, num);
                     }
                     return Result(st, ScanPolar, num, Buffered(bb));
                 }
 
                 if (IsSign(Cur)) {
-                    bb = _b.Length;
+                    bb = _length;
                     sign = ReadSign();
                     object num2;
                     if (IsImaginaryUnit(Cur)) {
