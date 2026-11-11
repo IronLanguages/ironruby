@@ -47,5 +47,8 @@ copy of the DLR (`../dlr-wasm`): `0001-browser-posix-file-system.patch` (browser
 `0002-compile-synchronously-without-threads.patch` (no background thread to compile hot
 interpreted code on, so it is compiled synchronously when it crosses the threshold) and
 `0003-stack-guard-without-threads.patch` (`StackGuard.RunOnFreshStack` from `0101-stack-guard`
-cannot start a thread there, so the walk carries on on the one stack there is). `build.sh` checks
+cannot start a thread there, so the walk carries on on the one stack there is) and
+`0004-interface-calls-by-reflection.patch` (an open-instance delegate over an interface method,
+such as `Func<ICollection, int>`, crashes Mono's AOT build in an assertion when invoked, so
+the interpreter calls interface methods through reflection there). `build.sh` checks
 `../dlr` for the patches above and recreates `../dlr-wasm` from it when `../dlr` has moved on.

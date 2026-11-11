@@ -1,0 +1,21 @@
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/Instructions/CallInstruction.cs b/src/core/Microsoft.Dynamic/Interpreter/Instructions/CallInstruction.cs
+index 5172f4e..21be151 100644
+--- a/src/core/Microsoft.Dynamic/Interpreter/Instructions/CallInstruction.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/Instructions/CallInstruction.cs
+@@ -61,6 +61,16 @@ namespace Microsoft.Scripting.Interpreter {
+                 return new MethodInfoCallInstruction(info, argumentCount);
+             }
+ 
++#if NET
++            // Mono on browser-wasm (AOT): invoking an open-instance delegate over an interface method
++            // (Func<ICollection, int> for ICollection.Count) runs an interpreted delegate-invoke wrapper
++            // whose callvirt dies in an assertion (class-accessors.c, from mono_class_setup_vtable).
++            // Reflection calls the method fine.
++            if (!info.IsStatic && info.DeclaringType.IsInterface && (OperatingSystem.IsBrowser() || OperatingSystem.IsWasi())) {
++                return new MethodInfoCallInstruction(info, argumentCount);
++            }
++#endif
++
+             if (argumentCount >= MaxHelpers) {
+                 // no delegate for this size, fallback to reflection invoke
+                 return new MethodInfoCallInstruction(info, argumentCount);

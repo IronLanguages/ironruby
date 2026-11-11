@@ -8,7 +8,7 @@ const dist = process.env.IRW_DIST || path.join(path.dirname(fileURLToPath(import
 const { dotnet } = await import(path.join(dist, '_framework', 'dotnet.js'));
 const t0 = performance.now();
 globalThis.__ironrubyWrite = (fd, text) => (fd === 2 ? process.stderr : process.stdout).write(text);
-const runtime = await dotnet.create();
+const runtime = await (process.env.IRW_ENV ? dotnet.withEnvironmentVariables(JSON.parse(process.env.IRW_ENV)) : dotnet).create();
 const exports = await runtime.getAssemblyExports(runtime.getConfig().mainAssemblyName);
 const I = exports.IronRuby.Wasm.Interop;
 const t1 = performance.now();
