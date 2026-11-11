@@ -310,7 +310,13 @@ namespace IronRuby.Runtime {
         /// but Ruby code can see otherwise - no TracePoint, no #set_backtrace of its own, not the modes that report CLR frames.
         /// </summary>
         internal bool CanPassUntraced(RubyScope/*!*/ scope, int frameDepth) {
+            // where the frame is in the exception's CLR trace is told by the frames of its name above it, which have to be known
+            int above = Precompiled.PrecompiledFrames.CountSameNameAbove(frameDepth);
+            if (above < 0) {
+                return false;
+            }
             if (_passedUntraced) {
+                NotePassedFrame(frameDepth, above);
                 return true;
             }
             var context = scope.RubyContext;
@@ -328,7 +334,33 @@ namespace IronRuby.Runtime {
                 }
             }
             _passedUntraced = true;
+            NotePassedFrame(frameDepth, above);
             return true;
+        }
+
+        // For each compiled frame the exception goes through untraced, in this first pass: its record's index and the frames of its
+        // name above it in the exception's CLR trace (PrecompiledFrames.CountSameNameAbove), which EnterPassedEnsure cuts the trace by.
+        private int[] _passedFrames;
+        private int _passedFrameCount;
+
+        private void NotePassedFrame(int frameDepth, int above) {
+            if (_passedFrames == null) {
+                _passedFrames = new int[8];
+            } else if (_passedFrameCount + 2 > _passedFrames.Length) {
+                Array.Resize(ref _passedFrames, _passedFrames.Length * 2);
+            }
+            _passedFrames[_passedFrameCount++] = frameDepth;
+            _passedFrames[_passedFrameCount++] = above;
+        }
+
+        private int GetPassedFrameAbove(int frameDepth) {
+            // the latest note of the frame: an exception thrown on again goes through frames at the same depths in another pass
+            for (int i = _passedFrameCount - 2; i >= 0; i -= 2) {
+                if (_passedFrames[i] == frameDepth) {
+                    return _passedFrames[i + 1];
+                }
+            }
+            return -1;
         }
 
         /// <summary>
@@ -349,8 +381,8 @@ namespace IronRuby.Runtime {
             }
             var captured = _capturedTrace;
             var pending = _pendingCatchSite;
-            if (captured != null && (pending == null || pending.ThrowSiteOccurrence < 0)) {
-                // the backtrace has been taken - an ensure clause exposed the exception
+            if (captured != null && (pending == null || pending.ThrowSiteOccurrence < 0) || _backtrace != null || _raiseBacktrace != null) {
+                // the backtrace has been taken - an ensure clause exposed the exception - or set (#set_backtrace, $@=)
                 _passedUntraced = false;
                 return;
             }
@@ -365,20 +397,18 @@ namespace IronRuby.Runtime {
                 return;
             }
 
+            // the CLR frames of this one's name between it and the raise, counted in the first pass (see NotePassedFrame)
+            int above = GetPassedFrameAbove(frameDepth);
+            if (above < 0) {
+                // Not reached: a frame PassEnsure did not note, whose place in the trace is not known. The pending frame stays the one
+                // before, if any; the frame below that catches the exception takes the backtrace over.
+                Debug.Assert(false, "a passed ensure clause's frame was not noted");
+                return;
+            }
+
             if (captured == null) {
                 captured = new RubyStackTraceBuilder.CapturedTrace(scope.RubyContext, _exception, null, null, false, true, null);
                 _capturedTrace = captured;
-            }
-
-            // the frames of this one's name between it and the raise, all of them compiled frames with a record
-            int above = 0;
-            var lines = captured.CompiledFrames;
-            if (lines != null) {
-                for (int i = index + 1; i < lines.Length; i++) {
-                    if (String.Equals(lines[i].Name, name, StringComparison.Ordinal)) {
-                        above++;
-                    }
-                }
             }
             _pendingCatchSite = new PendingCatchSite(frames, index, name, sequence, Thread.CurrentThread, above);
         }
@@ -712,6 +742,7 @@ namespace IronRuby.Runtime {
             set {
                 _capturedTrace = null;
                 _pendingCatchSite = null;
+                _passedUntraced = false;
                 _backtrace = value;
             }
         }

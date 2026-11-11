@@ -193,7 +193,8 @@ namespace IronRuby.Runtime {
             internal CapturedTrace(RubyContext/*!*/ context, Exception/*!*/ exception, StackTrace throwSiteTrace, StackTrace catchSiteTrace,
                 bool isCatchSiteInterpreted, bool deferThrowSite, CapturedTrace passed) {
                 Context = context;
-                Encoding = context.GetPathEncoding();
+                // the path encoding as it was where the capture began, before ensure clauses the exception went through ran
+                Encoding = (passed != null) ? passed.Encoding : context.GetPathEncoding();
                 // the exception's own trace grows as it is rethrown, and a raise of it starts it over:
                 if (throwSiteTrace == null && deferThrowSite) {
                     _exception = exception;

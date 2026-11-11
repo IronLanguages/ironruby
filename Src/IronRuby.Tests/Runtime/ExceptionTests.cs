@@ -1470,7 +1470,8 @@ r = []; 30.times { r << top }; r.uniq.join(""|"")
         /// with a block - has a jump of the DLR's out of it (the label a break from the block returns through), which the DLR's
         /// FlowControlRewriter makes a catch and a `throw' again of the exception: its CLR trace then has the frame twice, so the
         /// exception does not go through such a clause without a backtrace (Body.GotoFinder). And `raise ""message""', which no
-        /// #new marks handled, does go through the other ensure clauses. Each case is run 40 times, so that the methods are
+        /// #new marks handled, does go through the other ensure clauses; a backtrace an ensure clause sets is the one an outer clause
+        /// reads in $@. Each case is run 40 times, so that the methods are
         /// compiled. The expected output is CRuby 4.0's.
         /// </summary>
         public void Exception_EnsurePassUntracedJumps1() {
@@ -1484,14 +1485,16 @@ class C < B
   def yld; raise ArgumentError, ""a""; ensure; yield; end
   def str; raise ""a""; ensure; $z = 1; end
   def str_exposed; raise ""a""; ensure; $seen = bt($!); end
+  def sb_inner; raise ArgumentError, ""a""; ensure; $!.set_backtrace([""custom:1:in 'x'""]); end
+  def sb; sb_inner; ensure; $sb = $@; end
 end
 def run(m); C.new.send(m) { }; rescue => e; bt(e); end
 r = []
-[:s, :amp, :dm, :blk, :yld, :str, :str_exposed].each { |m| seen = []; 40.times { seen << run(m) }; r << ""#{m} #{seen.uniq.join("" / "")}"" }
-r << $seen
+[:s, :amp, :dm, :blk, :yld, :str, :str_exposed, :sb].each { |m| seen = []; 40.times { seen << run(m) }; r << ""#{m} #{seen.uniq.join("" / "")}"" }
+r << $seen << $sb.inspect
 r.join(""|"")
 ";
-            const string expected = "s :4:in 'C#s',:12:in 'Object#run',:14:in 'block (2 levels) in <main>',:14:in 'Integer#times',:14:in 'block in <main>',:14:in 'Array#each',:14:in '<main>'|amp :5:in 'C#amp',:12:in 'Object#run',:14:in 'block (2 levels) in <main>',:14:in 'Integer#times',:14:in 'block in <main>',:14:in 'Array#each',:14:in '<main>'|dm :6:in 'C#dm',:12:in 'Object#run',:14:in 'block (2 levels) in <main>',:14:in 'Integer#times',:14:in 'block in <main>',:14:in 'Array#each',:14:in '<main>'|blk :7:in 'C#blk',:12:in 'Object#run',:14:in 'block (2 levels) in <main>',:14:in 'Integer#times',:14:in 'block in <main>',:14:in 'Array#each',:14:in '<main>'|yld :8:in 'C#yld',:12:in 'Object#run',:14:in 'block (2 levels) in <main>',:14:in 'Integer#times',:14:in 'block in <main>',:14:in 'Array#each',:14:in '<main>'|str :9:in 'C#str',:12:in 'Object#run',:14:in 'block (2 levels) in <main>',:14:in 'Integer#times',:14:in 'block in <main>',:14:in 'Array#each',:14:in '<main>'|str_exposed :10:in 'C#str_exposed',:12:in 'Object#run',:14:in 'block (2 levels) in <main>',:14:in 'Integer#times',:14:in 'block in <main>',:14:in 'Array#each',:14:in '<main>'|:10:in 'C#str_exposed',:12:in 'Object#run',:14:in 'block (2 levels) in <main>',:14:in 'Integer#times',:14:in 'block in <main>',:14:in 'Array#each',:14:in '<main>'";
+            const string expected = "s :4:in 'C#s',:14:in 'Object#run',:16:in 'block (2 levels) in <main>',:16:in 'Integer#times',:16:in 'block in <main>',:16:in 'Array#each',:16:in '<main>'|amp :5:in 'C#amp',:14:in 'Object#run',:16:in 'block (2 levels) in <main>',:16:in 'Integer#times',:16:in 'block in <main>',:16:in 'Array#each',:16:in '<main>'|dm :6:in 'C#dm',:14:in 'Object#run',:16:in 'block (2 levels) in <main>',:16:in 'Integer#times',:16:in 'block in <main>',:16:in 'Array#each',:16:in '<main>'|blk :7:in 'C#blk',:14:in 'Object#run',:16:in 'block (2 levels) in <main>',:16:in 'Integer#times',:16:in 'block in <main>',:16:in 'Array#each',:16:in '<main>'|yld :8:in 'C#yld',:14:in 'Object#run',:16:in 'block (2 levels) in <main>',:16:in 'Integer#times',:16:in 'block in <main>',:16:in 'Array#each',:16:in '<main>'|str :9:in 'C#str',:14:in 'Object#run',:16:in 'block (2 levels) in <main>',:16:in 'Integer#times',:16:in 'block in <main>',:16:in 'Array#each',:16:in '<main>'|str_exposed :10:in 'C#str_exposed',:14:in 'Object#run',:16:in 'block (2 levels) in <main>',:16:in 'Integer#times',:16:in 'block in <main>',:16:in 'Array#each',:16:in '<main>'|sb :1:in 'x'|:10:in 'C#str_exposed',:14:in 'Object#run',:16:in 'block (2 levels) in <main>',:16:in 'Integer#times',:16:in 'block in <main>',:16:in 'Array#each',:16:in '<main>'|[\"custom:1:in 'x'\"]";
 
             var interpreting = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = Int32.MaxValue; });
             AreEqual(interpreting.CreateScriptSourceFromString(script, "pass11.rb", SourceCodeKind.File).Execute().ToString(), expected);

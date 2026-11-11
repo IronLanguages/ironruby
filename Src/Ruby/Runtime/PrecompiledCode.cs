@@ -834,6 +834,35 @@ namespace IronRuby.Runtime.Precompiled {
             return name != null;
         }
 
+        /// <summary>
+        /// The number of the current thread's live frames above frame <paramref name="index"/> that have its name, each of which is one
+        /// CLR frame of that name; -1 if that is not known: a frame in its ensure clause (a statement there sets the line negated) may
+        /// be two CLR frames of the method or one - the clause's funclet and the method's own, or the funclet alone - and so may the
+        /// frame itself. Read in an exception's first pass, when the live frames above are the frames the exception comes out of; not
+        /// the frames left since (_top), which an earlier exception that C# caught may have left there.
+        /// </summary>
+        internal static int CountSameNameAbove(int index) {
+            var frames = _current;
+            if (frames == null || index < 0 || index >= frames._depth) {
+                return -1;
+            }
+            var entries = frames._entries;
+            if (entries[index].Line < 0) {
+                return -1;
+            }
+            string name = entries[index].Name;
+            int count = 0;
+            for (int i = index + 1; i < frames._depth; i++) {
+                if (String.Equals(entries[i].Name, name, StringComparison.Ordinal)) {
+                    if (entries[i].Line < 0) {
+                        return -1;
+                    }
+                    count++;
+                }
+            }
+            return count;
+        }
+
         /// <summary>The number of compiled frames the current thread is in.</summary>
         internal static int CurrentDepth {
             get {
