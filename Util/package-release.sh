@@ -92,22 +92,6 @@ for f in "${launchers[@]}" README.md; do
 done
 cp -R "$IR_ROOT/Src/StdLib" "$STAGE/Src/"
 
-# The startup library (Util/aot/build-startup.sh, IronRuby.Startup.dll): the Ruby code every start runs -
-# the prelude, rubygems and the rest - compiled ahead of time against exactly this build and the archive's
-# own copy of the standard library (`ir -e 1` ~17% faster). Building it needs the .NET 10 SDK and runtime,
-# running it does not; without them, or if it fails, the release goes without it, which costs only the
-# speedup. IR_STARTUP_LIBRARY=0 leaves it out.
-bin="$STAGE/Src/Console/bin/Release/$IR_TFM"
-if [ "${IR_STARTUP_LIBRARY:-1}" != 0 ]; then
-  status=0
-  sh "$IR_ROOT/Util/aot/build-startup.sh" --host "$bin" --tfm "$IR_TFM" --rid "$RID" --root "$STAGE" \
-    ${DLR_SOURCE_DIR:+--dlr "$DLR_SOURCE_DIR"} || status=$?
-  case $status in
-    0) ;;
-    3) echo "package-release.sh: no startup library (building it needs the .NET 10 SDK and runtime)" ;;
-    *) echo "package-release.sh: the startup library failed to build (exit $status); the release goes without it" >&2 ;;
-  esac
-fi
 cp -R "$IR_ROOT/Src/Public" "$STAGE/License"
 # Samples/Notepad is a Windows Forms application, so only the Windows archive has it.
 case "$RID" in
@@ -127,6 +111,117 @@ if [ "$IR_TFM" != "$DEFAULT_TFM" ]; then
       exit 1
     fi
   done
+fi
+
+# The startup library (Util/aot/build-startup.sh, IronRuby.Startup.dll): the Ruby code every start runs - the
+# prelude, rubygems and the rest - compiled ahead of time against exactly this build and the archive's own copy
+# of the standard library (`ir -e 1` ~17% faster). Building it needs the SDK and runtime of $IR_TFM, running it
+# does not. It ships only if the archive runs Util/aot/startup-smoke.rb the same with it as without it, using
+# it, and starts faster with it: without the SDK, or if it fails to build or those checks, the archive goes without it, which costs only the
+# speedup, never a broken download. IR_STARTUP_LIBRARY=0 leaves it out. Made after the launchers are final,
+# because it is checked through them, as a user runs the unpacked archive.
+bin="$STAGE/Src/Console/bin/Release/$IR_TFM"
+stage_ir() {
+  case "$RID" in
+    win-*) (cd "$STAGE" && cmd //c ir.cmd "$@") ;;
+    *)     "$STAGE/ir.sh" "$@" ;;
+  esac
+}
+# `with_timeout SECONDS command...`: the command, killed when it runs longer (exit 124). A library that hangs a
+# program (a fiber's block it could not run hung forever) must fail the check, not hold the job for its 6 hours; and
+# macOS has no timeout(1). On Windows the kill takes the process tree: cmd and the ir under it.
+with_timeout() {
+  local seconds=$1 pid watchdog status=0
+  shift
+  "$@" &
+  pid=$!
+  ( sleep "$seconds"
+    case "$RID" in
+      win-*) taskkill //F //T //PID "$(cat /proc/$pid/winpid 2>/dev/null)" > /dev/null 2>&1 ;;
+    esac
+    kill -9 $pid 2> /dev/null ) > /dev/null 2>&1 &
+  watchdog=$!
+  wait $pid || status=$?
+  if kill $watchdog 2> /dev/null; then
+    wait $watchdog 2> /dev/null || true
+  elif [ $status != 0 ]; then
+    status=124
+  fi
+  return $status
+}
+# a line in the log, and on GitHub Actions in the job's summary
+startup_note() {
+  echo "package-release.sh: $*"
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then echo "- \`$NAME\`: $*" >> "$GITHUB_STEP_SUMMARY"; fi
+}
+if [ "${IR_STARTUP_LIBRARY:-1}" != 0 ]; then
+  status=0
+  # --build-references: the compiler runs a Release build of IronRuby and the DLR (its IL must call exactly the
+  # host's, which the library checks by MVID at load time), and the RID-specific publish above leaves IronRuby.Prism,
+  # an Exe, only in bin/Release/$IR_TFM/$RID: without it the compiler failed to build in every release up to 4.0.5
+  # (CS0006: Metadata file '.../Src/Prism/bin/Release/<tfm>/IronRuby.Prism.dll' could not be found).
+  sh "$IR_ROOT/Util/aot/build-startup.sh" --host "$bin" --tfm "$IR_TFM" --rid "$RID" --root "$STAGE" \
+    --build-references ${DLR_SOURCE_DIR:+--dlr "$DLR_SOURCE_DIR"} || status=$?
+  case $status in
+    0) ;;
+    3) startup_note "no startup library: building it needs the SDK and runtime of $IR_TFM" ;;
+    *) startup_note "no startup library: it failed to build (exit $status)" ;;
+  esac
+fi
+if [ -f "$bin/IronRuby.Startup.dll" ]; then
+  check=$(mktemp -d)
+  smoke="$IR_ROOT/Util/aot/startup-smoke.rb"
+  case "$RID" in win-*) smoke=$(cygpath -w "$smoke") ;; esac
+  # Without the library first: if that fails, the tree is broken, which is not the library's to hide.
+  IR_STARTUP_DLL=none with_timeout 300 stage_ir "$smoke" > "$check/without"
+  status=0
+  IR_STARTUP_DLL_TRACE=1 with_timeout 300 stage_ir "$smoke" > "$check/with" 2> "$check/trace" || status=$?
+  if [ $status = 124 ]; then
+    why="startup-smoke.rb did not finish in 5 minutes with it"
+  elif [ $status != 0 ]; then
+    why="startup-smoke.rb failed with it (exit $status)"
+  elif ! grep -q "IronRuby.Startup: loaded" "$check/trace"; then
+    why="the archive's ir did not load it"
+  elif grep -q "^IronRuby.Startup: [A-Za-z.]*Exception" "$check/trace"; then
+    why="the archive's ir failed to register it"
+  elif grep -q "IronRuby.Startup: .*not used" "$check/trace"; then
+    why="the archive's ir did not use it for all of its files"
+  elif ! diff "$check/without" "$check/with" > "$check/diff"; then
+    why="startup-smoke.rb printed something else with it"
+  else
+    why=
+  fi
+  if [ -n "$why" ]; then
+    rm -f "$bin"/IronRuby.Startup*.dll
+    startup_note "no startup library: $why"
+    grep -v "^IronRuby.Startup: \(parsing\|compiling\|compiles\|the JIT parses\)" "$check/trace" | head -8 >&2 || true
+    head -20 "$check/diff" 2>/dev/null >&2 || true
+    if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::warning::$NAME ships without the startup library: $why"; fi
+  elif ! command -v perl > /dev/null; then
+    startup_note "startup library used (no perl here to time it)"
+  else
+    # `ir -e 1` with and without it: the median of 5 runs each, interleaved, after one of each to warm the caches
+    now() { perl -MTime::HiRes=time -e 'printf "%.0f\n", time * 1000'; }
+    with_timeout 120 stage_ir -e 1 >/dev/null; IR_STARTUP_DLL=none with_timeout 120 stage_ir -e 1 >/dev/null
+    : > "$check/on"; : > "$check/off"
+    for i in 1 2 3 4 5; do
+      t=$(now); with_timeout 120 stage_ir -e 1 >/dev/null; echo $(( $(now) - t )) >> "$check/on"
+      t=$(now); IR_STARTUP_DLL=none with_timeout 120 stage_ir -e 1 >/dev/null; echo $(( $(now) - t )) >> "$check/off"
+    done
+    on=$(sort -n "$check/on" | sed -n 3p) off=$(sort -n "$check/off" | sed -n 3p)
+    best_on=$(sort -n "$check/on" | sed -n 1p) best_off=$(sort -n "$check/off" | sed -n 1p)
+    times="\`ir -e 1\` $on ms with it, $off ms without (median of 5; best $best_on / $best_off ms)"
+    # A library that does not make the start faster is only a risk. Judged by the best run of each, which a busy
+    # machine disturbs least: on a box at load 30 the medians once had it the other way round.
+    if [ "$best_on" -lt "$best_off" ]; then
+      startup_note "startup library used; $times"
+    else
+      rm -f "$bin"/IronRuby.Startup*.dll
+      startup_note "no startup library: it did not make the start faster, $times"
+      if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::warning::$NAME ships without the startup library: it did not make the start faster"; fi
+    fi
+  fi
+  rm -rf "$check"
 fi
 
 # The archive carries Microsoft's runtime - .NET, and for Windows also the Windows
@@ -207,22 +302,6 @@ case "$RID" in
     printf 'puts 6 * 7\n' | "$STAGE/iirb.sh" | grep -x 42
     ;;
 esac
-
-# The startup library must be the one the archive runs: a library this build or this standard library
-# does not match is ignored at run time (only the speedup lost), so ship none rather than a dead one.
-if [ -f "$bin/IronRuby.Startup.dll" ]; then
-  case "$RID" in
-    win-*) trace=$(cd "$STAGE" && IR_STARTUP_DLL_TRACE=1 cmd //c ir.cmd -e 1 2>&1) ;;
-    *)     trace=$(IR_STARTUP_DLL_TRACE=1 "$STAGE/ir.sh" -e 1 2>&1) ;;
-  esac
-  if echo "$trace" | grep -q "IronRuby.Startup: loaded" && ! echo "$trace" | grep -q "not used"; then
-    echo "package-release.sh: the startup library is used ($(echo "$trace" | grep -c 'IronRuby.Startup: parsing') files parsed at startup)"
-  else
-    echo "package-release.sh: the startup library is not used by the archive, leaving it out:" >&2
-    echo "$trace" | grep "IronRuby.Startup" | head -5 >&2
-    rm -f "$bin"/IronRuby.Startup*.dll
-  fi
-fi
 
 cd "$OUT"
 case "$RID" in

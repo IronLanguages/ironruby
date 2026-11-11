@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -137,6 +138,10 @@ namespace IronRuby.Aot {
             if (cache != null) {
                 var k = new StringBuilder();
                 k.Append("v1\n").Append(tfm).Append(' ').Append(rid).Append(' ').Append(r2r).Append(' ').Append(selfContained).Append('\n');
+                // the switches that change what the compiler makes
+                foreach (var name in new[] { "IR_AOT_SPLIT", "IR_AOT_LARGE_JIT", "IR_AOT_LOOP_JIT", "IR_AOT_THREAD_FRAMES", "IR_AOT_VERIFY" }) {
+                    k.Append(name).Append('=').Append(Environment.GetEnvironmentVariable(name)).Append('\n');
+                }
                 k.Append(Path.GetRelativePath(host, root)).Append('\n').Append(root).Append('\n');
                 foreach (var id in ids) k.Append(id).Append('\n');
                 foreach (var a in new[] { typeof(StartupCommand).Assembly, typeof(PrecompiledCode).Assembly, typeof(IronRuby.Builtins.KernelOps).Assembly,
@@ -162,7 +167,20 @@ namespace IronRuby.Aot {
             var context = AotHost.CreateContext(out _);
             var compiler = new AotCompiler(context, "IronRuby.Startup", library: true) {
                 OutputDirectory = Path.GetFullPath(outDir), DependencyIds = ids.ToArray(),
-                Root = root, RootFromLibrary = Path.GetRelativePath(host, root)
+                Root = root, RootFromLibrary = Path.GetRelativePath(host, root),
+                // arm64 ReadyToRun code of a method over 1 MB is wrong (AotCompiler.LargeMethodsJittedOver): a top level that
+                // large is split (below), and one of 128 KB of IL or more that remains (arm64 code is at most ~4.4x its IL)
+                // is left to the JIT
+                // (IR_AOT_LARGE_JIT=0 compiles them all, to see the check in Crossgen catch it)
+                LargeMethodsJittedOver = r2r && rid.EndsWith("-arm64", StringComparison.Ordinal) &&
+                    Environment.GetEnvironmentVariable("IR_AOT_LARGE_JIT") != "0" ? LargeMethodILBytes : 0,
+                // and before that, a top level that large is split into methods of their own, which leaves the JIT nothing
+                // to do (IR_AOT_SPLIT=1 splits on any target, to test it; =0 splits none)
+                SplitTopLevelOver = Environment.GetEnvironmentVariable("IR_AOT_SPLIT") switch {
+                    "0" => 0,
+                    "1" => SplitNodes,
+                    _ => r2r && rid.EndsWith("-arm64", StringComparison.Ordinal) ? SplitNodes : 0
+                }
             };
             compiler.Compile(null, files, dll);
             Console.Error.WriteLine($"wrote {dll} ({new FileInfo(dll).Length:N0} bytes, {files.Count} files) in {sw.ElapsedMilliseconds} ms");
@@ -172,6 +190,17 @@ namespace IronRuby.Aot {
 
             var outputs = new List<string> { dll };
             outputs.AddRange(compiler.ExtraAssemblies);
+            // Every method JIT-compiled once, here: the saved IL of one is only compiled at its first call, so a method the
+            // compiler got wrong passes every startup check and throws InvalidProgramException the day a program calls it
+            // (a fiber's block in 4.0.5's ruby4.rb, which then hung). IR_AOT_VERIFY=0 skips it.
+            if (Environment.GetEnvironmentVariable("IR_AOT_VERIFY") != "0") {
+                var invalid = VerifyIL(outputs);
+                if (invalid.Count > 0) {
+                    Console.Error.WriteLine($"{invalid.Count} methods of {dll} have IL the JIT rejects; no library rather than a broken one:");
+                    foreach (var line in invalid.Take(50)) Console.Error.WriteLine("  " + line);
+                    return 1;
+                }
+            }
             if (major != Environment.Version.Major) {
                 foreach (var asm in outputs) {
                     Console.Error.WriteLine($"retargeted {Path.GetFileName(asm)}: {Retarget(asm, Environment.Version.Major, major)} framework references -> {major}.0");
@@ -179,7 +208,8 @@ namespace IronRuby.Aot {
             }
             if (r2r) {
                 foreach (var asm in outputs) {
-                    if (!Crossgen(crossgen, asm, rid, framework, host, outDir)) return 1;
+                    // the delegate assemblies have no method with code: an empty map is only wrong for the library itself
+                    if (!Crossgen(crossgen, asm, rid, framework, host, outDir, expectMethods: asm == dll)) return 1;
                 }
             }
 
@@ -191,6 +221,50 @@ namespace IronRuby.Aot {
             }
             return 0;
         }
+
+        /// <summary>
+        /// JIT-compiles every method of the saved assemblies (RuntimeHelpers.PrepareMethod) in a load context of their own,
+        /// from their bytes (no file lock), and returns the ones the JIT rejects. The IronRuby and DLR they call are this
+        /// process's, the same builds the library is made against.
+        /// </summary>
+        private static List<string> VerifyIL(List<string> assemblies) {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var context = new System.Runtime.Loader.AssemblyLoadContext("IronRuby.Startup verification", isCollectible: true);
+            var byName = new Dictionary<string, Assembly>(StringComparer.Ordinal);
+            context.Resolving += (ctx, name) => byName.TryGetValue(name.Name, out var a) ? a : null;
+            foreach (var path in assemblies.Skip(1).Append(assemblies[0])) {
+                using var stream = new MemoryStream(File.ReadAllBytes(path));
+                var a = context.LoadFromStream(stream);
+                byName[a.GetName().Name] = a;
+            }
+            var invalid = new List<string>();
+            int count = 0;
+            var all = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance | BindingFlags.DeclaredOnly;
+            foreach (var a in byName.Values) {
+                foreach (var type in a.GetTypes()) {
+                    if (type.ContainsGenericParameters) continue;
+                    foreach (var m in type.GetMethods(all).Cast<MethodBase>().Concat(type.GetConstructors(all))) {
+                        if (m.IsAbstract || m.ContainsGenericParameters || (m.MethodImplementationFlags & MethodImplAttributes.Runtime) != 0) continue;
+                        count++;
+                        try {
+                            RuntimeHelpers.PrepareMethod(m.MethodHandle);
+                        } catch (Exception e) {
+                            invalid.Add($"{type.FullName}::{m.Name}: {e.GetType().Name}: {e.Message}");
+                        }
+                    }
+                }
+            }
+            context.Unload();
+            Console.Error.WriteLine($"verified {count} methods in {sw.ElapsedMilliseconds} ms: {invalid.Count} rejected by the JIT");
+            return invalid;
+        }
+
+        internal const int LargeMethodILBytes = 128 * 1024;
+        // AotCompiler.SplitTopLevel splits a top level of more expression nodes than this: ruby4.rb's has ~8,900 (2.1 MB of
+        // arm64 code), the next largest, rubygems.rb's, ~2,700 (200 KB). Its chunks of ~1,500 nodes come to ~350 KB.
+        internal const int SplitNodes = 6000;
+        // the reach of arm64's adr: a method whose code is longer addresses its read-only data with adrp+add
+        private const long ArmMethodLimit = 1024 * 1024;
 
         // what the saved IL references: IronRuby.Libraries is not among them (library methods are reached through binders)
         private static readonly string[] DependencyNames = { "IronRuby", "Microsoft.Dynamic", "Microsoft.Scripting" };
@@ -246,7 +320,7 @@ namespace IronRuby.Aot {
                 .LastOrDefault(p => p != null);
         }
 
-        private static bool Crossgen(string crossgen, string assembly, string rid, string framework, string host, string outDir) {
+        private static bool Crossgen(string crossgen, string assembly, string rid, string framework, string host, string outDir, bool expectMethods) {
             string os = rid.StartsWith("win", StringComparison.Ordinal) ? "windows" : rid.StartsWith("osx", StringComparison.Ordinal) ? "osx" : "linux";
             string arch = rid.Substring(rid.LastIndexOf('-') + 1);
             string tmp = assembly + ".r2r";
@@ -254,6 +328,9 @@ namespace IronRuby.Aot {
             var arguments = new List<string> { assembly, "-o", tmp };
             if (framework != null) arguments.AddRange(new[] { "-r", framework + "/*.dll" });
             arguments.AddRange(new[] { "-r", host + "/*.dll", "-r", Path.GetFullPath(outDir) + "/*.dll", "--targetos", os, "--targetarch", arch, "-O" });
+            // arm64: the map says how large each method's code is, which must stay under 1 MB (AotCompiler.LargeMethodsJittedOver)
+            bool arm64 = arch == "arm64";
+            if (arm64) arguments.Add("--map");
             foreach (var a in arguments) psi.ArgumentList.Add(a);
             var sw = System.Diagnostics.Stopwatch.StartNew();
             using var p = System.Diagnostics.Process.Start(psi);
@@ -263,6 +340,26 @@ namespace IronRuby.Aot {
             if (p.ExitCode != 0) {
                 Console.Error.WriteLine("crossgen2 failed on " + assembly + ":\n" + output);
                 return false;
+            }
+            if (arm64) {
+                string map = Path.ChangeExtension(tmp, ".map");
+                var methods = File.ReadLines(map).Where(line => line.EndsWith("(MethodWithGCInfo)", StringComparison.Ordinal))
+                    .Select(line => System.Text.RegularExpressions.Regex.Match(line, @"^0x[0-9A-F]+ \| 0x([0-9A-F]+) .*\| (\S+)\s+\(MethodWithGCInfo\)")).ToList();
+                var tooLarge = methods.Where(m => m.Success && Convert.ToInt64(m.Groups[1].Value, 16) >= ArmMethodLimit)
+                    .Select(m => m.Groups[2].Value + " (" + Convert.ToInt64(m.Groups[1].Value, 16).ToString("N0") + " bytes)").ToList();
+                File.Delete(map);
+                // a map this cannot read (another crossgen2's format) proves nothing: no library then either
+                if ((expectMethods && methods.Count == 0) || methods.Any(m => !m.Success)) {
+                    File.Delete(tmp);
+                    Console.Error.WriteLine("crossgen2's map lists methods this cannot read the size of: no arm64 library unchecked");
+                    return false;
+                }
+                if (tooLarge.Count > 0) {
+                    File.Delete(tmp);
+                    Console.Error.WriteLine("crossgen2's arm64 code for " + string.Join(", ", tooLarge) + " is over 1 MB, which RyuJIT " +
+                        "gets wrong in a ReadyToRun image (AotCompiler.LargeMethodsJittedOver): no library rather than a broken one");
+                    return false;
+                }
             }
             long before = new FileInfo(assembly).Length;
             File.Move(tmp, assembly, true);

@@ -169,11 +169,17 @@ namespace IronRuby.Aot {
                 var lambda = _context.TransformTree<Func<RubyScope, object, object>>(ast, unit, options);
 
                 var rewritten = (LambdaExpression)Rewrite(lambda);
+                if (SplitTopLevelOver > 0) rewritten = SplitTopLevel(rewritten);
                 // the name is what the backtrace builder decodes into "file:line:in '<main>'"
                 var method = _type.DefineMethod(lambda.Name, MethodAttributes.Public | MethodAttributes.Static);
                 _entryPoints.Add(lambda.Name);
                 _entryMethods.Add(method);
                 ExpressionCompiler.CompileToMethod(rewritten, method);
+                // see LargeMethodsJittedOver
+                if (LargeMethodsJittedOver > 0 && method.GetILGenerator().ILOffset >= LargeMethodsJittedOver) {
+                    method.SetImplementationFlags(MethodImplAttributes.AggressiveOptimization);
+                    Count("top levels too large for ReadyToRun code on arm64, left to the JIT (AggressiveOptimization)");
+                }
                 if (Library) _type.CreateType();
                 Console.Error.WriteLine($"compiled {paths[i]} in {sw.ElapsedMilliseconds} ms");
                 if (Environment.GetEnvironmentVariable("IR_AOT_CHECK_BRANCHES") == "1") CheckBranches();
@@ -235,6 +241,207 @@ namespace IronRuby.Aot {
         /// File and class bodies, which run once, keep their ReadyToRun code. IR_AOT_LOOP_JIT=0 turns this off.
         /// </summary>
         public bool LoopMethodsJitted = Environment.GetEnvironmentVariable("IR_AOT_LOOP_JIT") != "0";
+
+        /// <summary>
+        /// A file's top level of at least this many bytes of IL is left to the JIT (AggressiveOptimization: crossgen2 does not
+        /// compile it); 0 compiles every one. For an arm64 library (StartupCommand): RyuJIT's arm64 code for a method over
+        /// 1 MB - ruby4.rb's top level is ~480 KB of IL and 2.1 MB of code - reaches the method's read-only data with
+        /// adrp+add computed as if it knew the method's place in the image, which in a ReadyToRun image it does not: the
+        /// 16-byte constants of its coalesced stores were read from its own instructions (crossgen2 10.0.15 and 11.0.0, osx
+        /// and linux alike; the osx-arm64 archive of 58099b4e died on a Symbol made of them). The JIT at run time knows
+        /// where the method is, and gets it right - but JITting a method this large costs more startup than the library
+        /// saves (osx-arm64: `ir -e 1` 698 ms with it, 467 ms without), so SplitTopLevel comes first, and this is only
+        /// what keeps a top level it could not split correct.
+        /// </summary>
+        public int LargeMethodsJittedOver;
+
+        /// <summary>
+        /// A file's top level of more than this many expression nodes (not counting the methods and blocks it defines, which
+        /// are methods of their own) is split into nested lambdas of about SplitChunkNodes each, called in order: see
+        /// SplitTopLevel. 0 splits none.
+        /// </summary>
+        public int SplitTopLevelOver;
+        public int SplitChunkNodes = 1500;
+
+        /// <summary>
+        /// Splits the statements of a large top level into chunks, each a nested lambda the top level calls in turn: one
+        /// method per chunk, so that no method's code is over 1 MB (LargeMethodsJittedOver says why that matters on arm64:
+        /// ruby4.rb's top level alone is 2.1 MB of arm64 code). The chunks share the top level's variables through the
+        /// closure the compiler gives any nested lambda, as a block's code does. A statement that jumps out of itself (a
+        /// top-level `return`, which goes to the top level's return label) cannot move into a lambda, and stays where it
+        /// is, between chunks. The chunks are unnamed, so a backtrace leaves them out; a frame of the top level itself
+        /// then has no line of the statements they hold: only an error raised by the top level of a file this large while
+        /// it loads (in the library, ruby4.rb's) would show it.
+        /// </summary>
+        private LambdaExpression SplitTopLevel(LambdaExpression lambda) {
+            var block = LargestBlockFinder.Find(lambda.Body);
+            if (block == null || block.Type != typeof(void)) return lambda;
+            var sizes = block.Expressions.Select(NodeCounter.Count).ToList();
+            if (sizes.Sum() <= SplitTopLevelOver) return lambda;
+            // the top level's return label (TransformTree's lambda body is Label(return, ...)): a statement may jump there,
+            // which from a chunk becomes: note the value, leave the chunk, and jump on from the top level after it
+            var returnLabel = (lambda.Body as LabelExpression)?.Target;
+            ParameterExpression returned = null, returnValue = null;
+            var statements = new List<Expression>();
+            var chunk = new List<Expression>();
+            bool chunkReturns = false;
+            long chunkSize = 0;
+            void Flush() {
+                if (chunk.Count == 0) return;
+                Count("top-level chunks (SplitTopLevel)");
+                var end = Expression.Label("chunk_end");
+                chunk.Add(Expression.Label(end));
+                var body = Expression.Block(typeof(void), chunk);
+                if (chunkReturns) body = (System.Linq.Expressions.BlockExpression)new ReturnForwarder(returnLabel, returned, returnValue, end).Visit(body);
+                // a call of the delegate's Invoke, not Expression.Invoke, which the compiler inlines into the caller
+                statements.Add(Expression.Call(Expression.Lambda<Action>(body), typeof(Action).GetMethod("Invoke")));
+                if (chunkReturns) statements.Add(Expression.IfThen(returned, Expression.Return(returnLabel, returnValue)));
+                chunk = new List<Expression>();
+                chunkReturns = false;
+                chunkSize = 0;
+            }
+            for (int i = 0; i < block.Expressions.Count; i++) {
+                var e = block.Expressions[i];
+                var outside = JumpFinder.TargetsOutside(e);
+                if (outside.Count > 0) {
+                    if (returnLabel == null || returnLabel.Type == typeof(void) || outside.Any(t => t != returnLabel)) {
+                        Count("top-level statements that jump out, left in place (SplitTopLevel)");
+                        Flush();
+                        statements.Add(e);
+                        continue;
+                    }
+                    returned ??= Expression.Variable(typeof(bool), "#returned");
+                    returnValue ??= Expression.Variable(returnLabel.Type, "#returnValue");
+                    chunkReturns = true;
+                }
+                if (chunkSize > 0 && chunkSize + sizes[i] > SplitChunkNodes) Flush();
+                chunk.Add(e);
+                chunkSize += sizes[i];
+            }
+            Flush();
+            var variables = block.Variables.ToList();
+            if (returned != null) variables.AddRange(new[] { returned, returnValue });
+            var split = Expression.Block(typeof(void), variables, statements);
+            return Expression.Lambda(lambda.Type, new NodeReplacer(block, split).Visit(lambda.Body), lambda.Name, lambda.TailCall, lambda.Parameters);
+        }
+
+        /// <summary>In a chunk (SplitTopLevel): a jump to the top level's return label notes the value and leaves the chunk.</summary>
+        private sealed class ReturnForwarder : ExpressionVisitor {
+            private readonly LabelTarget _target, _end;
+            private readonly ParameterExpression _returned, _value;
+
+            public ReturnForwarder(LabelTarget target, ParameterExpression returned, ParameterExpression value, LabelTarget end) {
+                _target = target; _returned = returned; _value = value; _end = end;
+            }
+
+            protected override Expression VisitGoto(GotoExpression node) {
+                if (node.Target != _target) return base.VisitGoto(node);
+                return Expression.Block(typeof(void),
+                    Expression.Assign(_value, node.Value != null ? Visit(node.Value) : Expression.Default(_value.Type)),
+                    Expression.Assign(_returned, Expression.Constant(true)),
+                    Expression.Return(_end));
+            }
+
+            protected override Expression VisitLambda<T>(Expression<T> node) => node;
+            // the jump may be inside a node of IronRuby's that reduces to it
+            protected override Expression VisitExtension(Expression node) =>
+                node.CanReduce && JumpFinder.TargetsOutside(node).Contains(_target) ? Visit(node.Reduce()) : node;
+        }
+
+        /// <summary>The block with the most statements in a lambda's own code (not in the lambdas it has).</summary>
+        private sealed class LargestBlockFinder : ExpressionVisitor {
+            private System.Linq.Expressions.BlockExpression _best;
+
+            public static System.Linq.Expressions.BlockExpression Find(Expression body) {
+                var finder = new LargestBlockFinder();
+                finder.Visit(body);
+                return finder._best;
+            }
+
+            protected override Expression VisitBlock(System.Linq.Expressions.BlockExpression node) {
+                if (_best == null || node.Expressions.Count > _best.Expressions.Count) _best = node;
+                return base.VisitBlock(node);
+            }
+
+            protected override Expression VisitLambda<T>(Expression<T> node) => node;
+            protected override Expression VisitExtension(Expression node) => node;
+        }
+
+        /// <summary>How many nodes an expression has in its lambda's own code: a measure of the IL it compiles to.</summary>
+        private sealed class NodeCounter : ExpressionVisitor {
+            private long _count;
+
+            public static long Count(Expression e) {
+                var counter = new NodeCounter();
+                counter.Visit(e);
+                return counter._count;
+            }
+
+            public override Expression Visit(Expression node) {
+                if (node != null) _count++;
+                return base.Visit(node);
+            }
+
+            protected override Expression VisitLambda<T>(Expression<T> node) => node;
+            protected override Expression VisitExtension(Expression node) => node.CanReduce ? Visit(node.Reduce()) : node;
+        }
+
+        /// <summary>Whether an expression jumps to a label it does not define, which a lambda around it could not reach.</summary>
+        private sealed class JumpFinder : ExpressionVisitor {
+            private readonly HashSet<LabelTarget> _defined = new();
+            private readonly HashSet<LabelTarget> _used = new();
+
+            public static List<LabelTarget> TargetsOutside(Expression e) {
+                var finder = new JumpFinder();
+                finder.Visit(e);
+                return finder._used.Where(t => !finder._defined.Contains(t)).ToList();
+            }
+
+            // a rethrow outside the catch it is in (a block in a catch handler being the one split) could not move either
+            private static readonly LabelTarget Rethrow = Expression.Label("rethrow");
+            private int _catches;
+
+            protected override CatchBlock VisitCatchBlock(CatchBlock node) {
+                _catches++;
+                try { return base.VisitCatchBlock(node); } finally { _catches--; }
+            }
+
+            protected override Expression VisitUnary(UnaryExpression node) {
+                if (node.NodeType == ExpressionType.Throw && node.Operand == null && _catches == 0) _used.Add(Rethrow);
+                return base.VisitUnary(node);
+            }
+
+            protected override Expression VisitGoto(GotoExpression node) {
+                _used.Add(node.Target);
+                return base.VisitGoto(node);
+            }
+
+            protected override LabelTarget VisitLabelTarget(LabelTarget node) {
+                return node;
+            }
+
+            protected override Expression VisitLabel(LabelExpression node) {
+                _defined.Add(node.Target);
+                return base.VisitLabel(node);
+            }
+
+            protected override Expression VisitLoop(LoopExpression node) {
+                if (node.BreakLabel != null) _defined.Add(node.BreakLabel);
+                if (node.ContinueLabel != null) _defined.Add(node.ContinueLabel);
+                return base.VisitLoop(node);
+            }
+
+            protected override Expression VisitLambda<T>(Expression<T> node) => node;
+            protected override Expression VisitExtension(Expression node) => node.CanReduce ? Visit(node.Reduce()) : node;
+        }
+
+        private sealed class NodeReplacer : ExpressionVisitor {
+            private readonly Expression _from, _to;
+            public NodeReplacer(Expression from, Expression to) { _from = from; _to = to; }
+            public override Expression Visit(Expression node) => ReferenceEquals(node, _from) ? _to : base.Visit(node);
+            protected override Expression VisitLambda<T>(Expression<T> node) => node;
+            protected override Expression VisitExtension(Expression node) => node;
+        }
 
         private static bool IsMethodOrBlock(LambdaExpression lambda) {
             // the encoded Ruby frame name: "\u2111\u211c:" + label; file and class bodies are labelled <top (required)>, <main>, <class:X>...
@@ -315,6 +522,8 @@ namespace IronRuby.Aot {
             using (var fs = File.Create(outputPath)) {
                 blob.WriteContentTo(fs);
             }
+            int reordered = ExceptionClauses.Reorder(outputPath);
+            if (reordered > 0) Count("methods whose exception clauses were put in nesting order (ExceptionClauses)", reordered);
         }
 
         // Debugging aid: the branch fixups PersistedAssemblyBuilder does at save time need every
@@ -527,7 +736,9 @@ namespace IronRuby.Aot {
             tb.CreateType();
             string path = Path.Combine(OutputDirectory, name + ".dll");
             ab.Save(path);
-            result = Assembly.LoadFrom(path).GetType("D");
+            // from its bytes, not the file: a loaded file is locked on Windows, and crossgen2's ReadyToRun image of it
+            // (StartupCommand --r2r) must replace it there (UnauthorizedAccessException in the win-x64 package job of 58099b4e)
+            result = Assembly.Load(File.ReadAllBytes(path)).GetType("D");
             ExtraAssemblies.Add(path);
             return _persistedDelegates[inMemory] = result;
         }
