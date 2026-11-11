@@ -82,9 +82,10 @@ props="${DLR:+-p:DlrSourceDir=$DLR} -p:IronRubyTargetFrameworks=$TFM -p:IronRuby
 if [ "$BUILDREFS" = true ]; then
   "$DOTNET" build "$AOT_DIR" -c Release -nologo -v:q -nodeReuse:false $props || exit 1
 else
-  # only the compiler itself: the IronRuby and DLR it runs are the Release build of this tree, and a restore of
-  # their projects with other properties than the build's would rewrite their assets under a running build
-  "$DOTNET" restore "$AOT_DIR" --no-dependencies -nologo -v:q -nodeReuse:false $props &&
+  # only the compiler itself: the IronRuby and DLR it runs are the Release build of this tree. Their assets are
+  # restored for $TFM all the same: the R2R host's publish (Ruby.Console.csproj) restores them for its framework
+  # alone, so after the other framework's publish they lack this one, and the build failed with NETSDK1005.
+  "$DOTNET" restore "$AOT_DIR" -nologo -v:q -nodeReuse:false $props &&
   "$DOTNET" build "$AOT_DIR" -c Release --no-restore -nologo -v:q -nodeReuse:false -p:BuildProjectReferences=false $props || exit 1
 fi
 

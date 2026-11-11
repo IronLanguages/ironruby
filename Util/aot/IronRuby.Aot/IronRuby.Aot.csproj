@@ -7,7 +7,8 @@
        It runs IronRuby's front end in-process, and what that produces is saved as IL that calls into the host's
        IronRuby and DLR: so it references the builds the host is made of, and targets the host's framework,
        IronRubyAotHostTfm (net10.0 by default, the first of IronRubyTargetFrameworks); the IL it saves then
-       references that framework's assemblies.
+       references that framework's assemblies. The references take their nearest framework, as any project's do:
+       net11.0 gets the DLR's net10.0 build, as IronRuby's own net11.0 build does.
          dotnet build Util/aot/IronRuby.Aot -c Release -p:DlrSourceDir=... -p:IronRubyTargetFrameworks=net11.0 -->
   <PropertyGroup>
     <IronRubyAotHostTfm Condition="'$(IronRubyAotHostTfm)' == ''">$([System.String]::Copy('$(IronRubyTargetFrameworks);').Split(';')[0])</IronRubyAotHostTfm>
@@ -23,10 +24,10 @@
     <NoWarn>CS0105;$(NoWarn);CS1591;CS0618;CS8632;CS0162;CS0168;CS0219;CS0028;CS0414;SYSLIB0050;SYSLIB0051</NoWarn>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../../../Src/Ruby/Ruby.csproj" SetTargetFramework="TargetFramework=$(IronRubyAotHostTfm)" />
-    <ProjectReference Include="../../../Src/Libraries/IronRuby.Libraries.csproj" SetTargetFramework="TargetFramework=$(IronRubyAotHostTfm)" />
-    <ProjectReference Include="../../../Src/Prism/IronRuby.Prism.csproj" SetTargetFramework="TargetFramework=$(IronRubyAotHostTfm)" />
-    <ProjectReference Include="$(DlrSourceDir)/Microsoft.Scripting/Microsoft.Scripting.csproj" SetTargetFramework="TargetFramework=$(IronRubyAotHostTfm)" />
-    <ProjectReference Include="$(DlrSourceDir)/Microsoft.Dynamic/Microsoft.Dynamic.csproj" SetTargetFramework="TargetFramework=$(IronRubyAotHostTfm)" />
+    <ProjectReference Include="../../../Src/Ruby/Ruby.csproj" />
+    <ProjectReference Include="../../../Src/Libraries/IronRuby.Libraries.csproj" />
+    <ProjectReference Include="../../../Src/Prism/IronRuby.Prism.csproj" />
+    <ProjectReference Include="$(DlrSourceDir)/Microsoft.Scripting/Microsoft.Scripting.csproj" />
+    <ProjectReference Include="$(DlrSourceDir)/Microsoft.Dynamic/Microsoft.Dynamic.csproj" />
   </ItemGroup>
 </Project>
