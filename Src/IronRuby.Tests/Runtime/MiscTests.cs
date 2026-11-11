@@ -6789,6 +6789,32 @@ p calls
 [[:b_call, :o], [:call, :x], [:b_call, :q]]
 ");
         }
+        /// <summary>
+        /// `defined?' in a condition makes no call to #freeze, as in CRuby: only whether the answer is nil counts, also for an
+        /// operand of &amp;&amp; or || in a condition. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Defined_ConditionNoFreeze1() {
+            TestOutput(@"
+$c = 0
+module CountFreeze; def freeze; $c += 1; super; end; end
+String.prepend(CountFreeze)
+x = 1
+r = []
+r << (defined?(x) ? :a : :b)
+r << :c if defined?(String)
+r << :d unless defined?(zzz)
+r << :e if defined?(@iv)
+r << :f if defined?(x.succ)
+i = 0
+i += 1 while defined?(x) && i < 3
+r << i
+p r, $c
+", @"
+[:a, :c, :d, :f, 3]
+0
+");
+        }
+
 
 
         /// <summary>
