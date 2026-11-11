@@ -72,20 +72,17 @@ cp -R "$IR_ROOT/Src/StdLib" "$STAGE/Src/"
 
 # The startup library (Util/aot/build-startup.sh, IronRuby.Startup.dll): the Ruby code every start runs -
 # the prelude, rubygems and the rest - compiled ahead of time against exactly this build and the archive's
-# own copy of the standard library (`ir -e 1` ~17% faster). Building it needs the SDK and runtime of $IR_TFM,
+# own copy of the standard library (`ir -e 1` ~17% faster). Building it needs the .NET 10 SDK and runtime,
 # running it does not; without them, or if it fails, the release goes without it, which costs only the
 # speedup. IR_STARTUP_LIBRARY=0 leaves it out.
 bin="$STAGE/Src/Console/bin/Release/$IR_TFM"
 if [ "${IR_STARTUP_LIBRARY:-1}" != 0 ]; then
   status=0
-  # --build-references: the compiler runs a Release build of IronRuby, which the RID-specific publish above
-  # does not leave in Src/*/bin/Release/$IR_TFM - without it the library failed to build in every release
-  # up to 4.0.4 ("Metadata file .../IronRuby.Prism.dll could not be found").
   sh "$IR_ROOT/Util/aot/build-startup.sh" --host "$bin" --tfm "$IR_TFM" --rid "$RID" --root "$STAGE" \
-    --build-references ${DLR_SOURCE_DIR:+--dlr "$DLR_SOURCE_DIR"} || status=$?
+    ${DLR_SOURCE_DIR:+--dlr "$DLR_SOURCE_DIR"} || status=$?
   case $status in
     0) ;;
-    3) echo "package-release.sh: no startup library (building it needs the SDK and runtime of $IR_TFM)" ;;
+    3) echo "package-release.sh: no startup library (building it needs the .NET 10 SDK and runtime)" ;;
     *) echo "package-release.sh: the startup library failed to build (exit $status); the release goes without it" >&2 ;;
   esac
 fi
