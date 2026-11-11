@@ -362,12 +362,29 @@ Where it is built:
   library is made from copies the last one from `Util/aot/IronRuby.Aot/obj/startup/`, in about 1 s.
   Otherwise the library adds about 20 s to the build: 8 s to compile and 10 s for crossgen2.
 - **`Util/package-release.sh`.** It builds the library against the archive's self-contained
-  composite host and the archive's own copy of the standard library. Before archiving, it checks
-  that the unpacked tree really uses the library (`IR_STARTUP_DLL_TRACE`), and leaves it out
-  otherwise. `IR_STARTUP_LIBRARY=0` leaves it out on purpose. Every path under the tree that the
+  composite host and the archive's own copy of the standard library (`--build-references`: the
+  RID-specific publish leaves no `Src/Prism/bin/Release/<tfm>/IronRuby.Prism.dll` for the compiler,
+  whose build failed with CS0006 in every release up to 4.0.5). Before archiving, it runs
+  `Util/aot/startup-smoke.rb` from the staged tree through its own launchers, with the library and
+  without it: the library ships only if the archive loads it, uses it for all of its files, and
+  prints the same with it. Otherwise it is left out, which costs only the speedup; the log (and on
+  GitHub Actions the job summary) says why, or gives `ir -e 1` with and without it. release.yml then
+  checks it again from the archive itself. `IR_STARTUP_LIBRARY=0` leaves it out on purpose. Every
+  path under the tree that the
   code holds (`__FILE__`, a method's or block's file) is compiled as a call of
   `PrecompiledCode.Rooted`, and backtrace frames are rebased. So the library works wherever the
   archive is unpacked.
+- **arm64** (osx-arm64). RyuJIT's arm64 code for a method over 1 MB reaches the method's
+  read-only data with `adrp`+`add` computed as if it knew where in the image the method lands,
+  which in a ReadyToRun image it does not. ruby4.rb's top level is such a method (~480 KB of IL,
+  2.1 MB of arm64 code): the 16-byte constants its coalesced stores load (the bytes of a Symbol's
+  name) were read from its own instructions, and the osx-arm64 archive died at startup with
+  `undefined method '\xF5[I\xA9...e_name__'` for `private :__ir_message_type_name__`. Linux-arm64
+  code has the same fault (checked statically, crossgen2 10.0.15 and 11.0.0); x64 is unaffected.
+  So for an arm64 RID, a top level of 128 KB of IL or more is left to the JIT
+  (`AggressiveOptimization`, which crossgen2 skips; the JIT at run time knows the method's
+  address), and the compiler refuses a library in which crossgen2 still made a method over 1 MB
+  (it reads crossgen2's `--map`). `IR_AOT_LARGE_JIT=0` compiles them all, to see that check fail.
 - **Never** for the NativeAOT host, which has no assembly files and cannot load code, or for the
   IL Debug and Release builds, which have no library next to them.
 

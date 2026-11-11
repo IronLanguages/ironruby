@@ -192,6 +192,40 @@ jobs:
           fi
           Util/package-release.sh "${{ matrix.rid }}" "$GITHUB_WORKSPACE/dist"
 
+      # The startup library (IronRuby.Startup.dll, Util/aot), from the archive itself, unpacked afresh: with it there,
+      # the archive's ir must load it, use it and run with it. package-release.sh only ships one that passed its own
+      # check, and leaves it out otherwise (only the speedup lost); on a pull request a missing library fails the job,
+      # so that a change that loses it is seen, while a tag still publishes an archive without it. The job summary
+      # has `ir -e 1` with and without it.
+      - name: Startup library, from the archive
+        working-directory: dist
+        run: |
+          dir="$RUNNER_TEMP/startup-check"
+          rm -rf "$dir" && mkdir -p "$dir"
+          case "${{ matrix.rid }}" in
+            win-*) 7z x -bd -o"$dir" ironruby-*-${{ matrix.rid }}.zip > /dev/null ;;
+            *)     tar -xzf ironruby-*-${{ matrix.rid }}.tar.gz -C "$dir" ;;
+          esac
+          cd "$dir"/ironruby-*
+          lib="Src/Console/bin/Release/${{ matrix.tfm }}/IronRuby.Startup.dll"
+          if [ ! -f "$lib" ]; then
+            echo "::warning::the archive has no startup library"
+            [ "$GITHUB_EVENT_NAME" != pull_request ]
+            exit
+          fi
+          smoke="$GITHUB_WORKSPACE/ironruby/Util/aot/startup-smoke.rb"
+          case "${{ matrix.rid }}" in
+            win-*) trace=$(IR_STARTUP_DLL_TRACE=1 cmd //c ir.cmd "$(cygpath -w "$smoke")" 2>&1) ;;
+            *)     trace=$(IR_STARTUP_DLL_TRACE=1 ./ir.sh "$smoke" 2>&1) ;;
+          esac
+          # (here-strings, not echo | grep -q: with pipefail, grep -q leaving early can fail echo with SIGPIPE)
+          grep -v "^IronRuby.Startup: \(parsing\|compiling\|compiles\|the JIT parses\)" <<<"$trace"
+          grep -q "IronRuby.Startup: loaded" <<<"$trace"
+          # (not `! grep`: set -e does not stop at a negated command that fails)
+          if grep -q "IronRuby.Startup: .*not used" <<<"$trace"; then exit 1; fi
+          grep -q "^done" <<<"$trace"
+          echo "ok: $lib loaded and used"
+
       # The Windows archive carries Samples/Notepad: drive it from the unpacked tree, on
       # the Release build the archive ships. package-release.sh leaves the tree in dist/.
       - name: Notepad sample, from the archive
