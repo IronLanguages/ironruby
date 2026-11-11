@@ -208,7 +208,8 @@ namespace IronRuby.Aot {
             }
             if (r2r) {
                 foreach (var asm in outputs) {
-                    if (!Crossgen(crossgen, asm, rid, framework, host, outDir)) return 1;
+                    // the delegate assemblies have no method with code: an empty map is only wrong for the library itself
+                    if (!Crossgen(crossgen, asm, rid, framework, host, outDir, expectMethods: asm == dll)) return 1;
                 }
             }
 
@@ -319,7 +320,7 @@ namespace IronRuby.Aot {
                 .LastOrDefault(p => p != null);
         }
 
-        private static bool Crossgen(string crossgen, string assembly, string rid, string framework, string host, string outDir) {
+        private static bool Crossgen(string crossgen, string assembly, string rid, string framework, string host, string outDir, bool expectMethods) {
             string os = rid.StartsWith("win", StringComparison.Ordinal) ? "windows" : rid.StartsWith("osx", StringComparison.Ordinal) ? "osx" : "linux";
             string arch = rid.Substring(rid.LastIndexOf('-') + 1);
             string tmp = assembly + ".r2r";
@@ -348,7 +349,7 @@ namespace IronRuby.Aot {
                     .Select(m => m.Groups[2].Value + " (" + Convert.ToInt64(m.Groups[1].Value, 16).ToString("N0") + " bytes)").ToList();
                 File.Delete(map);
                 // a map this cannot read (another crossgen2's format) proves nothing: no library then either
-                if (methods.Count == 0 || methods.Any(m => !m.Success)) {
+                if ((expectMethods && methods.Count == 0) || methods.Any(m => !m.Success)) {
                     File.Delete(tmp);
                     Console.Error.WriteLine("crossgen2's map lists methods this cannot read the size of: no arm64 library unchecked");
                     return false;
