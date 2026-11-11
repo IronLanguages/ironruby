@@ -182,14 +182,19 @@ diff touches only what you changed.
 
 - CI (`.github/workflows/ci.yml`) builds and tests Ubuntu and Windows, plus ruby/spec's language
   suite. The Windows jobs run the full IronRuby.Tests suite too. A PR or push tests **net11.0
-  only**; net10.0 (what the downloads are built on) runs on a PR from a `release/*` branch, on a
+  only**; net10.0 (the default download is built on it) runs on a PR from a `release/*` branch, on a
   run by hand (`gh workflow run ci.yml --ref <branch> -f tfms=net10.0`, or `both`), and as the
   gate a `v*` tag's release.yml must pass before it publishes. A net10.0-only regression can
   therefore sit on master until the next release PR; run the workflow by hand when in doubt.
-- Cutting a release: a "Release X.Y.Z" PR from `release/vX.Y.Z` (version files, README, and
-  `Docs/releases/vX.Y.Z.md`), whose CI runs net10.0 and net11.0; merge it, then push an annotated
-  tag `vX.Y.Z` on the merge commit. release.yml runs ci.yml's net10.0 test set and packages the
-  net10.0 downloads, and publishes only if both succeed.
+- Cutting a release: a "Release X.Y.Z" PR from `release/vX.Y.Z` (version files, README, the
+  installer scripts' examples, and `Docs/releases/vX.Y.Z.md`), whose CI runs net10.0 and net11.0;
+  merge it, then push an annotated tag `vX.Y.Z` on the merge commit. release.yml runs ci.yml's
+  test set on both frameworks (`tfms: both`) and packages every RID on both: the net10.0
+  archives keep the plain names (`ironruby-X.Y.Z-<rid>.*`) and the Windows installer is made
+  from that zip; the net11.0 ones are `ironruby-X.Y.Z-net11-<rid>.*`
+  (`IR_TFM=net11.0 Util/package-release.sh <rid>`). It publishes only if the tests and the
+  Linux and Windows packages succeed (macOS is experimental), with every file in SHA256SUMS
+  and attested.
 - A PR whose branch conflicts with master gets **no** `pull_request` CI run at all, silently.
   Merge master into the branch, or dispatch the workflow on the branch (`workflow_dispatch`).
 - CodeRabbit reviews every PR. Read the review **bodies** too: findings on lines outside the

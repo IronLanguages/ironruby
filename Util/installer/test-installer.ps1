@@ -1,7 +1,7 @@
 # Installs IronRuby with the installer build-installer.sh made, checks it from a fresh
 # environment, as a new terminal would see it, and uninstalls it again:
 #
-#   powershell -File Util\installer\test-installer.ps1 dist\ironruby-4.0.4-win-x64-setup.exe
+#   powershell -File Util\installer\test-installer.ps1 dist\ironruby-4.0.5-win-x64-setup.exe
 #   powershell -File Util\installer\test-installer.ps1 SETUP.exe -AllUsers    # as admin
 #
 # It installs silently into the default directory, C:\IronRuby40-x64, which must not

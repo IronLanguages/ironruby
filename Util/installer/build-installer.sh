@@ -2,8 +2,8 @@
 # Builds IronRuby's Windows installer (ironruby.iss, Inno Setup 6) from the win-x64
 # release archive that Util/package-release.sh makes:
 #
-#   Util/installer/build-installer.sh dist/ironruby-4.0.4-win-x64.zip
-#     -> dist/ironruby-4.0.4-win-x64-setup.exe
+#   Util/installer/build-installer.sh dist/ironruby-4.0.5-win-x64.zip
+#     -> dist/ironruby-4.0.5-win-x64-setup.exe
 #   ISCC=/path/to/ISCC.exe Util/installer/build-installer.sh ZIP OUTDIR
 #
 # The installer carries the archive's tree as it is: the archive is unpacked into a
