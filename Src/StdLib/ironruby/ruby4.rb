@@ -2582,9 +2582,11 @@ unless defined?(Fiber)
         Fiber.__err__(::FiberError, "attempt to resume a resuming fiber") if @resuming
         # suspended by #transfer rather than Fiber.yield: only a transfer can go back to it
         Fiber.__err__(::FiberError, "attempt to resume a transferring fiber") if @thread && !@yielded
-        @prev = cur
-        cur.__set_resuming__(self)
-        State.__switch__(cur, self, MSG_RESUME, args)
+        cur.__act__(::Thread.__fiber_switch__(cur.__core__, @core, MSG_RESUME, args, false) do
+          __start__
+          @prev = cur
+          cur.__set_resuming__(self)
+        end)
       end
 
       ruby2_keywords def transfer(*args)
@@ -2594,8 +2596,10 @@ unless defined?(Fiber)
         Fiber.__err__(::FiberError, "attempt to transfer to a resuming fiber") if @resuming
         Fiber.__err__(::FiberError, "attempt to transfer to a yielding fiber") if @yielded
         Fiber.__err__(::FiberError, "dead fiber called") unless @alive
-        cur.__set_transferred__
-        State.__switch__(cur, self, MSG_TRANSFER, args)
+        cur.__act__(::Thread.__fiber_switch__(cur.__core__, @core, MSG_TRANSFER, args, cur.__resumed__) do
+          __start__
+          cur.__set_transferred__
+        end)
       end
 
       def kill
@@ -2621,8 +2625,7 @@ unless defined?(Fiber)
         # throw happens as soon as control comes back to it (MRI does the same).
         return self if @resuming
 
-        __adopt__(cur)
-        State.__switch__(cur, self, MSG_KILL)
+        cur.__act__(::Thread.__fiber_switch__(cur.__core__, @core, MSG_KILL, nil, false) { __adopt__(cur) })
         self
       end
 
@@ -2645,8 +2648,7 @@ unless defined?(Fiber)
         __check_thread__(cur)
         Fiber.__err__(::FiberError, "attempt to resume a terminated fiber") unless @alive
         Fiber.__err__(::FiberError, "cannot raise exception on unborn fiber") unless @thread
-        __adopt__(cur)
-        State.__switch__(cur, self, MSG_RAISE, exc)
+        cur.__act__(::Thread.__fiber_switch__(cur.__core__, @core, MSG_RAISE, exc, false) { __adopt__(cur) })
       end
 
       # ---- class methods ---------------------------------------------------
@@ -2714,11 +2716,12 @@ unless defined?(Fiber)
 
       # ---- the switch ------------------------------------------------------
 
-      # Hands control from `cur` to `target` and blocks until control comes back.
-      def self.__switch__(cur, target, kind, payload = nil)
-        target.__start__
-        cur.__act__(cur.__core__.switch(target.__core__, kind, payload, cur.__resumed__))
-      end
+      # Every switch hands control from `cur` to `target` and blocks until control comes back
+      # with ::Thread.__fiber_switch__(cur's core, target's core, kind, payload, cur resumed?)
+      # { bookkeeping }. The block records who resumed whom and starts the target's thread
+      # (#__start__); it runs with interrupts held, so that a Thread#raise cannot leave it half
+      # done (ThreadOps.FiberSwitch). Anything that can fail - the checks, the arguments - comes
+      # before it, and #__start__ (a thread that cannot be had) before the rest of it.
 
       # A fiber runs on a thread of its own: one whose last fiber has finished if one is
       # parked (Thread.__fiber_reuse__, ThreadOps.Fiber.cs), a new one otherwise. A thread
@@ -2769,11 +2772,16 @@ unless defined?(Fiber)
         if @root || target.nil?
           Fiber.__err__(::FiberError, "attempt to yield on a not resumed fiber")
         end
-        @prev = nil
-        target.__set_resuming__(nil)
-        @yielded = true
-        msg = @core.yield(target.__core__, args)
-        @yielded = false
+        begin
+          msg = ::Thread.__fiber_switch__(@core, target.__core__, MSG_YIELD, args, false) do
+            @prev = nil
+            target.__set_resuming__(nil)
+            @yielded = true
+          end
+        ensure
+          # also when the switch raises a Thread#raise as control comes back: the fiber runs
+          @yielded = false
+        end
         __act__(msg)
       end
 

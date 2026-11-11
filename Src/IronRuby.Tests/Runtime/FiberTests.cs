@@ -623,6 +623,59 @@ p [woken, fiber_woken]
         }
 
         /// <summary>
+        /// A Thread#raise that lands in the bookkeeping of a fiber switch - who resumed whom, the
+        /// target's thread - waits until the switch is done. That bookkeeping is Ruby code (ruby4.rb),
+        /// and its every method entry is a safe point: raised in the middle of Fiber#resume, after the
+        /// fiber had been told who resumed it, the exception left a fiber that had never run marked as
+        /// resumed, and the next resume failed with "attempt to resume a resumed fiber (double
+        /// resume)"; raised in the middle of Fiber.yield, after the fiber had let go of its resumer
+        /// but before the resumer had let go of it, the fiber finished by handing control to itself,
+        /// and its thread waited in Fiber#resume for ever. MRI raises the exception once the switch
+        /// is done.
+        /// </summary>
+        public void Fiber_ThreadRaiseInSwitchBookkeeping1() {
+            TestOutput(@"
+require 'ruby4'
+
+errors = Hash.new(0)
+count = 0
+t = Thread.new do
+  Thread.current.report_on_exception = false
+  f = nil
+  Thread.handle_interrupt(RuntimeError => :never) do
+    loop do
+      begin
+        f = Fiber.new { loop { begin; Fiber.yield; rescue RuntimeError; end } } unless f && f.alive?
+        Thread.handle_interrupt(RuntimeError => :immediate) { f.resume }
+      rescue RuntimeError
+      rescue => e
+        errors[""#{e.class}: #{e.message}""] += 1
+        f = nil
+      end
+      count += 1
+    end
+  end
+end
+sleep 0.001 until count > 0
+
+hung = false
+deadline = Time.now + 3
+until hung || Time.now > deadline
+  before = count
+  20.times { t.raise 'boom'; Thread.pass }
+  wait = Time.now + 10
+  sleep 0.001 until count > before || Time.now > wait
+  hung = count == before
+end
+t.kill
+t.join(10)
+p [hung, errors]
+", @"
+[false, {}]
+");
+        }
+
+        /// <summary>
         /// Keywords given to Fiber#resume / #transfer reach the fiber's block as keywords and come
         /// back from Fiber.yield as a plain Hash; Fiber.schedule hands them on to the scheduler.
         /// The FiberError messages for resuming a fiber that is resumed or was left by #transfer,

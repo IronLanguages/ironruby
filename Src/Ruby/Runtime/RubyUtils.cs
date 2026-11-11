@@ -2397,6 +2397,27 @@ namespace IronRuby.Runtime {
             CheckAsyncException(true, true);
         }
 
+        // Nesting depth of HoldInterrupts on this thread.
+        [ThreadStatic]
+        private static int _interruptHolds;
+
+        /// <summary>
+        /// Holds back everything a safe point delivers on this thread - Thread#raise, Thread#kill, trap
+        /// handlers, finalizers - until <see cref="ReleaseInterrupts"/>; it stays parked meanwhile. For
+        /// Ruby code that has to run to its end once it has begun: the bookkeeping of a fiber switch
+        /// (ThreadOps.FiberSwitch), which is Ruby code in the prelude and full of safe points. Unlike
+        /// Thread.handle_interrupt it holds back a Thread#kill too, and costs a thread-static
+        /// increment; it must not be held across a wait.
+        /// </summary>
+        public static void HoldInterrupts() {
+            _interruptHolds++;
+        }
+
+        /// <summary>Ends what <see cref="HoldInterrupts"/> began. Delivers nothing: the caller's next safe point does.</summary>
+        public static void ReleaseInterrupts() {
+            _interruptHolds--;
+        }
+
         private static void CheckAsyncException(bool atBlockingCall, bool killOnly) {
             // Everything below - a fiber being reclaimed, a parked signal, a parked finalizer, an
             // exception parked by Thread#raise / #kill - is counted in _safePointRequests while it is
@@ -2412,6 +2433,10 @@ namespace IronRuby.Runtime {
                 // A CLR catch(Exception) can swallow a control-flow signal. Keep the request
                 // active until the worker boundary, so another Ruby entry cannot continue it.
                 throw new FiberReclaimSignal();
+            }
+
+            if (_interruptHolds != 0) {
+                return;
             }
             // Trap handlers run on the main thread at a safe point, like MRI's interrupt check.
             // The hook is installed by the Signal library, which lives in another assembly.

@@ -458,7 +458,7 @@ namespace IronRuby.Builtins {
                 return Switch(target, FiberMessage.YieldKind, PackArguments(args), false);
             }
 
-            private static object PackArguments(RubyArray args) {
+            internal static object PackArguments(RubyArray args) {
                 return args.Count == 0 ? null : args.Count == 1 ? args[0] : args;
             }
 
@@ -706,6 +706,37 @@ namespace IronRuby.Builtins {
         public static object FiberCorePost(object self, [NotNull]FiberCore/*!*/ core, int kind, object payload) {
             core.Post(kind, payload);
             return null;
+        }
+
+        /// <summary>
+        /// Hands control from <paramref name="current"/> to <paramref name="target"/>, as FiberCore.Switch,
+        /// and answers the message that brings it back. The block first does the switch's bookkeeping
+        /// in Ruby - who resumed whom, the target's thread (Fiber#resume, Fiber.yield... in ruby4.rb) -
+        /// with interrupts held (RubyUtils.HoldInterrupts) until control is handed over. Every Ruby
+        /// method and block entry in it is a safe point, and a Thread#raise raised at one of them left
+        /// the bookkeeping half done: a fiber that took it in Fiber.yield after letting go of its
+        /// resumer, but before the resumer had let go of it, finished by handing control to itself,
+        /// and its thread waited in Fiber#resume for ever. Held, the exception is parked until the
+        /// switch, which hands it on with control (FiberCore.MakeRunning): MRI raises it once the
+        /// switch is done, too.
+        /// </summary>
+        [RubyMethod("__fiber_switch__", RubyMethodAttributes.PublicSingleton)]
+        public static object FiberSwitch([NotNull]BlockParam/*!*/ bookkeeping, object self, [NotNull]FiberCore/*!*/ current,
+            [NotNull]FiberCore/*!*/ target, int kind, object payload, bool resumed) {
+
+            RubyUtils.HoldInterrupts();
+            try {
+                object blockResult;
+                if (bookkeeping.Yield(out blockResult)) {
+                    return blockResult;
+                }
+            } finally {
+                RubyUtils.ReleaseInterrupts();
+            }
+            if (kind == FiberCore.FiberMessage.YieldKind) {
+                payload = FiberCore.PackArguments((RubyArray)payload);
+            }
+            return current.Switch(target, kind, payload, resumed);
         }
 
         [RubyMethod("__fiber_post__", RubyMethodAttributes.PublicSingleton)]
