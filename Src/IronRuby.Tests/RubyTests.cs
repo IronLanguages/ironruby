@@ -1276,6 +1276,7 @@ namespace IronRuby.Tests {
                 BasicObject_EqualIdentity1,
                 Kernel_ConversionKeywordEntry1,
                 Integer_BignumBitsSlice1,
+                Continuation_Escape1,
             };
         }
     }
