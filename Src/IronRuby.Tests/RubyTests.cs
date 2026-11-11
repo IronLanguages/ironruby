@@ -1292,6 +1292,7 @@ namespace IronRuby.Tests {
                 Enumerable_PatternUnusedBlockWarning1,
                 Enumerable_TallyBasicObject1,
                 Enumerable_InjectPrivateOp1,
+                HostingHelpOption1,
             };
         }
     }

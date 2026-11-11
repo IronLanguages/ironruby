@@ -611,6 +611,13 @@ namespace IronRuby.Hosting {
                     LanguageSetup.Options["DebugFrozenStringLiteral"] = true;
                     break;
 
+                // MRI's long form of -h. test/unit's EnvUtil.invoke_ruby runs `ruby --help` before every
+                // child Ruby it starts (it looks for a --parser= line), and an IronRuby that took --help for a
+                // script name started a whole runtime to fail on it.
+                case "--help":
+                    base.ParseArgument("-h");
+                    break;
+
                 case "--version":
                     ConsoleOptions.PrintVersion = true;
                     ConsoleOptions.Exit = true;
