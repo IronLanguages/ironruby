@@ -443,18 +443,17 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            private void WriteRange(Range/*!*/ range, string[]/*!*/ instanceNames) {
+            private void WriteRange(Range/*!*/ range) {
                 WriteObject(range);
-                WriteInt32(3 + instanceNames.Length);
-                // Write the attributes that are implemented in C#. Any user-defined attributes (for subtypes of Range)
-                // are appended afterwards. MRI writes them in the order excl, begin, end.
+                WriteInt32(3);
+                // MRI writes the three attributes, in the order excl, begin, end, as an 'o' record of
+                // their own; the instance variables of a Range subclass's instance go in an "I" wrapper.
                 WriteSymbol("excl", RubyEncoding.Binary);
                 WriteAnObject(range.ExcludeEnd);
                 WriteSymbol("begin", RubyEncoding.Binary);
                 WriteAnObject(range.Begin);
                 WriteSymbol("end", RubyEncoding.Binary);
                 WriteAnObject(range.End);
-                WriteIVarPairs(range, instanceNames);
             }
 
             private void WriteObject(object/*!*/ obj) {
@@ -900,12 +899,12 @@ namespace IronRuby.Builtins {
                                 instanceNames = ArrayUtils.EmptyStrings;
                             }
 
-                            // An 'o' record (a plain object, or a Range) carries its instance data inline
-                            // rather than behind an "I" wrapper.
+                            // An 'o' record (a plain object, or an exception) carries its instance data inline
+                            // rather than behind an "I" wrapper. A Range's record holds its three attributes.
                             bool isObjectRecord =
                                 !(obj is double || obj is float || obj is BigInteger || obj is MutableString ||
                                   obj is RubyArray || obj is Hash || obj is RubyRegex || obj is RubyModule ||
-                                  obj is RubyStruct || isData);
+                                  obj is RubyStruct || obj is Range || isData);
 
                             // Except a Set's: MRI 4.0 writes the 'o' record of the Set of set.rb, holding only
                             // its table, and the instance variables of its own behind an "I" wrapper.
@@ -950,7 +949,7 @@ namespace IronRuby.Builtins {
                             } else if (obj is RubyStruct) {
                                 WriteStruct((RubyStruct)obj, theClass);
                             } else if (obj is Range) {
-                                WriteRange((Range)obj, instanceNames);
+                                WriteRange((Range)obj);
                             } else if (obj is Exception) {
                                 WriteException((Exception)obj, instanceNames);
                             } else {
@@ -1455,27 +1454,17 @@ namespace IronRuby.Builtins {
 
                 int count = ReadInt32();
                 Type type = theClass.GetUnderlyingSystemType();
-                if (typeof(Exception).IsAssignableFrom(type) || typeof(Range).IsAssignableFrom(type)) {
+                if (typeof(Range).IsAssignableFrom(type)) {
+                    return ReadRange(theClass, count, objectRef);
+                }
+                if (typeof(Exception).IsAssignableFrom(type)) {
                     // built from its attributes, which are not instance variables of the result
                     var attributes = new Dictionary<string, object>();
                     for (int i = 0; i < count; i++) {
                         string name = ReadIdentifier();
                         attributes[name] = ReadAnObject(false);
                     }
-                    if (typeof(Exception).IsAssignableFrom(type)) {
-                        return CreateException(theClass, attributes);
-                    }
-                    // MRI's range_loader: the two ends have to compare (begin <=> end not nil)
-                    object rangeBegin, rangeEnd;
-                    attributes.TryGetValue("begin", out rangeBegin);
-                    attributes.TryGetValue("end", out rangeEnd);
-                    if (rangeBegin != null && rangeEnd != null) {
-                        var compare = _sites.Compare;
-                        if (compare.Target(compare, rangeBegin, rangeEnd) == null) {
-                            throw RubyExceptions.CreateArgumentError("bad value for range");
-                        }
-                    }
-                    return RubyUtils.CreateObject(theClass, attributes);
+                    return CreateException(theClass, attributes);
                 }
 
                 // The object is in the link table before its instance variables are read, so one
@@ -1540,6 +1529,38 @@ namespace IronRuby.Builtins {
                                 break;
                             }
                             goto default;
+
+            /// <summary>
+            /// MRI's range_loader: the range is allocated, and in the link table, before its attributes are read, so
+            /// a range that is its own begin or end links back to itself; the ends have to compare (begin &lt;=&gt; end
+            /// not nil). Any other pair in the record is ignored, as MRI ignores it (IronRuby used to write a
+            /// subclass's instance variables there).
+            /// </summary>
+            private object/*!*/ ReadRange(RubyClass/*!*/ theClass, int count, int objectRef) {
+                var range = (Range)RubyUtils.CreateObject(theClass);
+                if (objectRef >= 0) {
+                    _objects[objectRef] = range;
+                }
+                object rangeBegin = null, rangeEnd = null;
+                bool excludeEnd = false;
+                for (int i = 0; i < count; i++) {
+                    string name = ReadIdentifier();
+                    object value = ReadAnObject(false);
+                    switch (name) {
+                        case "begin": rangeBegin = value; break;
+                        case "end": rangeEnd = value; break;
+                        case "excl": excludeEnd = RubyOps.IsTrue(value); break;
+                    }
+                }
+                if (rangeBegin != null && rangeEnd != null) {
+                    var compare = _sites.Compare;
+                    if (compare.Target(compare, rangeBegin, rangeEnd) == null) {
+                        throw RubyExceptions.CreateArgumentError("bad value for range");
+                    }
+                }
+                range.InitializeLoaded(rangeBegin, rangeEnd, excludeEnd, theClass == Context.GetClass(typeof(Range)));
+                return range;
+            }
 
                         case "args":
                             if (isNoMethodError) {

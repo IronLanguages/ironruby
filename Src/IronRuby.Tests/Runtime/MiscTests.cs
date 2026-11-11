@@ -7051,5 +7051,37 @@ p k.new.inject(:+), [1, 2, 3].inject(:+), [1, 2, 3].inject(10, :*)
 60
 ");
         }
+
+        /// <summary>
+        /// A Range is an 'o' record of excl, begin and end, and a subclass's instance variables go in an "I" wrapper
+        /// around it, as MRI writes them; they were written into the record and lost on loading. The range is in the
+        /// link table before its ends are read (range_loader), so one that is its own begin and end comes back as one.
+        /// </summary>
+        public void Marshal_RangeRecord1() {
+            TestOutput(@"
+class MyRange < Range; def initialize(v, *args) super(*args); @v = v; end end
+d = Marshal.dump(MyRange.new(4, 5, 8, false))
+p d
+r = Marshal.load(d)
+p r.class, r.instance_variables, r, r.frozen?, Marshal.load(Marshal.dump(1..2)).frozen?
+p Marshal.load(""\x04\bo:\fMyRange\t:\texclF:\nbegini\n:\bendi\r:\a@vi\t"").instance_variables
+class CyclicRange < Range; def <=>(o); true; end; end
+c = CyclicRange.allocate
+c.instance_eval { initialize(c, c) }
+l = Marshal.load(Marshal.dump(c))
+p l.class, l.begin.equal?(l), l.end.equal?(l)
+", @"
+""\x04\bIo:\fMyRange\b:\texclF:\nbegini\n:\bendi\r\x06:\a@vi\t""
+MyRange
+[:@v]
+5..8
+false
+true
+[]
+CyclicRange
+true
+true
+");
+        }
     }
 }

@@ -1302,6 +1302,7 @@ namespace IronRuby.Tests {
                 String_InitializeKeywords1,
                 String_ToIntAsciiIncompatible1,
                 String_UndumpUnicodeEncoding1,
+                Marshal_RangeRecord1,
             };
         }
     }

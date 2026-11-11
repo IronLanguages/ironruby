@@ -63,6 +63,21 @@ namespace IronRuby.Builtins {
             // a copy is not frozen: (1..3).dup.frozen? is false in MRI
         }
 
+        /// <summary>
+        /// Marshal.load's range_loader: the range is allocated, and in the table of loaded objects, before its
+        /// ends are read, so a range that is its own begin or end comes back as one. Like MRI's, a loaded Range is
+        /// frozen and an instance of a subclass is not.
+        /// </summary>
+        public void InitializeLoaded(object begin, object end, bool excludeEnd, bool freeze) {
+            _begin = begin;
+            _end = end;
+            _excludeEnd = excludeEnd;
+            _initialized = true;
+            if (freeze) {
+                _flags |= FrozenFlag;
+            }
+        }
+
         public void GetObjectData(SerializationInfo info, StreamingContext context) {
             info.AddValue("begin", _begin);
             info.AddValue("end", _end);
