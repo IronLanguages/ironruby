@@ -7083,5 +7083,31 @@ true
 true
 ");
         }
+
+        /// <summary>
+        /// Marshal.load of a Time subclass's dump answers an instance of the subclass (MRI's time_mload allocates the
+        /// receiver of _load); a Regexp record without an encoding is a Ruby 1.8 one, whose escapes of letters 1.8 did
+        /// not define lose their backslash; and a class defined in a singleton class, whose path starts with "#", is
+        /// anonymous to Marshal.dump.
+        /// </summary>
+        public void Marshal_LoadedClasses1() {
+            TestOutput(@"
+class MyTime < Time; def initialize(v, *args) super(*args); @v = v; end end
+t = Marshal.load(Marshal.dump(MyTime.new(10)))
+p t.class, t.instance_variables
+r = Marshal.load(""\004\b/\fa\\u3042\000"")
+p r.source, Marshal.load(Marshal.dump(/a\\u3042/)) == /a\\u3042/
+o = Object.new
+c = class << o; class C; self; end; end
+p((Marshal.dump(c) rescue $!.class), (Marshal.dump(c.new) rescue $!.class))
+", @"
+MyTime
+[:@v]
+""au3042""
+true
+TypeError
+TypeError
+");
+        }
     }
 }

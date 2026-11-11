@@ -435,7 +435,9 @@ namespace IronRuby.Builtins {
             }
 
             private void TestForAnonymous(RubyModule/*!*/ theModule) {
-                if (theModule.Name == null) {
+                // MRI's class2path: a module whose path starts with "#" is anonymous too - a class
+                // defined in a singleton class ("#<Class:#<Object:...>>::C") has no name to load by.
+                if (theModule.Name == null || theModule.GetDisplayName(_context, false).ToString().StartsWith("#", StringComparison.Ordinal)) {
                     throw RubyExceptions.CreateTypeError("can't dump anonymous {0} {1}",
                         theModule.IsClass ? "class" : "module",
                         theModule.GetDisplayName(_context, false)
@@ -1315,8 +1317,15 @@ namespace IronRuby.Builtins {
                 return MutableString.CreateBinary(data, RubyEncoding.Binary);
             }
 
+            // Set while ReadInstanced reads a Regexp whose "I" wrapper follows with its encoding.
+            private bool _regexHasIVars;
+
             private RubyRegex/*!*/ ReadRegex() {
                 MutableString pattern = ReadString();
+                if (!_regexHasIVars) {
+                    pattern = RemoveUndefinedEscapes(pattern);
+                }
+                _regexHasIVars = false;
                 int raw = _reader.ReadByte();
                 var flags = (RubyRegexOptions)(raw & (int)(RubyRegexOptions.IgnoreCase | RubyRegexOptions.Extended | RubyRegexOptions.Multiline | RubyRegexOptions.FIXED));
 
@@ -1331,6 +1340,37 @@ namespace IronRuby.Builtins {
                 }
 
                 return new RubyRegex(pattern, flags);
+            }
+
+            /// <summary>
+            /// A Regexp record with no encoding (no "I" wrapper) is a Ruby 1.8 one, whose escapes of letters 1.8 did
+            /// not define stood for the letter itself: MRI's r_object drops the backslash of each (an odd run of them)
+            /// before g h i j k l m o p q u y E F H I J K L N O P Q R S T U V X Y, so "a\\u3042" loads as /au3042/.
+            /// </summary>
+            private static MutableString/*!*/ RemoveUndefinedEscapes(MutableString/*!*/ pattern) {
+                byte[] bytes = pattern.ToByteArray();
+                var result = new List<byte>(bytes.Length);
+                int backslashes = 0;
+                foreach (byte b in bytes) {
+                    switch ((char)b) {
+                        case '\\':
+                            backslashes++;
+                            result.Add(b);
+                            continue;
+                        case 'g': case 'h': case 'i': case 'j': case 'k': case 'l':
+                        case 'm': case 'o': case 'p': case 'q': case 'u': case 'y':
+                        case 'E': case 'F': case 'H': case 'I': case 'J': case 'K':
+                        case 'L': case 'N': case 'O': case 'P': case 'Q': case 'R':
+                        case 'S': case 'T': case 'U': case 'V': case 'X': case 'Y':
+                            if ((backslashes & 1) != 0) {
+                                result.RemoveAt(result.Count - 1);
+                            }
+                            break;
+                    }
+                    backslashes = 0;
+                    result.Add(b);
+                }
+                return result.Count == bytes.Length ? pattern : MutableString.CreateBinary(result.ToArray(), RubyEncoding.Binary);
             }
 
             private RubyArray/*!*/ ReadArray(RubyArray/*!*/ result) {
@@ -1490,6 +1530,38 @@ namespace IronRuby.Builtins {
                 return obj;
             }
 
+            /// <summary>
+            /// MRI's range_loader: the range is allocated, and in the link table, before its attributes are read, so
+            /// a range that is its own begin or end links back to itself; the ends have to compare (begin &lt;=&gt; end
+            /// not nil). Any other pair in the record is ignored, as MRI ignores it (IronRuby used to write a
+            /// subclass's instance variables there).
+            /// </summary>
+            private object/*!*/ ReadRange(RubyClass/*!*/ theClass, int count, int objectRef) {
+                var range = (Range)RubyUtils.CreateObject(theClass);
+                if (objectRef >= 0) {
+                    _objects[objectRef] = range;
+                }
+                object rangeBegin = null, rangeEnd = null;
+                bool excludeEnd = false;
+                for (int i = 0; i < count; i++) {
+                    string name = ReadIdentifier();
+                    object value = ReadAnObject(false);
+                    switch (name) {
+                        case "begin": rangeBegin = value; break;
+                        case "end": rangeEnd = value; break;
+                        case "excl": excludeEnd = RubyOps.IsTrue(value); break;
+                    }
+                }
+                if (rangeBegin != null && rangeEnd != null) {
+                    var compare = _sites.Compare;
+                    if (compare.Target(compare, rangeBegin, rangeEnd) == null) {
+                        throw RubyExceptions.CreateArgumentError("bad value for range");
+                    }
+                }
+                range.InitializeLoaded(rangeBegin, rangeEnd, excludeEnd, theClass == Context.GetClass(typeof(Range)));
+                return range;
+            }
+
             private object/*!*/ CreateException(RubyClass/*!*/ theClass, Dictionary<string, object>/*!*/ attributes) {
                 var exception = (Exception)RubyUtils.CreateObject(theClass);
                 var data = RubyExceptionData.GetInstance(exception);
@@ -1529,38 +1601,6 @@ namespace IronRuby.Builtins {
                                 break;
                             }
                             goto default;
-
-            /// <summary>
-            /// MRI's range_loader: the range is allocated, and in the link table, before its attributes are read, so
-            /// a range that is its own begin or end links back to itself; the ends have to compare (begin &lt;=&gt; end
-            /// not nil). Any other pair in the record is ignored, as MRI ignores it (IronRuby used to write a
-            /// subclass's instance variables there).
-            /// </summary>
-            private object/*!*/ ReadRange(RubyClass/*!*/ theClass, int count, int objectRef) {
-                var range = (Range)RubyUtils.CreateObject(theClass);
-                if (objectRef >= 0) {
-                    _objects[objectRef] = range;
-                }
-                object rangeBegin = null, rangeEnd = null;
-                bool excludeEnd = false;
-                for (int i = 0; i < count; i++) {
-                    string name = ReadIdentifier();
-                    object value = ReadAnObject(false);
-                    switch (name) {
-                        case "begin": rangeBegin = value; break;
-                        case "end": rangeEnd = value; break;
-                        case "excl": excludeEnd = RubyOps.IsTrue(value); break;
-                    }
-                }
-                if (rangeBegin != null && rangeEnd != null) {
-                    var compare = _sites.Compare;
-                    if (compare.Target(compare, rangeBegin, rangeEnd) == null) {
-                        throw RubyExceptions.CreateArgumentError("bad value for range");
-                    }
-                }
-                range.InitializeLoaded(rangeBegin, rangeEnd, excludeEnd, theClass == Context.GetClass(typeof(Range)));
-                return range;
-            }
 
                         case "args":
                             if (isNoMethodError) {
@@ -1766,7 +1806,10 @@ namespace IronRuby.Builtins {
                     return loaded;
                 }
 
+                // a Regexp, or a Regexp subclass's instance ('C')
+                _regexHasIVars = (typeFlag == '/' || typeFlag == 'C');
                 object obj = ReadAnObject(typeFlag, objectRef);
+                _regexHasIVars = false;
                 ReadIVars(obj);
                 return obj;
             }
