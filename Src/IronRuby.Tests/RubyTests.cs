@@ -1283,6 +1283,7 @@ namespace IronRuby.Tests {
                 Range_Recursive1,
                 Array_JoinRecursive1,
                 String_DumpNonUnicode1,
+                IO_PutsRecursiveToAry1,
             };
         }
     }

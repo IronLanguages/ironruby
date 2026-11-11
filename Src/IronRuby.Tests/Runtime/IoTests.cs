@@ -745,5 +745,33 @@ puts $w.sub(/\A.*:(\d+): /, 'line \\1: ')
 line 6: warning: IO::Buffer is experimental and both the Ruby and C interface may change in the future!
 ");
         }
+
+        /// <summary>
+        /// IO#puts goes into an array with rb_exec_recursive on the object it was given, as MRI's rb_io_puts does, and
+        /// writes "[...]" when it meets that object again: an object whose to_ary answers a new [self] each time was
+        /// followed until the process died (CRuby's TestIO#test_puts_recursive_ary).
+        /// </summary>
+        public void IO_PutsRecursiveToAry1() {
+            TestOutput(@"
+o = Object.new
+def o.to_ary
+  [self]
+end
+puts [o, 1]
+a = [1]
+a << a
+puts a
+puts [[], nil, [2, [3]]], 'x'
+", @"
+[...]
+1
+1
+[...]
+
+2
+3
+x
+");
+        }
     }
 }
