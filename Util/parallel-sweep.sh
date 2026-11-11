@@ -11,11 +11,14 @@
 #   IR=./ir.sh           interpreter script the specs run under (also RUBY_EXE for ruby_exe)
 #   JOBS=8               parallel jobs
 #   SUITES="core library language command_line security"
+#   SHARD=K/N            run only every Nth job, starting at the Kth of the size-sorted list, so
+#                        N machines can split a suite (.github/workflows/spec-sweep.yml does)
+#   JOB_TIMEOUT=3600     seconds one mspec-run may take before it is killed
 #   IR_CONFIG / IR_TFM are read by ir.sh itself, so `IR_TFM=net11.0 Util/parallel-sweep.sh out`
 #   sweeps the .NET 11 build.
 #
 # OUT_DIR/<suite>.txt gets the sorted unique names of failing examples, OUT_DIR/<suite>/*.log
-# the logs. With a baseline, the summary lists the names that are new and the ones fixed.
+# the logs, OUT_DIR/jobs.txt the jobs that ran ("<suite> <job> <files...>", one per line). With a baseline, the summary lists the names that are new and the ones fixed.
 # A job whose log has no mspec summary line (it crashed or hung) is reported by name: its
 # examples are missing from the counts, so a sweep with one is not a clean comparison.
 set -u
@@ -26,6 +29,12 @@ BASE=${2:-}
 IR=${IR:-./ir.sh}
 JOBS=${JOBS:-8}
 SUITES=${SUITES:-"core library language command_line security"}
+SHARD=${SHARD:-1/1}
+JOB_TIMEOUT=${JOB_TIMEOUT:-3600}
+case "$SHARD" in
+  [1-9]*/[1-9]*) ;;
+  *) echo "SHARD must be K/N, not $SHARD" >&2; exit 2 ;;
+esac
 
 mkdir -p "$OUT"
 jobs_file="$OUT/jobs.txt"
@@ -49,14 +58,18 @@ done
 run_job() {
   local suite=$1 name=$2
   shift 2
-  RUBY_EXE=$IR timeout 3600 $IR -Imspec/lib mspec/bin/mspec-run "$@" > "$OUT/$suite/$name.log" 2>&1
+  # -k: a run that ignores the TERM is killed, so a wedged process cannot outlive the sweep
+  RUBY_EXE=$IR timeout -k 30 "$JOB_TIMEOUT" $IR -Imspec/lib mspec/bin/mspec-run "$@" > "$OUT/$suite/$name.log" 2>&1
 }
 export -f run_job
-export OUT IR
+export OUT IR JOB_TIMEOUT
 
 start=$(date +%s)
-awk '{ print NF, $0 }' "$jobs_file" | sort -rn | cut -d' ' -f2- |
-  xargs -P "$JOBS" -L 1 -s 1000000 bash -c 'run_job "$@"' _
+# sort -k1,1nr -s keeps the order of equal sizes, so every shard computes the same split
+awk '{ print NF, $0 }' "$jobs_file" | sort -s -k1,1nr | cut -d' ' -f2- |
+  awk -v k="${SHARD%/*}" -v n="${SHARD#*/}" '(NR - 1) % n == k - 1' > "$jobs_file.run"
+mv "$jobs_file.run" "$jobs_file"
+xargs -P "$JOBS" -L 1 -s 1000000 bash -c 'run_job "$@"' _ < "$jobs_file"
 end=$(date +%s)
 
 for s in $SUITES; do

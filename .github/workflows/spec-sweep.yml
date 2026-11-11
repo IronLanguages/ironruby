@@ -1,0 +1,264 @@
+name: Spec sweep
+
+# The whole of ruby/spec - core, library, language, command_line and security - every night, on
+# net10.0 (the framework of the default download). ci.yml runs only spec/language, and on a push
+# or pull request only on net11.0, so a regression in core or library, or one only net10.0 has,
+# can otherwise sit on master until someone sweeps by hand (CLAUDE.md, "Tests").
+#
+# The sweep is Util/ci-sweep.sh (Util/parallel-sweep.sh, then the files of a job that crashed or
+# hung run one at a time, then the files of a new failure run once more alone), split over five
+# jobs: spec/core in three shards, spec/library, and the other three suites together. The
+# report job compares the lot with Util/spec-known-failures.txt (Util/sweep-check.rb) and
+# fails on a failing example it does not list, on a spec file that printed no mspec summary
+# line (crashed or hung: its examples are missing from every count), and on a shard that did
+# not arrive. A listed example that now passes, and a new one that passed when its file ran
+# alone, are warnings. The job summary has the table and the lines to add to or take off the
+# list; the logs are kept as artifacts for 14 days.
+#
+# The pins - DLR_REF, PRISM_REF, SPEC_REF and MSPEC_REF - are read from ci.yml's env by the first
+# job rather than repeated here, so this sweeps what ci.yml's ruby-spec job builds and runs, and
+# a pin moved there moves here. (Calling ci.yml as a reusable workflow would run its whole test
+# set, Windows included, and take its pins from it only by changing ci.yml.)
+#
+# What a schedule does on GitHub:
+# - it runs the copy of this file on the default branch only: a change to it, or to the scripts
+#   it calls, takes effect once merged; a run by hand (workflow_dispatch) can pick a branch;
+# - the start can slip by tens of minutes when GitHub is busy, more on the hour, hence 03:17;
+# - in a public repository GitHub disables the schedule after 60 days without activity in the
+#   repository; it is turned back on from the Actions tab ("Enable workflow");
+# - nobody is notified beyond what GitHub does by itself for a failed scheduled run (it tells
+#   whoever last changed the cron line): look at the Actions tab.
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      tfms:
+        description: Target frameworks to sweep
+        type: choice
+        options: [net10.0, net11.0, both]
+        default: net10.0
+
+permissions:
+  contents: read
+
+concurrency:
+  # a run by hand waits for the night's run rather than cancelling it
+  group: spec-sweep-${{ github.ref }}-${{ inputs.tfms || 'net10.0' }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_NOLOGO: 1
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+  # README "Status" is measured with LANG=C.UTF-8; the encoding specs depend on it.
+  LANG: C.UTF-8
+
+defaults:
+  run:
+    # an explicit bash is run with -o pipefail, so the failure of a command piped into tee counts
+    shell: bash
+
+jobs:
+  setup:
+    name: pins and target frameworks
+    runs-on: ubuntu-latest
+    outputs:
+      DLR_REF: ${{ steps.pins.outputs.DLR_REF }}
+      PRISM_REF: ${{ steps.pins.outputs.PRISM_REF }}
+      SPEC_REF: ${{ steps.pins.outputs.SPEC_REF }}
+      MSPEC_REF: ${{ steps.pins.outputs.MSPEC_REF }}
+      tfms: ${{ steps.tfms.outputs.list }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/workflows/ci.yml
+          sparse-checkout-cone-mode: false
+
+      # The runner's own Ruby is enough to read YAML (ci.yml's no-executables job uses it too).
+      - name: Read the pins from ci.yml
+        id: pins
+        run: |
+          ruby -ryaml -e '
+            env = YAML.load_file(".github/workflows/ci.yml")["env"] || {}
+            %w[DLR_REF PRISM_REF SPEC_REF MSPEC_REF].each do |k|
+              v = env[k].to_s
+              abort "ci.yml env: #{k} is #{v.inspect}, not a revision" unless v.match?(/\A[\w.\/-]+\z/)
+              puts "#{k}=#{v}"
+            end' | tee -a "$GITHUB_OUTPUT"
+
+      - name: Pick the target frameworks
+        id: tfms
+        env:
+          REQUESTED: ${{ inputs.tfms }}
+        run: |
+          case "$REQUESTED" in
+            both) list='["net10.0","net11.0"]' ;;
+            net11.0) list='["net11.0"]' ;;
+            net10.0|'') list='["net10.0"]' ;;
+            *) echo "::error::unknown tfms input: $REQUESTED"; exit 1 ;;
+          esac
+          echo "sweeping $list"
+          echo "list=$list" >> "$GITHUB_OUTPUT"
+
+  sweep:
+    name: ${{ matrix.tfm }} ${{ matrix.part.name }}
+    needs: setup
+    runs-on: ubuntu-latest
+    # a part takes well under an hour; the limit is for a sweep whose every timeout fires
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        tfm: ${{ fromJSON(needs.setup.outputs.tfms) }}
+        # SHARD splits a suite's size-sorted job list round-robin (Util/parallel-sweep.sh).
+        # Util/sweep-check.rb fails the report if a shard of a suite is missing, so a part
+        # changed here cannot silently stop being swept.
+        part:
+          - { name: core-1, suites: core, shard: 1/3 }
+          - { name: core-2, suites: core, shard: 2/3 }
+          - { name: core-3, suites: core, shard: 3/3 }
+          - { name: library, suites: library, shard: 1/1 }
+          - { name: language-command_line-security, suites: language command_line security, shard: 1/1 }
+    env:
+      TFM: ${{ matrix.tfm }}
+      IR_TFM: ${{ matrix.tfm }}
+      DLR_REF: ${{ needs.setup.outputs.DLR_REF }}
+      PRISM_REF: ${{ needs.setup.outputs.PRISM_REF }}
+      SPEC_REF: ${{ needs.setup.outputs.SPEC_REF }}
+      MSPEC_REF: ${{ needs.setup.outputs.MSPEC_REF }}
+    steps:
+      # The same checkouts and build as ci.yml's ruby-spec job. The tree stays at
+      # $GITHUB_WORKSPACE/ironruby (/home/runner/work/ironruby/ironruby/ironruby): mspec makes
+      # its temporary files under it, and UNIX-socket specs fail once a socket's path is too long.
+      - uses: actions/checkout@v7
+        with:
+          path: ironruby
+      - uses: actions/checkout@v7
+        with:
+          repository: IronLanguages/dlr
+          ref: ${{ env.DLR_REF }}
+          path: dlr
+      - uses: actions/checkout@v7
+        with:
+          repository: ruby/prism
+          ref: ${{ env.PRISM_REF }}
+          path: prism
+      - uses: actions/checkout@v7
+        with:
+          repository: ruby/spec
+          ref: ${{ env.SPEC_REF }}
+          path: ironruby/spec
+      - uses: actions/checkout@v7
+        with:
+          repository: ruby/mspec
+          ref: ${{ env.MSPEC_REF }}
+          path: ironruby/mspec
+
+      - name: Patch the DLR
+        run: |
+          for patch in ironruby/Build/dlr-patches/*.patch; do
+            echo "applying $patch"
+            git -C dlr apply "../$patch"
+          done
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: |
+            10.0.x
+            11.0.x
+      # Builds libprism and runs Util/sweep-check.rb; the specs themselves run under IronRuby.
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v6
+        with:
+          path: ~/.nuget/packages
+          key: nuget-ubuntu-latest-${{ hashFiles('ironruby/**/*.csproj', 'ironruby/Directory.Build.props', 'dlr/**/*.csproj') }}
+          restore-keys: nuget-ubuntu-latest-
+
+      - name: Identify the prism checkout
+        id: prism
+        run: echo "sha=$(git -C prism rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the prism build
+        id: prism-cache
+        uses: actions/cache@v6
+        with:
+          path: prism/build
+          key: prism-ubuntu-latest-${{ steps.prism.outputs.sha }}
+
+      - name: Build libprism
+        if: steps.prism-cache.outputs.cache-hit != 'true'
+        working-directory: prism
+        run: |
+          ruby templates/template.rb
+          make shared
+
+      - name: Build
+        working-directory: ironruby
+        run: |
+          ruby Src/Prism/generate.rb
+          dotnet build Src/Console/Ruby.Console.csproj -p:IronRubyTargetFrameworks=$TFM
+
+      # JOBS: one mspec-run per vCPU of the runner; more makes the timing-sensitive examples
+      # flip. JOB_TIMEOUT bounds one directory's mspec-run (the slowest take a few minutes),
+      # FILE_TIMEOUT one file's in the passes after it, so a hang costs at most about
+      # JOB_TIMEOUT + FILE_TIMEOUT and is named in the report.
+      - name: Sweep ${{ matrix.part.suites }} (${{ matrix.part.shard }})
+        working-directory: ironruby
+        env:
+          SUITES: ${{ matrix.part.suites }}
+          SHARD: ${{ matrix.part.shard }}
+          JOBS: 4
+          JOB_TIMEOUT: 2400
+          FILE_TIMEOUT: 600
+        run: Util/ci-sweep.sh "$GITHUB_WORKSPACE/out"
+
+      - name: Keep the sweep
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: spec-sweep-${{ matrix.tfm }}-${{ matrix.part.name }}
+          path: out
+          retention-days: 14
+          if-no-files-found: ignore
+
+  report:
+    name: report ${{ matrix.tfm }}
+    needs: [setup, sweep]
+    # also when a part failed, so what did arrive is compared; the missing part fails it
+    if: always() && needs.setup.result == 'success'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        tfm: ${{ fromJSON(needs.setup.outputs.tfms) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            Util/sweep-check.rb
+            Util/spec-known-failures.txt
+          sparse-checkout-cone-mode: false
+
+      # one directory per part, each a Util/ci-sweep.sh output
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: spec-sweep-${{ matrix.tfm }}-*
+          path: sweeps
+
+      - name: Compare with Util/spec-known-failures.txt
+        env:
+          TFM: ${{ matrix.tfm }}
+        run: |
+          echo "## ruby/spec sweep, $TFM" >> "$GITHUB_STEP_SUMMARY"
+          echo >> "$GITHUB_STEP_SUMMARY"
+          shopt -s nullglob
+          parts=(sweeps/*/)
+          # with no part at all, sweep-check.rb still runs, to report every suite as not swept
+          [ ${#parts[@]} -gt 0 ] || { mkdir -p sweeps/none; parts=(sweeps/none); }
+          ruby Util/sweep-check.rb --suites "core library language command_line security" \
+            --summary "$GITHUB_STEP_SUMMARY" "${parts[@]}"
