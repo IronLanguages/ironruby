@@ -522,6 +522,8 @@ namespace IronRuby.Aot {
             using (var fs = File.Create(outputPath)) {
                 blob.WriteContentTo(fs);
             }
+            int reordered = ExceptionClauses.Reorder(outputPath);
+            if (reordered > 0) Count("methods whose exception clauses were put in nesting order (ExceptionClauses)", reordered);
         }
 
         // Debugging aid: the branch fixups PersistedAssemblyBuilder does at save time need every
