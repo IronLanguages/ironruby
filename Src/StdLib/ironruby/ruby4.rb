@@ -3020,6 +3020,20 @@ class Numeric
   end
 end
 
+# nil, true and false are special objects too (MRI's special_object_p): they cannot be
+# cloned unfrozen either. The library #clone answered them for freeze: false.
+[::NilClass, ::TrueClass, ::FalseClass].each do |klass|
+  klass.class_eval do
+    def clone(freeze: nil)
+      unless freeze.nil? || freeze == true || freeze == false
+        ::Kernel.raise(::ArgumentError, "unexpected value for freeze: #{freeze.class}")
+      end
+      ::Kernel.raise(::ArgumentError, "can't unfreeze #{self.class}") if freeze == false
+      self
+    end
+  end
+end
+
 module Kernel
   # The built-in warn takes exactly one message and no keywords; 2.5 added
   # multiple messages plus uplevel:, and 3.0 added category:.

@@ -7133,5 +7133,24 @@ true
 ArgumentError
 ");
         }
+
+        /// <summary>
+        /// nil, true and false cannot be cloned unfrozen, as MRI's special_object_p says of them: clone(freeze: false)
+        /// is "can't unfreeze NilClass" and the like, as for an Integer or a Symbol.
+        /// </summary>
+        public void Kernel_CloneSpecialConstants1() {
+            TestOutput(@"
+require 'ruby4'
+p((true.clone(freeze: false) rescue $!), (nil.clone(freeze: false) rescue $!), (false.clone(freeze: false) rescue $!))
+p nil.clone, true.clone(freeze: true), (nil.clone(freeze: 1) rescue $!)
+", @"
+#<ArgumentError: can't unfreeze TrueClass>
+#<ArgumentError: can't unfreeze NilClass>
+#<ArgumentError: can't unfreeze FalseClass>
+nil
+true
+#<ArgumentError: unexpected value for freeze: Integer>
+");
+        }
     }
 }
