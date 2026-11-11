@@ -113,6 +113,7 @@ namespace IronRuby.Compiler.Ast {
                 gen.CompilerOptions.TopLevelMethodName, // method name for blocks
                 null                                    // parameters for super calls
             );
+            gen.CurrentMethod.HasOwnCompiledFrame = true;
 
             MSA.Expression body;
 

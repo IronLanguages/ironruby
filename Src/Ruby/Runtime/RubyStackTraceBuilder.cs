@@ -97,7 +97,7 @@ namespace IronRuby.Runtime {
             if (captured.IsCatchSiteClr) {
                 AddClrCaughtBacktrace(captured.ThrowSiteTrace, captured.CatchSiteTrace);
             } else if (captured.CatchSiteFrames != null) {
-                AddBacktrace(captured.ThrowSiteTrace.GetFrames(), 0, false);
+                AddBacktrace(captured.ThrowSiteFrames, 0, false);
                 AddBacktrace(captured.CatchSiteFrames, 0, false, !captured.CatchSiteFramesFromHere);
             } else {
                 AddExceptionBacktrace(captured.ThrowSiteTrace, captured.CatchSiteTrace, captured.IsCatchSiteInterpreted);
@@ -156,7 +156,6 @@ namespace IronRuby.Runtime {
         internal sealed class CapturedTrace {
             internal readonly RubyContext/*!*/ Context;
             internal readonly RubyEncoding/*!*/ Encoding;
-            internal readonly StackTrace/*!*/ ThrowSiteTrace;
             internal readonly StackTrace CatchSiteTrace;
             internal readonly IList<InterpretedFrameInfo> InterpretedFrames;
             internal readonly Precompiled.PrecompiledFrames.Frame[] CompiledFrames;
@@ -175,23 +174,104 @@ namespace IronRuby.Runtime {
             }
 
             internal CapturedTrace(RubyContext/*!*/ context, Exception/*!*/ exception, StackTrace throwSiteTrace, StackTrace catchSiteTrace,
-                bool isCatchSiteInterpreted) {
+                bool isCatchSiteInterpreted)
+                : this(context, exception, throwSiteTrace, catchSiteTrace, isCatchSiteInterpreted, false, null) {
+            }
+
+            /// <param name="deferThrowSite">
+            /// The exception's own trace is read when the catch-site walk is taken (<see cref="TakeThrowSiteTrace"/>), not now: the
+            /// catching frame has a catch-site walk pending (RubyExceptionData.TryDeferCatchSite), which is taken before the exception is
+            /// exposed to code that could keep it or leaves that frame - before anything can throw it again - and so the trace is the
+            /// same then. Reading it is most of what is left of the cost of a raise rescued and dropped: a System.Diagnostics.StackTrace
+            /// allocates a dozen arrays and resolves the method of every frame.
+            /// </param>
+            /// <param name="passed">
+            /// What was taken of the trace where the exception went through ensure clauses before any frame took it
+            /// (RubyExceptionData.EnterPassedEnsure): the interpreted frames, the compiled frames' lines and the loops' lines as they
+            /// were before the clauses ran Ruby code, which reuses the records of the frames left. Taken from there, not now.
+            /// </param>
+            internal CapturedTrace(RubyContext/*!*/ context, Exception/*!*/ exception, StackTrace throwSiteTrace, StackTrace catchSiteTrace,
+                bool isCatchSiteInterpreted, bool deferThrowSite, CapturedTrace passed) {
                 Context = context;
                 Encoding = context.GetPathEncoding();
                 // the exception's own trace grows as it is rethrown, and a raise of it starts it over:
-                ThrowSiteTrace = throwSiteTrace ?? GetClrStackTrace(exception, NeedsClrFileInfo(context));
-                // the interpreter's frames are saved on the exception once, and raise clears them:
-                InterpretedFrames = GetInterpretedFrames(exception);
-                // the compiled frames' lines change as they run on, and the frames it has left are reused by the next call:
-                CompiledFrames = Precompiled.PrecompiledFrames.CaptureLines(true);
-                LoopLines = Precompiled.PrecompiledFrames.CaptureLoopLines();
+                if (throwSiteTrace == null && deferThrowSite) {
+                    _exception = exception;
+                } else {
+                    _throwSiteTrace = throwSiteTrace ?? GetClrStackTrace(exception, NeedsClrFileInfo(context));
+                }
+                if (passed != null) {
+                    InterpretedFrames = passed.InterpretedFrames;
+                    CompiledFrames = passed.CompiledFrames;
+                    LoopLines = passed.LoopLines;
+                } else {
+                    // the interpreter's frames are saved on the exception once, and raise clears them:
+                    InterpretedFrames = GetInterpretedFrames(exception);
+                    // the compiled frames' lines change as they run on, and the frames it has left are reused by the next call:
+                    CompiledFrames = Precompiled.PrecompiledFrames.CaptureLines(true);
+                    LoopLines = Precompiled.PrecompiledFrames.CaptureLoopLines();
+                }
                 CatchSiteTrace = catchSiteTrace;
                 IsCatchSiteInterpreted = isCatchSiteInterpreted;
             }
 
-            internal CapturedTrace(RubyContext/*!*/ context, Exception/*!*/ exception, StackTrace/*!*/ clrCatchSiteTrace)
-                : this(context, exception, clrCatchSiteTrace, false) {
+            internal CapturedTrace(RubyContext/*!*/ context, Exception/*!*/ exception, StackTrace/*!*/ clrCatchSiteTrace, CapturedTrace passed)
+                : this(context, exception, null, clrCatchSiteTrace, false, false, passed) {
                 IsCatchSiteClr = true;
+            }
+
+            // the exception whose own trace is still to be read (see TakeThrowSiteTrace), or null once it has been
+            private Exception _exception;
+            private StackTrace _throwSiteTrace;
+            // the frames of the trace up to the frame whose ensure clause runs, where the trace was cut there (TakeThrowSiteTrace)
+            private StackFrame[] _throwSiteFrames;
+
+            internal StackTrace/*!*/ ThrowSiteTrace {
+                get {
+                    TakeThrowSiteTrace();
+                    return _throwSiteTrace;
+                }
+            }
+
+            /// <summary>The frames of the exception's own trace that the backtrace has, up to the catch site.</summary>
+            internal StackFrame[]/*!*/ ThrowSiteFrames {
+                get {
+                    return _throwSiteFrames ?? ThrowSiteTrace.GetFrames();
+                }
+            }
+
+            /// <summary>
+            /// Reads the exception's own trace if it has not been yet. Called, under a lock of this object, where the catch-site walk is
+            /// taken (RubyExceptionData.ResolveCatchSite).
+            /// </summary>
+            internal void TakeThrowSiteTrace() {
+                var exception = _exception;
+                if (_throwSiteTrace == null && exception != null) {
+                    _throwSiteTrace = GetClrStackTrace(exception, NeedsClrFileInfo(Context));
+                    _exception = null;
+                }
+            }
+
+            /// <summary>
+            /// Reads the exception's own trace, up to and including the frame of the method named <paramref name="name"/> that has
+            /// <paramref name="above"/> frames of that name above it: the frame whose ensure clause runs while the exception goes on to
+            /// a frame below (RubyExceptionData.EnterPassedEnsure). All of it if there is no such frame (not reached).
+            /// </summary>
+            internal void TakeThrowSiteTrace(string/*!*/ name, int above) {
+                TakeThrowSiteTrace();
+                var frames = _throwSiteTrace.GetFrames();
+                for (int i = 0; i < frames.Length; i++) {
+                    var method = frames[i].GetMethod();
+                    if (method != null && String.Equals(method.Name, name, StringComparison.Ordinal) && above-- == 0) {
+                        if (i + 1 < frames.Length) {
+                            var cut = new StackFrame[i + 1];
+                            Array.Copy(frames, cut, cut.Length);
+                            frames = cut;
+                        }
+                        break;
+                    }
+                }
+                _throwSiteFrames = frames;
             }
 
             internal RubyArray/*!*/ Build() {

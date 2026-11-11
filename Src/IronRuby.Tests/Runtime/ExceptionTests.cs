@@ -1399,6 +1399,52 @@ $log.join(""|"")
         }
 
         /// <summary>
+        /// An exception Kernel#raise made goes through compiled ensure-only bodies before any frame has taken its backtrace
+        /// (RubyOps.PassEnsure, RubyExceptionData.EnterPassedEnsure): the backtrace an ensure clause reads in $! - after calls that
+        /// reuse the records of the frames left, in a recursion, as the cause of an exception the clause raises - and the one the
+        /// frame that rescues it reads, from a method, a block, a rescue that does not match, a rescue modifier and a thread; an
+        /// ensure clause that ends the exception with a jump. A throw through a catch of another tag, and the ensure clause it
+        /// passes. The expected output is CRuby 4.0's. Run interpreted, compiled from the
+        /// first call and as the default engine compiles.
+        /// </summary>
+        public void Exception_EnsurePassUntraced1() {
+            const string script = @"$log = []
+def bt(e) = e.backtrace.map { |f| f[/:\d+:in '[^']*'/] }.join("","")
+def noise = [1].map { |v| v + 1 }
+def d; raise ""x""; end
+def e1; d; ensure; noise; end
+def e2; e1; ensure; noise; $log << bt($!); end
+def e3; e2; ensure; noise; end
+begin; e3; rescue => e; $log << bt(e); end
+def er(n); n == 0 ? d : er(n - 1); ensure; noise; $log << bt($!) if n == 1; end
+begin; er(3); rescue => e; $log << bt(e); end
+def ef; e1; ensure; noise; raise IOError, ""f""; end
+begin; ef; rescue => e; $log << ""#{bt(e)} / #{bt(e.cause)}""; end
+def eg; e1; ensure; return 7; end
+$log << eg
+def eh; [1].each { begin; e1; ensure; next; end }; :h; end
+$log << eh
+def ei; [1].each { begin; e1; rescue => e; $log << bt(e); end }; end
+ei
+def ej; e1; rescue TypeError; end
+begin; ej; rescue => e; $log << bt(e); end
+$log << (e1 rescue bt($!))
+t = Thread.new { begin; e1; rescue => e; bt(e); end }
+$log << t.value
+$log << catch(:a) { catch(:b) { begin; throw :a, 1; ensure; $log << ""ens""; end } }
+$log << catch(:a) { catch(:b) { throw :b, 2 }; 3 }
+$log.join(""|"")
+";
+            const string expected = ":4:in 'Object#d',:5:in 'Object#e1',:6:in 'Object#e2',:7:in 'Object#e3',:8:in '<main>'|:4:in 'Object#d',:5:in 'Object#e1',:6:in 'Object#e2',:7:in 'Object#e3',:8:in '<main>'|:4:in 'Object#d',:9:in 'Object#er',:9:in 'Object#er',:9:in 'Object#er',:9:in 'Object#er',:10:in '<main>'|:4:in 'Object#d',:9:in 'Object#er',:9:in 'Object#er',:9:in 'Object#er',:9:in 'Object#er',:10:in '<main>'|:11:in 'Object#ef',:12:in '<main>' / :4:in 'Object#d',:5:in 'Object#e1',:11:in 'Object#ef',:12:in '<main>'|7|h|:4:in 'Object#d',:5:in 'Object#e1',:17:in 'block in Object#ei',:17:in 'Array#each',:17:in 'Object#ei',:18:in '<main>'|:4:in 'Object#d',:5:in 'Object#e1',:19:in 'Object#ej',:20:in '<main>'|:4:in 'Object#d',:5:in 'Object#e1',:21:in '<main>'|:4:in 'Object#d',:5:in 'Object#e1',:22:in 'block in <main>'|ens|1|3";
+
+            var interpreting = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = Int32.MaxValue; });
+            AreEqual(interpreting.CreateScriptSourceFromString(script, "pass9.rb", SourceCodeKind.File).Execute().ToString(), expected);
+            var compiling = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = 0; });
+            AreEqual(compiling.CreateScriptSourceFromString(script, "pass9.rb", SourceCodeKind.File).Execute().ToString(), expected);
+            AreEqual(Engine.CreateScriptSourceFromString(script, "pass9.rb", SourceCodeKind.File).Execute().ToString(), expected);
+        }
+
+        /// <summary>
         /// The walk of the stack below a rescuing frame waits only for an exception Kernel#raise made itself: C# code may keep the
         /// exception it throws and hand it to Ruby code after the frame is gone (Encoding::Converter#last_error is the one convert
         /// threw), and so may a CLR exception thrown again. Their backtraces must keep the callers of the rescuing frame, and no

@@ -37,8 +37,10 @@ namespace IronRuby.Compiler.Ast {
     /// the finally block while the exception passes. An exception the filter does not let through is caught as before.
     /// </summary>
     internal sealed class EnsureGuardExpression : MSA.Expression, IInstructionProvider {
-        private static readonly MethodInfo/*!*/ _PassEnsure = typeof(RubyOps).GetMethod(nameof(RubyOps.PassEnsure));
-        private static readonly MethodInfo/*!*/ _EnterPassedEnsure = typeof(RubyOps).GetMethod(nameof(RubyOps.EnterPassedEnsure));
+        private static readonly MethodInfo/*!*/ _PassEnsure = typeof(RubyOps).GetMethod(nameof(RubyOps.PassEnsure),
+            new[] { typeof(RubyScope), typeof(Exception), typeof(int) });
+        private static readonly MethodInfo/*!*/ _EnterPassedEnsure = typeof(RubyOps).GetMethod(nameof(RubyOps.EnterPassedEnsure),
+            new[] { typeof(RubyScope), typeof(Exception), typeof(int) });
         private static readonly MethodInfo/*!*/ _CanRescue = typeof(RubyOps).GetMethod(nameof(RubyOps.CanRescue));
         private static readonly MethodInfo/*!*/ _Capture = typeof(ExceptionDispatchInfo).GetMethod(nameof(ExceptionDispatchInfo.Capture));
         private static readonly MethodInfo/*!*/ _Throw = typeof(ExceptionDispatchInfo).GetMethod(nameof(ExceptionDispatchInfo.Throw), Type.EmptyTypes);
@@ -47,16 +49,23 @@ namespace IronRuby.Compiler.Ast {
         private readonly MSA.Expression/*!*/ _scope;
         private readonly MSA.Expression/*!*/ _thrown;
         private readonly MSA.Expression/*!*/ _rethrow;
+        private readonly MSA.Expression/*!*/ _frameDepth;
 
         /// <param name="body">The guarded statements, of type void.</param>
         /// <param name="scope">The current RubyScope.</param>
         /// <param name="thrown">The body's "exception thrown" flag, set when CanRescue takes the exception.</param>
         /// <param name="rethrow">The body's "rethrow" flag, set when CanRescue takes the exception: the ensure clause throws it again.</param>
-        internal EnsureGuardExpression(MSA.Expression/*!*/ body, MSA.Expression/*!*/ scope, MSA.Expression/*!*/ thrown, MSA.Expression/*!*/ rethrow) {
+        /// <param name="frameDepth">
+        /// The index of the frame's record (CompiledFrameDepthExpression), an int; -1 if it has none, or if an exception whose
+        /// backtrace is still to be taken may not go through (see RubyOps.PassEnsure).
+        /// </param>
+        internal EnsureGuardExpression(MSA.Expression/*!*/ body, MSA.Expression/*!*/ scope, MSA.Expression/*!*/ thrown, MSA.Expression/*!*/ rethrow,
+            MSA.Expression/*!*/ frameDepth) {
             _body = body;
             _scope = scope;
             _thrown = thrown;
             _rethrow = rethrow;
+            _frameDepth = frameDepth;
         }
 
         /// <summary>
@@ -95,12 +104,12 @@ namespace IronRuby.Compiler.Ast {
         //   try {
         //       try {
         //           body
-        //       } catch (Exception e) when ((passing = RubyOps.PassEnsure(scope, e)) == null) {
+        //       } catch (Exception e) when ((passing = RubyOps.PassEnsure(scope, e, frameDepth)) == null) {
         //           if (RubyOps.CanRescue(scope, e)) { thrown = rethrow = true } else { pending = ExceptionDispatchInfo.Capture(e) }
         //       }
         //       if (pending != null) pending.Throw();
         //   } fault {
-        //       RubyOps.EnterPassedEnsure(scope, passing);
+        //       RubyOps.EnterPassedEnsure(scope, passing, frameDepth);
         //   }
         //
         // A filter that let one exception through has seen every exception that leaves the inner try after it: one that the
@@ -125,7 +134,7 @@ namespace IronRuby.Compiler.Ast {
                                     Ast.Assign(pending, Ast.Call(_Capture, e))
                                 ),
                                 Ast.Equal(
-                                    Ast.Assign(passing, Ast.Call(_PassEnsure, _scope, e)),
+                                    Ast.Assign(passing, Ast.Call(_PassEnsure, _scope, e, _frameDepth)),
                                     Ast.Constant(null, typeof(Exception))
                                 )
                             )
@@ -135,7 +144,7 @@ namespace IronRuby.Compiler.Ast {
                             Ast.Call(pending, _Throw)
                         )
                     ),
-                    Ast.Call(_EnterPassedEnsure, _scope, passing)
+                    Ast.Call(_EnterPassedEnsure, _scope, passing, _frameDepth)
                 )
             );
         }
@@ -145,10 +154,11 @@ namespace IronRuby.Compiler.Ast {
             var scope = visitor.Visit(_scope);
             var thrown = visitor.Visit(_thrown);
             var rethrow = visitor.Visit(_rethrow);
-            if (body == _body && scope == _scope && thrown == _thrown && rethrow == _rethrow) {
+            var frameDepth = visitor.Visit(_frameDepth);
+            if (body == _body && scope == _scope && thrown == _thrown && rethrow == _rethrow && frameDepth == _frameDepth) {
                 return this;
             }
-            return new EnsureGuardExpression(body, scope, thrown, rethrow);
+            return new EnsureGuardExpression(body, scope, thrown, rethrow, frameDepth);
         }
     }
 }

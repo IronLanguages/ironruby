@@ -214,12 +214,19 @@ namespace IronRuby.Runtime {
         /// Ruby code can have kept the exception: the walk of the stack below that frame may be left until it is known to be
         /// needed (see <see cref="TryDeferCatchSite"/>).
         /// </param>
-        internal void CaptureExceptionTrace(RubyScope/*!*/ scope, bool rescuing) {
+        /// <param name="frameDepth">
+        /// The index of the catching frame's record in PrecompiledFrames, if known (-1 otherwise): with <paramref name="rescuing"/>,
+        /// the record is told from the others by it rather than by the exception's CLR trace.
+        /// </param>
+        /// <param name="passed">What <see cref="TakePassedEnsureCapture"/> has returned already, if anything.</param>
+        internal void CaptureExceptionTrace(RubyScope/*!*/ scope, bool rescuing, int frameDepth = -1, RubyStackTraceBuilder.CapturedTrace passed = null) {
+            // what the ensure clauses the exception went through took of its backtrace (see EnterPassedEnsure): the rest is taken here
+            passed = passed ?? TakePassedEnsureCapture();
 
-            if (rescuing && !HasBacktrace && _raiseBacktrace == null && TryDeferCatchSite(scope)) {
+            if (rescuing && !HasBacktrace && _raiseBacktrace == null && TryDeferCatchSite(scope, frameDepth, passed)) {
                 return;
             }
-            if (CaptureTrace(scope)) {
+            if (CaptureTrace(scope, passed)) {
                 // MRI (setup_exception) only calls #set_backtrace when it has been redefined:
                 if (!HasBuiltinSetBacktrace(scope.RubyContext)) {
                     CallRedefinedSetBacktrace(scope.RubyContext);
@@ -242,8 +249,14 @@ namespace IronRuby.Runtime {
         /// Not when the exception might be seen otherwise: a TracePoint, a #set_backtrace of the exception's own (called with the
         /// backtrace right away), or the modes that report CLR frames. And only for a frame whose record in PrecompiledFrames is
         /// the innermost one - the record that identifies it in the walk later.
+        ///
+        /// That the record is the catching frame's is told by its index, which the frame keeps (<paramref name="frameDepth"/>,
+        /// CompiledFrameDepthExpression), or else by the method of the last frame of the exception's CLR trace, which ends with the
+        /// catching frame. Reading the trace was most of what is left of the cost of a raise rescued and dropped; with the index it is
+        /// read when the walk is taken: the exception is not thrown again before then, so the trace is the same (see CapturedTrace).
         /// </summary>
-        private bool TryDeferCatchSite(RubyScope/*!*/ scope) {
+        /// <param name="passed">What ensure clauses the exception went through took of its backtrace, if any (see EnterPassedEnsure).</param>
+        private bool TryDeferCatchSite(RubyScope/*!*/ scope, int frameDepth, RubyStackTraceBuilder.CapturedTrace passed) {
             var context = scope.RubyContext;
             if (scope.InterpretedFrame != null || TracePoint.ActiveEvents != 0 || context.DomainManager.Configuration.DebugMode ||
                 context.Options.ExceptionDetail) {
@@ -258,17 +271,125 @@ namespace IronRuby.Runtime {
                 return false;
             }
 
-            // the catching frame is the last of the exception's own trace
-            var throwSiteTrace = RubyStackTraceBuilder.GetClrStackTrace(_exception, RubyStackTraceBuilder.NeedsClrFileInfo(context));
-            int count = throwSiteTrace.FrameCount;
-            var catching = (count > 0) ? throwSiteTrace.GetFrame(count - 1)?.GetMethod() : null;
-            if (catching == null || !String.Equals(catching.Name, name, StringComparison.Ordinal) || !HasBuiltinSetBacktrace(context)) {
+            StackTrace throwSiteTrace = null;
+            if (frameDepth >= 0) {
+                if (index != frameDepth) {
+                    return false;
+                }
+            } else {
+                // the catching frame is the last of the exception's own trace
+                throwSiteTrace = RubyStackTraceBuilder.GetClrStackTrace(_exception, RubyStackTraceBuilder.NeedsClrFileInfo(context));
+                int count = throwSiteTrace.FrameCount;
+                var catching = (count > 0) ? throwSiteTrace.GetFrame(count - 1)?.GetMethod() : null;
+                if (catching == null || !String.Equals(catching.Name, name, StringComparison.Ordinal)) {
+                    return false;
+                }
+            }
+            if (!HasBuiltinSetBacktrace(context)) {
                 return false;
             }
 
-            _capturedTrace = new RubyStackTraceBuilder.CapturedTrace(context, _exception, throwSiteTrace, null, false);
-            _pendingCatchSite = new PendingCatchSite(frames, index, name, sequence, Thread.CurrentThread);
+            _capturedTrace = new RubyStackTraceBuilder.CapturedTrace(context, _exception, throwSiteTrace, null, false, true, passed);
+            _pendingCatchSite = new PendingCatchSite(frames, index, name, sequence, Thread.CurrentThread, -1);
             return true;
+        }
+
+        // the frames end with one of the method named name (Debug only: the record found for the frame is the frame's)
+        private static bool IsLastFrame(StackFrame[]/*!*/ frames, string/*!*/ name) {
+            var method = (frames.Length > 0) ? frames[frames.Length - 1]?.GetMethod() : null;
+            return method != null && String.Equals(method.Name, name, StringComparison.Ordinal);
+        }
+
+        // An exception Kernel#raise made that has gone through a compiled ensure clause before any frame took its backtrace
+        // (RubyOps.PassEnsure), in the CLR's first pass; set again on its way through each one (EnterPassedEnsure).
+        private bool _passedUntraced;
+
+        /// <summary>
+        /// Whether an exception whose backtrace no frame has taken yet may go through a compiled ensure-only body (RubyOps.PassEnsure)
+        /// rather than be caught there for its backtrace: an exception Kernel#raise made, which nothing can have kept, that nothing
+        /// but Ruby code can see otherwise - no TracePoint, no #set_backtrace of its own, not the modes that report CLR frames.
+        /// </summary>
+        internal bool CanPassUntraced(RubyScope/*!*/ scope, int frameDepth) {
+            if (_passedUntraced) {
+                return true;
+            }
+            var context = scope.RubyContext;
+            if (frameDepth < 0 || HasBacktrace || _raiseBacktrace != null || !RaisedUnkept || scope.InterpretedFrame != null ||
+                TracePoint.ActiveEvents != 0 || context.DomainManager.Configuration.DebugMode || context.Options.ExceptionDetail ||
+                !HasBuiltinSetBacktrace(context)) {
+                return false;
+            }
+            _passedUntraced = true;
+            return true;
+        }
+
+        /// <summary>
+        /// An exception PassEnsure let through without a backtrace is leaving a compiled frame through its ensure clause, in the CLR's
+        /// second pass (RubyOps.EnterPassedEnsure, before the clause runs). The clause is Ruby code, which may expose the exception
+        /// ($!, a raise whose cause it is): its backtrace is then what a catch here would have taken - the exception's CLR trace up to
+        /// this frame, and the frames below it - and it is taken as one caught here would have been: the frame becomes the pending
+        /// catch site (see TryDeferCatchSite), until a frame below catches the exception, which takes over (TakePassedEnsureCapture).
+        /// 
+        /// The exception's CLR trace has the frames of the whole first pass - this frame's callers too, down to the one that catches -
+        /// and it is read only when needed, so this frame's place in it is told by the frames of the same name above it, which the
+        /// compiled frames' records have. Those, the frames' lines, the interpreted frames and the loops' lines are taken at the first
+        /// such ensure clause, before any ensure code runs: the clauses' calls reuse the records of the frames left.
+        /// </summary>
+        internal void EnterPassedEnsure(RubyScope/*!*/ scope, int frameDepth) {
+            if (!_passedUntraced) {
+                return;
+            }
+            var captured = _capturedTrace;
+            var pending = _pendingCatchSite;
+            if (captured != null && (pending == null || pending.ThrowSiteOccurrence < 0)) {
+                // the backtrace has been taken - an ensure clause exposed the exception
+                _passedUntraced = false;
+                return;
+            }
+
+            Precompiled.PrecompiledFrames frames;
+            int index;
+            string name;
+            long sequence;
+            if (!Precompiled.PrecompiledFrames.TryGetInnermost(out frames, out index, out name, out sequence) || index != frameDepth) {
+                // not reached: the frames above this one have left their records
+                Debug.Assert(false, "the frame of a passed ensure clause is not the innermost one");
+                return;
+            }
+
+            if (captured == null) {
+                captured = new RubyStackTraceBuilder.CapturedTrace(scope.RubyContext, _exception, null, null, false, true, null);
+                _capturedTrace = captured;
+            }
+
+            // the frames of this one's name between it and the raise, all of them compiled frames with a record
+            int above = 0;
+            var lines = captured.CompiledFrames;
+            if (lines != null) {
+                for (int i = index + 1; i < lines.Length; i++) {
+                    if (String.Equals(lines[i].Name, name, StringComparison.Ordinal)) {
+                        above++;
+                    }
+                }
+            }
+            _pendingCatchSite = new PendingCatchSite(frames, index, name, sequence, Thread.CurrentThread, above);
+        }
+
+        /// <summary>
+        /// What ensure clauses the exception went through without a backtrace took of it (see EnterPassedEnsure), now that a frame
+        /// below them has caught the exception and takes its backtrace: the exception's CLR trace has the frames up to that one.
+        /// Null if none.
+        /// </summary>
+        internal RubyStackTraceBuilder.CapturedTrace TakePassedEnsureCapture() {
+            var pending = _pendingCatchSite;
+            if (pending == null || pending.ThrowSiteOccurrence < 0) {
+                return null;
+            }
+            var captured = _capturedTrace;
+            _capturedTrace = null;
+            _pendingCatchSite = null;
+            _passedUntraced = false;
+            return captured;
         }
 
         private sealed class PendingCatchSite {
@@ -277,13 +398,19 @@ namespace IronRuby.Runtime {
             internal readonly string/*!*/ Name;
             internal readonly long Sequence;
             internal readonly Thread/*!*/ Thread;
+            // The frame is one an exception goes through, whose ensure clause runs (EnterPassedEnsure), not the one that caught it:
+            // the exception's CLR trace goes on below it, and is cut after the frame of its name that has this many above it. -1 for
+            // the frame that caught the exception, with which the trace ends.
+            internal readonly int ThrowSiteOccurrence;
 
-            internal PendingCatchSite(Precompiled.PrecompiledFrames/*!*/ frames, int index, string/*!*/ name, long sequence, Thread/*!*/ thread) {
+            internal PendingCatchSite(Precompiled.PrecompiledFrames/*!*/ frames, int index, string/*!*/ name, long sequence, Thread/*!*/ thread,
+                int throwSiteOccurrence) {
                 Frames = frames;
                 Index = index;
                 Name = name;
                 Sequence = sequence;
                 Thread = thread;
+                ThrowSiteOccurrence = throwSiteOccurrence;
             }
         }
 
@@ -319,14 +446,27 @@ namespace IronRuby.Runtime {
                 if (pending == null) {
                     return;
                 }
+                int above = 0;
+                bool live = pending.Thread == Thread.CurrentThread && pending.Frames.TryCountLiveAbove(pending.Index, pending.Name, pending.Sequence, out above);
+
+                // The exception has not been thrown again since it was caught: its trace still ends with the catching frame, or goes on
+                // from the frame whose ensure clause runs to the one that is to catch it. That frame having been left, the exception
+                // exposed before a frame below took it over (not reached), the trace goes on to where it is now: closer than one cut
+                // at a frame that is gone.
+                if (pending.ThrowSiteOccurrence >= 0 && live) {
+                    captured.TakeThrowSiteTrace(pending.Name, pending.ThrowSiteOccurrence);
+                } else {
+                    captured.TakeThrowSiteTrace();
+                }
+                _passedUntraced = false;
+                Debug.Assert(!live || IsLastFrame(captured.ThrowSiteFrames, pending.Name));
                 _pendingCatchSite = null;
 
                 // The catching frame, in a walk from here: the frames of its name the records have above it are those the walk
                 // has above it, compiled Ruby frames all having a record (CompiledFrameExpression), so it is the one after them.
                 StackFrame[] catchSite = null;
                 StackFrame[] frames = null;
-                int above;
-                if (pending.Thread == Thread.CurrentThread && pending.Frames.TryCountLiveAbove(pending.Index, pending.Name, pending.Sequence, out above)) {
+                if (live) {
                     frames = RubyStackTraceBuilder.GetClrStackTrace(null, false).GetFrames();
                     for (int i = 0; i < frames.Length; i++) {
                         var method = frames[i].GetMethod();
@@ -350,8 +490,9 @@ namespace IronRuby.Runtime {
             }
         }
 
-        // Takes the trace of the exception as a Ruby frame first sees it go by; false if it has one already.
-        private bool CaptureTrace(RubyScope/*!*/ scope) {
+        // Takes the trace of the exception as a Ruby frame first sees it go by; false if it has one already. With what ensure clauses
+        // the exception went through took of it (passed, see EnterPassedEnsure).
+        private bool CaptureTrace(RubyScope/*!*/ scope, RubyStackTraceBuilder.CapturedTrace passed) {
             if (!HasBacktrace && _raiseBacktrace == null) {
                 var context = scope.RubyContext;
                 bool debugMode = context.DomainManager.Configuration.DebugMode;
@@ -387,7 +528,8 @@ namespace IronRuby.Runtime {
                 }
 
                 // formatted on first use, see Backtrace:
-                _capturedTrace = new RubyStackTraceBuilder.CapturedTrace(context, _exception, catchSiteTrace, scope.InterpretedFrame != null);
+                _capturedTrace = new RubyStackTraceBuilder.CapturedTrace(context, _exception, null, catchSiteTrace, scope.InterpretedFrame != null,
+                    false, passed);
                 return true;
             }
             return false;
@@ -404,12 +546,13 @@ namespace IronRuby.Runtime {
         /// </summary>
         [MethodImpl(MethodImplOptions.NoInlining)]
         public void CaptureExceptionTrace(RubyContext/*!*/ context) {
+            var passed = TakePassedEnsureCapture();
             if (HasBacktrace || _raiseBacktrace != null) {
                 return;
             }
             // the catch site's callers: this walk has the catching method too, below which they are (see Build)
             var captured = new RubyStackTraceBuilder.CapturedTrace(context, _exception,
-                RubyStackTraceBuilder.GetClrStackTrace(null, context.DomainManager.Configuration.DebugMode));
+                RubyStackTraceBuilder.GetClrStackTrace(null, context.DomainManager.Configuration.DebugMode), passed);
             if (captured.ThrowSiteTrace.FrameCount == 0) {
                 return;
             }
@@ -744,7 +887,7 @@ namespace IronRuby.Runtime {
             // The new exception is never thrown and has no trace of its own: it gets the one the thrown exception has come by
             // so far (an Errno raised by a library method had none at all when rescued). Taken before "new" runs Ruby code,
             // which would reuse the PrecompiledFrames slots of the compiled frames the exception left (and their lines).
-            bool captured = instanceData.CaptureTrace(scope);
+            bool captured = instanceData.CaptureTrace(scope, instanceData.TakePassedEnsureCapture());
 
             var site = exceptionClass.NewSite;
             Exception newException;

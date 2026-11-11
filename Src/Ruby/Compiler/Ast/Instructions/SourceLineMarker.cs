@@ -183,8 +183,39 @@ namespace IronRuby.Compiler.Ast {
                 if (node is CompiledFrameExpression) {
                     return node;
                 }
+                if (node is CompiledFrameDepthExpression) {
+                    return _depth;
+                }
                 return base.VisitExtension(node);
             }
+        }
+    }
+
+    /// <summary>
+    /// The index of the record of the compiled frame the code is in (<see cref="CompiledFrameExpression"/>), which the frame's
+    /// lambda has in a local: what tells the frame's record from the others' at run time (see RubyOps.CanRescueDeferTrace and
+    /// RubyOps.PassEnsure). -1 where there is no such frame: interpreted, or in code saved ahead of time, which drops the
+    /// CompiledFrameExpression. Only for code whose CLR method is the frame's lambda (AstGenerator.CurrentCompiledFrameDepth).
+    /// </summary>
+    internal sealed class CompiledFrameDepthExpression : MSA.Expression {
+        public override MSA.ExpressionType NodeType {
+            get { return MSA.ExpressionType.Extension; }
+        }
+
+        public override Type/*!*/ Type {
+            get { return typeof(int); }
+        }
+
+        public override bool CanReduce {
+            get { return true; }
+        }
+
+        public override MSA.Expression/*!*/ Reduce() {
+            return Ast.Constant(-1);
+        }
+
+        protected override MSA.Expression/*!*/ VisitChildren(MSA.ExpressionVisitor/*!*/ visitor) {
+            return this;
         }
     }
 }

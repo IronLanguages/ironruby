@@ -169,6 +169,7 @@ namespace IronRuby.Compiler.Ast {
                 redoLabel
             );
             gen.CurrentBlock.LexicalDepth = _definedScope.Depth;
+            gen.CurrentBlock.HasOwnCompiledFrame = true;
 
             // the binding of the parameters is one assignment of each, whatever it takes to make it
             gen.BindingParameters = true;
