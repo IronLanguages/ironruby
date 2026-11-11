@@ -1278,6 +1278,7 @@ namespace IronRuby.Tests {
                 Integer_BignumBitsSlice1,
                 Continuation_Escape1,
                 RbConfig_ExecutableExts1,
+                IOBuffer_ExperimentalWarning1,
             };
         }
     }

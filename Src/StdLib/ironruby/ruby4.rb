@@ -9198,6 +9198,28 @@ class IO
 
     # MRI names nil/true/false by value rather than by class in the TypeErrors
     # rb_builtin_class_name produces.
+    # MRI warns the first time a buffer is allocated in the process, and only
+    # then: the experimental category is read at that moment and not again
+    # (io_buffer_experimental), so code that allocates one with the category off
+    # silences the warning for good. Every allocation goes through new or
+    # allocate here.
+    EXPERIMENTAL_WARNED__ = [false]
+    __hide_constant__ :EXPERIMENTAL_WARNED__
+
+    def self.__experimental__
+      return if EXPERIMENTAL_WARNED__[0]
+      EXPERIMENTAL_WARNED__[0] = true
+      return unless ::Warning[:experimental]
+      loc = caller_locations(1).find { |l| l.path != __FILE__ }
+      ::Kernel.warn("#{"#{loc.path}:#{loc.lineno}: " if loc}warning: IO::Buffer is experimental and both the Ruby and C interface may change in the future!",
+                    category: :experimental)
+    end
+
+    def self.allocate
+      __experimental__
+      super
+    end
+
     def self.__class_name__(value)
       case value
       when nil then "nil"
@@ -9325,6 +9347,7 @@ class IO
     end
 
     def initialize(size = DEFAULT_SIZE, *flags)
+      self.class.__experimental__
       size = self.class.__integer_arg__(size)
       ::Kernel.raise(::ArgumentError, "Size can't be negative!") if size < 0
 
