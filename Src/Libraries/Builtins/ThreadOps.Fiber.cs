@@ -103,47 +103,64 @@ namespace IronRuby.Builtins {
                     }
                 }
 
-                while (true) {
-                    bool interrupted = false;
-                    using (new RubyUtils.UninterruptedLock(_lock)) {
-                        if (_count == 0) {
-                            _blocked = true;
-                            try {
-                                Monitor.Wait(_lock);
-                            } catch (ThreadInterruptedException) {
-                                interrupted = true;
-                            } finally {
-                                _blocked = false;
+                // A Thread#kill or Thread#raise that comes before the wait has blocked - while the
+                // take spins, say - is not lost (RubyUtils.BeginNudgeableWait): what is parked is
+                // looked at before every Monitor.Wait, and a nudge from then on pulses _lock.
+                RubyUtils.BeginNudgeableWait(_lock);
+                try {
+                    while (true) {
+                        bool interrupted = false;
+                        using (new RubyUtils.UninterruptedLock(_lock)) {
+                            if (_count == 0) {
+                                if (!RubyUtils.PrepareNudgeableWait()) {
+                                    interrupted = true;
+                                } else {
+                                    _blocked = true;
+                                    try {
+                                        Monitor.Wait(_lock);
+                                    } catch (ThreadInterruptedException) {
+                                        interrupted = true;
+                                    } finally {
+                                        _blocked = false;
+                                        RubyUtils.NudgeableWaitDone();
+                                    }
+                                }
+                            }
+
+                            // A message that is already here wins over an interrupt: control has arrived,
+                            // and the parked exception is raised once this side runs (FiberCore.Switch).
+                            // Raising it instead would leave the message for the next take - a later
+                            // Fiber#resume would return at once, with the fiber it resumed still running.
+                            if (_count != 0) {
+                                object message = _message;
+                                int count = _count - 1;
+                                _message = (count > 0) ? _overflow.Dequeue() : null;
+                                _count = count;
+                                return message;
                             }
                         }
 
-                        // A message that is already here wins over an interrupt: control has arrived,
-                        // and the parked exception is raised once this side runs (FiberCore.Switch).
-                        // Raising it instead would leave the message for the next take - a later
-                        // Fiber#resume would return at once, with the fiber it resumed still running.
-                        if (_count != 0) {
-                            object message = _message;
-                            int count = _count - 1;
-                            _message = (count > 0) ? _overflow.Dequeue() : null;
-                            _count = count;
-                            return message;
+                        if (interrupted) {
+                            TranslateInterrupt();
                         }
                     }
+                } finally {
+                    RubyUtils.EndNudgeableWait();
+                }
+            }
 
-                    if (interrupted) {
-                        // Thread#kill / Thread#raise nudged us: deliver the parked exception (outside the
-                        // lock, it runs Ruby code), or hand it on to the fiber that is running instead
-                        // of us (RubyThreadInfo.ForwardToActiveFiber). If nothing is parked the wait
-                        // simply goes on. A fiber waiting for control raises a Thread#raise only once
-                        // control is here (FiberCore.Switch): it may be the running fiber already, its
-                        // message posted a moment from now, and raising now would leave that message
-                        // for the next take.
-                        if (HandsOverControl) {
-                            RubyUtils.TranslateFiberWaitInterrupt();
-                        } else {
-                            RubyUtils.TranslateThreadInterrupt();
-                        }
-                    }
+            private void TranslateInterrupt() {
+                // Thread#kill / Thread#raise nudged us: deliver the parked exception (outside the
+                // lock, it runs Ruby code), or hand it on to the fiber that is running instead
+                // of us (RubyThreadInfo.ForwardToActiveFiber). If nothing is parked the wait
+                // simply goes on. A fiber waiting for control raises a Thread#raise only once
+                // control is here (FiberCore.Switch): it may be the running fiber already, its
+                // message posted a moment from now, and raising now would leave that message
+                // for the next take.
+                if (HandsOverControl) {
+                    RubyUtils.TranslateFiberWaitInterrupt();
+                } else {
+                    RubyUtils.TranslateThreadInterrupt();
                 }
             }
 

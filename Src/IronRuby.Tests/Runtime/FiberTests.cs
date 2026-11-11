@@ -497,6 +497,79 @@ p [r, $rescued&.message, t.status]
         }
 
         /// <summary>
+        /// A Thread#kill that comes while a fiber's resumer is still on its way into the mailbox wait
+        /// - spinning before it blocks - is not lost. Its interrupt went only to a thread already in
+        /// WaitSleepJoin, so the resumer blocked with the kill parked and the thread never ended:
+        /// ruby/spec's kill_spec "kills the entire thread when a fiber is active" hung now and then,
+        /// since Thread#status says "sleep" as soon as the fiber sleeps. Here the kill is parked
+        /// while the worker runs, before it takes. A raise parked like that, which a fiber waiting
+        /// for control keeps (FiberCore.Switch raises it), must not keep the take from blocking.
+        /// </summary>
+        public void Thread_KillBeforeFiberMailboxWait1() {
+            var flags = BindingFlags.NonPublic | BindingFlags.Instance;
+            var handsOverControl = typeof(ThreadOps.FiberMailbox).GetField("HandsOverControl", flags);
+            var blocked = typeof(ThreadOps.FiberMailbox).GetField("_blocked", flags);
+
+            foreach (bool kill in new[] { true, false }) {
+                var mailbox = new ThreadOps.FiberMailbox();
+                handsOverControl.SetValue(mailbox, true);
+                var raise = new InvalidOperationException("raise");
+
+                Exception thrown = null;
+                object message = null;
+                bool ready = false;
+                bool go = false;
+                var worker = new Thread(() => {
+                    try {
+                        Volatile.Write(ref ready, true);
+                        // running, not in a wait: the nudge finds nothing to interrupt
+                        while (!Volatile.Read(ref go)) {
+                        }
+                        message = mailbox.Take();
+                    } catch (Exception e) {
+                        thrown = e;
+                    }
+                });
+                worker.IsBackground = true;
+                worker.Start();
+                try {
+                    while (!Volatile.Read(ref ready)) {
+                        Thread.Yield();
+                    }
+                    if (kill) {
+                        RubyUtils.ExitThread(worker);
+                    } else {
+                        RubyUtils.RaiseAsyncException(worker, raise);
+                    }
+                    Volatile.Write(ref go, true);
+
+                    if (!kill) {
+                        // the raise stays parked and the take blocks, waiting for its message
+                        while (!(bool)blocked.GetValue(mailbox) || (worker.ThreadState & ThreadState.WaitSleepJoin) == 0) {
+                            Thread.Yield();
+                        }
+                        mailbox.Post("control");
+                    }
+
+                    bool ended = worker.Join(5000);
+                    if (!ended) {
+                        mailbox.Post(null);
+                        worker.Join(5000);
+                    }
+                    Assert(ended);
+                    if (kill) {
+                        Assert(thrown != null && RubyUtils.IsRubyThreadExit(thrown));
+                    } else {
+                        Assert(thrown == null && (string)message == "control");
+                        Assert(ReferenceEquals(RubyUtils.PeekPendingAsyncException(worker), raise));
+                    }
+                } finally {
+                    RubyUtils.DropPendingAsyncExceptions(worker);
+                }
+            }
+        }
+
+        /// <summary>
         /// Keywords given to Fiber#resume / #transfer reach the fiber's block as keywords and come
         /// back from Fiber.yield as a plain Hash; Fiber.schedule hands them on to the scheduler.
         /// The FiberError messages for resuming a fiber that is resumed or was left by #transfer,

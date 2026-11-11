@@ -1722,14 +1722,36 @@ namespace IronRuby.Runtime {
         /// </summary>
         public static void NudgeThread(Thread/*!*/ thread) {
             Thread key = thread;
+            object waitMonitor = null;
             using (new UninterruptedLock(_pendingAsyncExceptions)) {
                 if (!_pendingAsyncExceptions.ContainsKey(key)) {
                     // taken, moved on or dropped already: an interrupt now would find nothing to deliver
                     return;
                 }
-                int count;
-                _nudgesInFlight.TryGetValue(key, out count);
-                _nudgesInFlight[key] = count + 1;
+                NudgeableWait wait;
+                if (_nudgeableWaits.TryGetValue(key, out wait)) {
+                    // The thread is in a wait that looks at what is parked before it blocks: the flag
+                    // and the pulse below reach it wherever it is in that wait (BeginNudgeableWait).
+                    wait.Nudged = true;
+                    waitMonitor = wait.SyncRoot;
+                    if (wait.Waiting) {
+                        // blocked on the monitor, which the pulse wakes: no interrupt to go stale
+                        key = null;
+                    }
+                }
+                if (key != null) {
+                    int count;
+                    _nudgesInFlight.TryGetValue(key, out count);
+                    _nudgesInFlight[key] = count + 1;
+                }
+            }
+            if (waitMonitor != null) {
+                using (new UninterruptedLock(waitMonitor)) {
+                    Monitor.PulseAll(waitMonitor);
+                }
+            }
+            if (key == null) {
+                return;
             }
             try {
                 if ((thread.ThreadState & System.Threading.ThreadState.WaitSleepJoin) != 0) {
@@ -1782,6 +1804,93 @@ namespace IronRuby.Runtime {
                 if (_taken) {
                     _taken = false;
                     Monitor.Exit(_monitor);
+                }
+            }
+        }
+
+        /// <summary>
+        /// A wait on a monitor that a nudge has to reach however close to blocking the thread is
+        /// (<see cref="BeginNudgeableWait"/>). Guarded by _pendingAsyncExceptions.
+        /// </summary>
+        private sealed class NudgeableWait {
+            public readonly object/*!*/ SyncRoot;
+            // the wait this one is nested in, on the same thread (Ruby code run by a safe point in it)
+            public readonly NudgeableWait Outer;
+            // A nudge has come since the waiter last looked (PrepareNudgeableWait).
+            public bool Nudged;
+            // In Monitor.Wait on SyncRoot, or about to be, with the monitor held.
+            public bool Waiting;
+
+            public NudgeableWait(object/*!*/ monitor, NudgeableWait outer, bool nudged) {
+                SyncRoot = monitor;
+                Outer = outer;
+                Nudged = nudged;
+            }
+        }
+
+        // CLR thread (by identity) -> the nudgeable wait it is in. Guarded by _pendingAsyncExceptions.
+        private static readonly Dictionary<Thread, NudgeableWait>/*!*/ _nudgeableWaits = new Dictionary<Thread, NudgeableWait>();
+
+        /// <summary>
+        /// Starts a wait on <paramref name="monitor"/> that a Thread#kill or Thread#raise cannot miss.
+        /// NudgeThread interrupts only a thread the CLR already has in WaitSleepJoin - an interrupt
+        /// for a running thread stays latched and goes off at whatever wait comes next - so one that
+        /// came while the thread was still on its way into Monitor.Wait (spinning, taking the lock)
+        /// found nothing to wake, and the thread then blocked with the exception parked for it. A
+        /// fiber's resumer waits like that for the fiber, and Thread#status reports the fiber's
+        /// state for the whole Ruby thread: a test that kills the thread once it says "sleep" lost
+        /// its kill whenever the resumer had not blocked yet.
+        ///
+        /// Between this call and <see cref="EndNudgeableWait"/> every nudge is recorded, and wakes
+        /// the thread with a pulse of <paramref name="monitor"/> if it is waiting there. The waiter
+        /// calls <see cref="PrepareNudgeableWait"/> with the monitor held, just before Monitor.Wait,
+        /// and <see cref="NudgeableWaitDone"/> after it. Something parked already counts as a nudge.
+        /// </summary>
+        public static void BeginNudgeableWait(object/*!*/ monitor) {
+            Thread current = Thread.CurrentThread;
+            using (new UninterruptedLock(_pendingAsyncExceptions)) {
+                NudgeableWait outer;
+                _nudgeableWaits.TryGetValue(current, out outer);
+                _nudgeableWaits[current] = new NudgeableWait(monitor, outer, _pendingAsyncExceptions.ContainsKey(current));
+            }
+        }
+
+        /// <summary>
+        /// With the wait's monitor held, just before Monitor.Wait: false if a nudge has come since the
+        /// last call - the caller looks at what is parked (TranslateThreadInterrupt and the like)
+        /// instead of waiting, and comes back. True means wait; a nudge from now on pulses the monitor,
+        /// which the caller cannot miss, since it holds the monitor until Monitor.Wait releases it.
+        /// </summary>
+        public static bool PrepareNudgeableWait() {
+            using (new UninterruptedLock(_pendingAsyncExceptions)) {
+                NudgeableWait wait = _nudgeableWaits[Thread.CurrentThread];
+                if (wait.Nudged) {
+                    wait.Nudged = false;
+                    return false;
+                }
+                wait.Waiting = true;
+                return true;
+            }
+        }
+
+        /// <summary>Monitor.Wait has returned (or thrown): nudges interrupt the thread again.</summary>
+        public static void NudgeableWaitDone() {
+            using (new UninterruptedLock(_pendingAsyncExceptions)) {
+                _nudgeableWaits[Thread.CurrentThread].Waiting = false;
+            }
+        }
+
+        /// <summary>Ends the wait <see cref="BeginNudgeableWait"/> started.</summary>
+        public static void EndNudgeableWait() {
+            Thread current = Thread.CurrentThread;
+            using (new UninterruptedLock(_pendingAsyncExceptions)) {
+                NudgeableWait outer = _nudgeableWaits[current].Outer;
+                if (outer != null) {
+                    // what was parked meanwhile is the outer wait's to look at too
+                    outer.Nudged |= _pendingAsyncExceptions.ContainsKey(current);
+                    _nudgeableWaits[current] = outer;
+                } else {
+                    _nudgeableWaits.Remove(current);
                 }
             }
         }
