@@ -96,7 +96,15 @@ namespace IronRuby.Builtins {
             /// A content of this one's items in an array of their own, from index 0. Only for an
             /// <see cref="IsOffsetSlice"/> content; any other is returned as it is.
             /// </summary>
-            internal virtual Content/*!*/ Unslice() {
+            internal Content/*!*/ Unslice() {
+                return Unslice(0);
+            }
+
+            /// <summary>
+            /// <see cref="Unslice()"/>, with room for <paramref name="additionalCapacity"/> more items past
+            /// the copy, so that the append that is about to follow does not copy it a second time.
+            /// </summary>
+            internal virtual Content/*!*/ Unslice(int additionalCapacity) {
                 return this;
             }
 
@@ -108,6 +116,12 @@ namespace IronRuby.Builtins {
             
             protected CharArrayContent/*!*/ WrapContent(char[]/*!*/ chars, int count) {
                 var result = new CharArrayContent(chars, count, _owner);
+                _owner.SetContent(result);
+                return result;
+            }
+
+            protected StringContent/*!*/ WrapContent(string/*!*/ str) {
+                var result = new StringContent(str, _owner);
                 _owner.SetContent(result);
                 return result;
             }
