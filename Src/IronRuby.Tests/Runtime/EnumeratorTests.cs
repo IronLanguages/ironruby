@@ -190,5 +190,26 @@ nil
 [1, 2]
 ");
         }
+
+        // Enumerator::Chain and ::Product undefine external iteration (Init_Enumerator).
+        public void Enumerator_ChainNoNext1() {
+            TestOutput(@"
+require 'ruby4'
+c = [1].each + [2]
+p c.respond_to?(:next), c.to_a, c.size
+p((c.next rescue $!.class))
+c.rewind
+p Enumerator::Product.method_defined?(:peek), Enumerator::Chain.method_defined?(:feed)
+p Enumerator.product([1], [2]).to_a
+", @"
+false
+[1, 2]
+2
+NoMethodError
+false
+false
+[[1, 2]]
+");
+        }
     }
 }

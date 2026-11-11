@@ -5721,6 +5721,8 @@ class Enumerator
 
   # --- Enumerator::Chain -------------------------------------------------
   class Chain < Enumerator
+    # MRI undefines external iteration for it (enumerator.c, Init_Enumerator).
+    undef_method :next, :next_values, :peek, :peek_values, :feed
     def initialize(*enums)
       @__enums__ = enums
       @__iterated__ = 0
@@ -5770,6 +5772,8 @@ class Enumerator
   # --- Enumerator::Product -----------------------------------------------
   # The cartesian product of its arguments, leftmost varying slowest.
   class Product < Enumerator
+    # MRI undefines external iteration for it (enumerator.c, Init_Enumerator).
+    undef_method :next, :next_values, :peek, :peek_values, :feed
     # MRI accepts anything here -- the arguments are only required to answer
     # #each_entry at the point #each actually walks them, which is what lets
     # Product wrap a plain Object that defines each_entry and nothing else.
