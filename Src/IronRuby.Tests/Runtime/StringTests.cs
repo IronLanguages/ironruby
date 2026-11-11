@@ -556,5 +556,24 @@ true
 []
 ");
         }
+
+        /// <summary>
+        /// start_with?(regexp) matches at the start only (rb_reg_start_with_p): a match further on is no match, and leaves
+        /// $~ nil rather than set to it.
+        /// </summary>
+        public void String_StartWithRegexpLastMatch1() {
+            TestOutput(@"
+p 'hello'.start_with?(/hel/), $&
+p 'hello'.start_with?(/el/), $~
+p 'hello'.start_with?(/x/), $~
+", @"
+true
+""hel""
+false
+nil
+false
+nil
+");
+        }
     }
 }

@@ -3945,6 +3945,11 @@ namespace IronRuby.Builtins {
             if (self.GetByteCount() < prefix) {
                 return false;
             }
+                    // MRI matches at the start only (rb_reg_start_with_p), so a match further on is no
+                    // match, and $~ is nil after it rather than that match.
+                    if (match != null) {
+                        scope.GetInnerMostClosureScope().CurrentMatch = null;
+                    }
             for (int i = 0; i < prefix; i++) {
                 if (self.GetByte(i) != subString.GetByte(i)) {
                     return false;

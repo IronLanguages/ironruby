@@ -1296,6 +1296,7 @@ namespace IronRuby.Tests {
                 String_CompareInverse1,
                 String_EachLineParagraphChomp1,
                 String_UptoCopies1,
+                String_StartWithRegexpLastMatch1,
             };
         }
     }
