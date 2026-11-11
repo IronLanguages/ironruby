@@ -3331,7 +3331,7 @@ namespace IronRuby.Runtime {
         /// </summary>
         [Emitted]
         public static bool CanRescue(RubyScope/*!*/ scope, Exception/*!*/ exception) {
-            return CanRescueCore(scope, exception, false);
+            return CanRescueCore(scope, exception, false, null);
         }
 
         /// <summary>
@@ -3341,10 +3341,54 @@ namespace IronRuby.Runtime {
         /// Not so an ensure clause, which may end the exception with a jump and leave it in $!.
         /// </summary>
         public static bool CanRescueDeferTrace(RubyScope/*!*/ scope, Exception/*!*/ exception) {
-            return CanRescueCore(scope, exception, true);
+            return CanRescueCore(scope, exception, true, null);
         }
 
-        private static bool CanRescueCore(RubyScope/*!*/ scope, Exception/*!*/ exception, bool deferTrace) {
+        /// <summary>
+        /// CanRescue of the handler around a body's rescue and else clauses (Body.TransformExceptionHandling).
+        /// <paramref name="handled"/> is the exception the rescue clauses ran for, if they ran: an exception they raise is raised
+        /// while $! is that one, which is its cause (MRI), but the clauses' finally block has restored $! by the time this runs.
+        /// Kernel#raise has decided the cause of its own exceptions already; this is for those C# threw - `1/0', `nil.foo', a
+        /// rescue class list that is not a class (`rescue 42').
+        /// </summary>
+        public static bool CanRescueAfterClauses(RubyScope/*!*/ scope, Exception/*!*/ exception, Exception handled) {
+            return CanRescueCore(scope, exception, false, handled);
+        }
+
+        /// <summary>
+        /// The filter around an ensure clause's statements (Body.TransformExceptionHandling), compiled: an exception leaving them
+        /// gets $! - the exception the clause runs for, if any - as its cause unless it has one, before the clause's finally block
+        /// restores $! (it is an exception raised while $! was that one). Not a jump: a StackUnwinder has no cause. Always false,
+        /// and so the filter lets the exception through.
+        /// </summary>
+        public static bool SetCauseLeavingEnsure(RubyScope/*!*/ scope, Exception/*!*/ exception) {
+            try {
+                if (!(exception is StackUnwinder) && !RubyUtils.IsReclaimingFiber) {
+                    var data = RubyExceptionData.GetInstance(exception);
+                    if (!data.HasCause) {
+                        data.TrySetCause(scope.RubyContext.CurrentException);
+                    }
+                }
+            } catch (Exception) {
+                // the cause is what the next frame decides
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// The same for the interpreter, which has no exception filters: it catches the exception and throws it again. The catch
+        /// is the first Ruby frame the exception reaches, so it takes the exception's backtrace too, as CanRescue would have:
+        /// thrown again, the exception's own trace would show the frame a second time (and every frame below it a frame lower).
+        /// </summary>
+        public static bool SetCauseLeavingInterpretedEnsure(RubyScope/*!*/ scope, Exception/*!*/ exception) {
+            SetCauseLeavingEnsure(scope, exception);
+            if (!(exception is StackUnwinder) && !RubyUtils.IsReclaimingFiber) {
+                RubyExceptionData.GetInstance(exception).CaptureExceptionTrace(scope);
+            }
+            return false;
+        }
+
+        private static bool CanRescueCore(RubyScope/*!*/ scope, Exception/*!*/ exception, bool deferTrace, Exception handled) {
             // A CLR finally may replace the reclaim signal with an ordinary exception.
             // That still belongs to a discarded stack and must not enter a Ruby rescue.
             if (RubyUtils.IsReclaimingFiber) {
@@ -3375,7 +3419,12 @@ namespace IronRuby.Runtime {
             // those (and any re-raise of an already-raised exception) alone.
             // One lookup, not two: the data lives in Exception.Data, whose store is a linear scan.
             var data = RubyExceptionData.GetInstance(exception);
-            data.TrySetCause(scope.RubyContext.CurrentException);
+            if (handled == null || handled == exception) {
+                data.TrySetCause(scope.RubyContext.CurrentException);
+            } else if (data.TrySetCause(handled)) {
+                // the cause is exposed to Ruby code (Exception#cause), and this is the frame that rescued it
+                RubyExceptionData.ResolveCatchSite(handled);
+            }
 
             scope.RubyContext.CurrentException = exception;
             data.CaptureExceptionTrace(scope, deferTrace);
@@ -3492,8 +3541,9 @@ namespace IronRuby.Runtime {
             // The CLR takes an exception thrown in a filter for a filter that turned the exception down - here, for "goes through".
             // These say "catch it" instead.
             try {
-                // A refinement of Module#=== would be what CRuby's rescue calls (IronRuby's CompareException does not see one yet).
-                if (IsDeepOrOverflow(exception) || TracePoint.ActiveEvents != 0 || scope.RubyContext.HasRefinements) {
+                // A refinement of `===' is what the rescue clauses call (CompareException), which CannotMatch does not see.
+                if (IsDeepOrOverflow(exception) || TracePoint.ActiveEvents != 0 ||
+                    scope.RubyContext.HasRefinements && scope.RubyContext.IsRefinedMethodName("===")) {
                     return false;
                 }
                 var data = RubyExceptionData.TryGetInstance(exception);
@@ -3602,14 +3652,26 @@ namespace IronRuby.Runtime {
                 throw RubyExceptions.CreateTypeError("class or module required for rescue clause");
             }
 
+            // A refinement of `===' active where the rescue clause is written is what MRI's rescue calls (check_match calls
+            // `===' with the refinements of the clause's cref); the comparison site has no scope to see one.
+            bool refined = context.HasRefinements && context.IsRefinedMethodName("===") && IsRefinedHere(scope, classObject, "===");
+
             // Module#=== only tests the class of the exception; any other #=== is handed the exception, and may keep it
             var exception = context.CurrentExceptionNoExpose;
-            if (exception != null && RubyExceptionData.IsCatchSitePending(exception) && !IsBuiltinCaseEquality(context, (RubyModule)classObject)) {
+            if (exception != null && RubyExceptionData.IsCatchSitePending(exception) && (refined || !IsBuiltinCaseEquality(context, (RubyModule)classObject))) {
                 RubyExceptionData.ResolveCatchSite(exception);
             }
 
-            var site = comparisonStorage.GetCallSite("===");
-            bool result = IsTrue(site.Target(site, classObject, exception));
+            bool result;
+            if (refined) {
+                var refinedSite = context.GetOrCreateSendSite<Func<CallSite, RubyScope, object, object, object>>(
+                    "===", new RubyCallSignature(1, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf)
+                );
+                result = IsTrue(refinedSite.Target(refinedSite, scope, classObject, exception));
+            } else {
+                var site = comparisonStorage.GetCallSite("===");
+                result = IsTrue(site.Target(site, classObject, exception));
+            }
             if (result) {
                 // the frames the exception unwound to get here are no part of what is raised from here on
                 Precompiled.PrecompiledFrames.ForgetLeft();

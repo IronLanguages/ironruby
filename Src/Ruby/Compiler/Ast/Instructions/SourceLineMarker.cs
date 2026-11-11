@@ -36,22 +36,44 @@ namespace IronRuby.Compiler.Ast {
 
     /// <summary>
     /// A statement's line. Nothing to the interpreter; in a compiled <see cref="CompiledFrameExpression"/>, the frame's
-    /// line is set to it.
+    /// line is set to it. Reduced, it is the line of a loop the interpreter has compiled (the only code that reduces it: every
+    /// compiled Ruby lambda is a CompiledFrameExpression, and saved code drops it), kept for the interpreted frame the loop
+    /// runs in: in the frame's line record, which a statement of a loop has in a variable of the frame (a null check and a
+    /// store per statement, the record looked up once per run of the loop), or through PrecompiledFrames.SetLoopLine.
     /// </summary>
     internal sealed class SourceLineMarker : ReducibleEmptyExpression, IInstructionProvider {
         private static readonly SourceLineMarker[]/*!*/ _cache = new SourceLineMarker[4096];
 
         private readonly int _line;
+        private readonly MSA.Expression _loopLineVariable;
+        private readonly bool _inEnsure;
 
-        private SourceLineMarker(int line) {
+        private SourceLineMarker(int line, MSA.Expression loopLineVariable, bool inEnsure) {
             _line = line;
+            _loopLineVariable = loopLineVariable;
+            _inEnsure = inEnsure;
         }
 
         internal static SourceLineMarker/*!*/ Create(int line) {
-            if ((uint)line < (uint)_cache.Length) {
-                return _cache[line] ??= new SourceLineMarker(line);
+            return Create(line, null, false);
+        }
+
+        /// <param name="loopLineVariable">The frame's line record variable of the loop the statement is in, if any.</param>
+        /// <param name="inEnsure">The statement is in an ensure clause of its frame (see <see cref="InEnsure"/>).</param>
+        internal static SourceLineMarker/*!*/ Create(int line, MSA.Expression loopLineVariable, bool inEnsure) {
+            if (loopLineVariable == null && !inEnsure && (uint)line < (uint)_cache.Length) {
+                return _cache[line] ??= new SourceLineMarker(line, null, false);
             }
-            return new SourceLineMarker(line);
+            return new SourceLineMarker(line, loopLineVariable, inEnsure);
+        }
+
+        /// <summary>
+        /// The statement is in an ensure clause, which compiled code runs as a finally block - a funclet of the method - and the
+        /// frame's record says so with the line negated (PrecompiledFrames.Frame.InEnsure). On .NET 9 and later an exception
+        /// thrown there has the method twice in its own trace, the funclet and the method's body, which the backtrace leaves out.
+        /// </summary>
+        internal bool InEnsure {
+            get { return _inEnsure; }
         }
 
         internal int Line {
@@ -61,6 +83,24 @@ namespace IronRuby.Compiler.Ast {
         public void AddInstructions(LightCompiler/*!*/ compiler) {
             // the interpreter has the sequence point
         }
+
+        public override MSA.Expression/*!*/ Reduce() {
+            if (_loopLineVariable == null) {
+                return Ast.Call(_SetLoopLine, Ast.Constant(_line));
+            }
+            // if (record == null) record = PrecompiledFrames.GetLoopLine(); record.Line = line;
+            return Ast.Block(
+                Ast.IfThen(Ast.Equal(_loopLineVariable, Ast.Constant(null, typeof(PrecompiledFrames.LoopLine))),
+                    Ast.Assign(_loopLineVariable, Ast.Call(_GetLoopLine))
+                ),
+                Ast.Assign(Ast.Field(_loopLineVariable, _LineField), Ast.Constant(_line)),
+                Ast.Empty()
+            );
+        }
+
+        private static readonly System.Reflection.MethodInfo/*!*/ _SetLoopLine = typeof(PrecompiledFrames).GetMethod(nameof(PrecompiledFrames.SetLoopLine));
+        private static readonly System.Reflection.MethodInfo/*!*/ _GetLoopLine = typeof(PrecompiledFrames).GetMethod(nameof(PrecompiledFrames.GetLoopLine), Type.EmptyTypes);
+        private static readonly System.Reflection.FieldInfo/*!*/ _LineField = typeof(PrecompiledFrames.LoopLine).GetField(nameof(PrecompiledFrames.LoopLine.Line));
     }
 
     /// <summary>
@@ -138,7 +178,7 @@ namespace IronRuby.Compiler.Ast {
             protected override MSA.Expression/*!*/ VisitExtension(MSA.Expression/*!*/ node) {
                 var marker = node as SourceLineMarker;
                 if (marker != null) {
-                    return Ast.Call(_frames, _SetLine, _depth, Ast.Constant(marker.Line));
+                    return Ast.Call(_frames, _SetLine, _depth, Ast.Constant(marker.InEnsure ? -marker.Line : marker.Line));
                 }
                 if (node is CompiledFrameExpression) {
                     return node;

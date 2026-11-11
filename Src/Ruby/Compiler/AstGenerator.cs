@@ -201,6 +201,14 @@ namespace IronRuby.Compiler.Ast {
                 set { _parentLoop = value; }
             }
 
+            /// <summary>
+            /// The variable of the frame's line record for the loop's statements, once the interpreter has compiled the loop
+            /// (see SourceLineMarker), and the variable scope it belongs to: statements of another scope - a class body
+            /// written in the loop - are not the loop's frame's.
+            /// </summary>
+            public MSA.Expression LoopLineVariable;
+            public ScopeBuilder LoopLineScope;
+
             public LoopScope(MSA.Expression/*!*/ redoVariable, MSA.Expression/*!*/ resultVariable, MSA.LabelTarget/*!*/ breakLabel, MSA.LabelTarget/*!*/ continueLabel) {
                 Assert.NotNull(redoVariable, resultVariable, breakLabel, continueLabel);
                 _redoVariable = redoVariable;
@@ -1167,10 +1175,16 @@ namespace IronRuby.Compiler.Ast {
         }
 
         internal MSA.Expression/*!*/ AddDebugInfo(MSA.Expression/*!*/ expression, SourceSpan location) {
+            var loop = _currentLoop;
+            return AddDebugInfo(expression, location, (loop != null && loop.LoopLineScope == CurrentScope) ? loop.LoopLineVariable : null);
+        }
+
+        /// <param name="loopLineVariable">The line record variable of the loop the statement is in (see LoopScope.LoopLineVariable).</param>
+        internal MSA.Expression/*!*/ AddDebugInfo(MSA.Expression/*!*/ expression, SourceSpan location, MSA.Expression loopLineVariable) {
             if (_document != null) {
                 // TODO: should we add clearance for non-goto expressions?
                 var sequencePoint = Ast.DebugInfo(_document, location.Start.Line, location.Start.Column, location.End.Line, location.End.Column);
-                return Ast.Block(sequencePoint, SourceLineMarker.Create(location.Start.Line), expression);
+                return Ast.Block(sequencePoint, SourceLineMarker.Create(location.Start.Line, loopLineVariable, CurrentScope.EnsureDepth > 0), expression);
             } else {
                 return expression;
             }

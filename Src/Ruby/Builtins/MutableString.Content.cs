@@ -21,7 +21,6 @@ using System.Text;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace IronRuby.Builtins {
@@ -125,19 +124,16 @@ namespace IronRuby.Builtins {
             /// <summary>
             /// The hash of a long string whose characters are all ASCII, from those characters as bytes
             /// (in an encoding that <see cref="RubyEncoding.AsciiRoundTrips"/>, the string's own
-            /// bytes; in any other, its characters narrowed): Marvin - the seeded hash of
-            /// String.GetHashCode, with its random per-process key - over the bytes, two to a
-            /// UTF-16 unit, and an odd byte at the end mixed in with HashCode's (also seeded) mixer.
-            /// That reads half the bytes the hash of the UTF-16 characters did. (An ASCII string of
-            /// even length hashes as the one string of UTF-16 units its bytes spell, which is not
-            /// ASCII: a pair that collides whatever the seed, but only ever a pair.) Every equal string - bytes or
-            /// characters, US-ASCII, UTF-8 or BINARY, each #eql? the others, and a CLR string #eql? to
-            /// any of them - hashes the same.
+            /// bytes; in any other, its characters narrowed): SipHash-1-3 under a random per-process
+            /// key (<see cref="SipHash"/>), as CRuby hashes strings. That reads half the bytes the hash
+            /// of the UTF-16 characters did, and SipHash-1-3 is about 1.5 times as fast per byte as
+            /// Marvin, String.GetHashCode's seeded hash, which every other string still uses. Every
+            /// equal string - bytes or characters, US-ASCII, UTF-8 or BINARY, each #eql? the others,
+            /// and a CLR string #eql? to any of them - hashes the same.
             /// </summary>
             internal static int HashAsciiBytes(ReadOnlySpan<byte> ascii) {
                 Debug.Assert(ascii.Length >= AsciiByteHashMinLength);
-                int hash = String.GetHashCode(MemoryMarshal.Cast<byte, char>(ascii));
-                return (ascii.Length & 1) == 0 ? hash : HashCode.Combine(hash, ascii[ascii.Length - 1]);
+                return SipHash.Hash32(ascii);
             }
 
             /// <summary>

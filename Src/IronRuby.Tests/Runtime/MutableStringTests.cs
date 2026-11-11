@@ -1547,6 +1547,58 @@ namespace IronRuby.Tests {
         }
 
         /// <summary>
+        /// SipHash-1-3, the hash of long ASCII strings (#89), against a plain implementation with the number of rounds as
+        /// parameters, which itself gives the SipHash paper's SipHash-2-4 test vectors (key 00..0f, message 00..len-1).
+        /// </summary>
+        public void MutableString_SipHash1() {
+            static ulong Rotl(ulong x, int b) => (x << b) | (x >> (64 - b));
+            static ulong Reference(byte[] message, ulong k0, ulong k1, int c, int d) {
+                ulong v0 = 0x736f6d6570736575UL ^ k0, v1 = 0x646f72616e646f6dUL ^ k1, v2 = 0x6c7967656e657261UL ^ k0, v3 = 0x7465646279746573UL ^ k1;
+                void Rounds(int count) {
+                    for (int r = 0; r < count; r++) {
+                        v0 += v1; v1 = Rotl(v1, 13); v1 ^= v0; v0 = Rotl(v0, 32);
+                        v2 += v3; v3 = Rotl(v3, 16); v3 ^= v2;
+                        v0 += v3; v3 = Rotl(v3, 21); v3 ^= v0;
+                        v2 += v1; v1 = Rotl(v1, 17); v1 ^= v2; v2 = Rotl(v2, 32);
+                    }
+                }
+                var padded = new byte[(message.Length / 8 + 1) * 8];
+                Array.Copy(message, padded, message.Length);
+                padded[padded.Length - 1] = (byte)message.Length;
+                for (int i = 0; i < padded.Length; i += 8) {
+                    ulong m = 0;
+                    for (int j = 7; j >= 0; j--) {
+                        m = (m << 8) | padded[i + j];
+                    }
+                    v3 ^= m;
+                    Rounds(c);
+                    v0 ^= m;
+                }
+                v2 ^= 0xff;
+                Rounds(d);
+                return v0 ^ v1 ^ v2 ^ v3;
+            }
+
+            var bytes = new byte[300];
+            for (int i = 0; i < bytes.Length; i++) {
+                bytes[i] = (byte)i;
+            }
+            byte[] Prefix(int length) => bytes.AsSpan(0, length).ToArray();
+            const ulong key0 = 0x0706050403020100UL, key1 = 0x0f0e0d0c0b0a0908UL;
+            Assert(Reference(Prefix(0), key0, key1, 2, 4) == 0x726fdb47dd0e0e31UL);
+            Assert(Reference(Prefix(1), key0, key1, 2, 4) == 0x74f839c593dc67fdUL);
+            Assert(Reference(Prefix(2), key0, key1, 2, 4) == 0x0d6c8009d9a94f5aUL);
+            Assert(Reference(Prefix(3), key0, key1, 2, 4) == 0x85676696d7fb7e2dUL);
+
+            var random = new Random(89);
+            for (int length = 0; length <= 300; length++) {
+                ulong k0 = (ulong)random.NextInt64(), k1 = (ulong)random.NextInt64();
+                Assert(SipHash.Hash13(Prefix(length), key0, key1) == Reference(Prefix(length), key0, key1, 1, 3));
+                Assert(SipHash.Hash13(Prefix(length), k0, k1) == Reference(Prefix(length), k0, k1, 1, 3));
+            }
+        }
+
+        /// <summary>
         /// Ruby's side of the hash (#89): #eql? strings hash the same - ASCII in UTF-8, BINARY and
         /// US-ASCII, empty strings in any encoding, a slice from an offset and an equal fresh string,
         /// and a CLR string and the String of the same characters, which are #eql? as well.

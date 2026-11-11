@@ -15,6 +15,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -1104,8 +1105,7 @@ namespace IronRuby.Builtins {
 
         /// <summary>
         /// Integer.sqrt: the largest Integer whose square is at most n (n converted with #to_int).
-        /// Below 2**62 it is a double's square root, corrected to the exact floor; above, Newton's
-        /// iteration from 1 &lt;&lt; ((bit_length + 1) / 2), as the prelude did.
+        /// Below 2**62 it is a double's square root, corrected to the exact floor; above, <see cref="SqrtRem"/>.
         /// </summary>
         [RubyMethod("sqrt", RubyMethodAttributes.PublicSingleton)]
         public static object Sqrt(ConversionStorage<IntegerValue>/*!*/ integerCast, BinaryOpStorage/*!*/ newStorage, RubyClass/*!*/ self, object n) {
@@ -1121,44 +1121,68 @@ namespace IronRuby.Builtins {
             if (number.Sign < 0) {
                 throw CreateDomainError(newStorage, "Numerical argument is out of domain - \"isqrt\"");
             }
-            if (number < (BigInteger.One << 62)) {
+            long bits = number.GetBitLength();
+            if (bits <= 62) {
                 return Protocols.Normalize(LongSqrt((long)number));
             }
-
-            // Newton's method from above: x stays at or above the root until it settles on it.
-            BigInteger x = SqrtSeed(number);
-            while (true) {
-                BigInteger next = (x + number / x) >> 1;
-                if (next >= x) {
-                    return Protocols.Normalize(x);
-                }
-                x = next;
+            if (bits <= SmallSqrtBits) {
+                return Protocols.Normalize((BigInteger)SmallSqrt((UInt128)number));
             }
+            return Protocols.Normalize(SqrtRem(number, out _));
         }
+
+        // The largest operand SmallSqrt takes: its root is below 2**53, so a double holds it and the double's root is off
+        // by no more than a few units.
+        private const int SmallSqrtBits = 106;
 
         /// <summary>
-        /// Where Integer.sqrt's Newton iteration starts for n &gt;= 2**62: the double's root of the leading ~1000 bits,
-        /// raised by more than that root's rounding error so that it is above the true root, and shifted back. It is
-        /// already right to ~50 bits, so 2**70 settles in one division instead of seven. The shifts are counted in a
-        /// long and made in Int32-sized steps, so no bit count can wrap them (.NET 8's BigInteger could pass 2**32 bits;
-        /// .NET 9 and later cap it at about 2**31).
+        /// The integer square root s of n &gt;= 0, and the remainder n - s*s, by Zimmermann's "Karatsuba square root" (Brent
+        /// and Zimmermann, Modern Computer Arithmetic, algorithm 1.12 SqrtRem; GMP's mpz_sqrtrem is the same): with
+        /// n = A*B**2 + a1*B + a0 for B = 2**k, the root of A and its remainder r' give the next k bits of the root in
+        /// one division, q = (r'*B + a1) / (2*root(A)), and n's remainder in one squaring of q; at most one correction
+        /// follows. k is chosen so that A &gt;= B**2/4, which is what bounds the correction to one. Each level divides
+        /// numbers about half the size of the level above, so the whole costs about one division of n's size by half
+        /// of it, where Newton's iteration made several (and .NET 11's division is slow).
         /// </summary>
-        public static BigInteger SqrtSeed(BigInteger n) {
+        public static BigInteger SqrtRem(BigInteger n, out BigInteger remainder) {
+            Debug.Assert(n.Sign >= 0);
             long bits = n.GetBitLength();
-            long halfShift = (bits > 1000) ? (bits - 1000) / 2 : 0;
-            double leading = Math.Sqrt((double)ShiftRight(ShiftRight(n, halfShift), halfShift));
-            BigInteger seed = new BigInteger(leading * (1.0 + 1e-15)) + BigInteger.One;
-            for (long shift = halfShift; shift > 0; shift -= Int32.MaxValue) {
-                seed <<= (int)Math.Min(shift, Int32.MaxValue);
+            if (bits <= SmallSqrtBits) {
+                UInt128 value = (UInt128)n;
+                ulong root = SmallSqrt(value);
+                remainder = (BigInteger)(value - (UInt128)root * root);
+                return root;
             }
-            return seed;
+
+            // A = n >> 2k has bits - 2k >= 2k - 1 bits, so A >= B**2/4. bits < 2**31 (BigInteger's limit), so k fits an int.
+            int k = (int)((bits + 1) / 4);
+            BigInteger mask = (BigInteger.One << k) - BigInteger.One;
+            BigInteger a0 = n & mask;
+            BigInteger a1 = (n >> k) & mask;
+            BigInteger topRoot = SqrtRem(n >> (2 * k), out BigInteger topRemainder);
+            BigInteger q = BigInteger.DivRem((topRemainder << k) + a1, topRoot << 1, out BigInteger u);
+            BigInteger result = (topRoot << k) + q;
+            remainder = (u << k) + a0 - q * q;
+            if (remainder.Sign < 0) {
+                remainder += (result << 1) - BigInteger.One;
+                result -= BigInteger.One;
+            }
+            Debug.Assert(remainder.Sign >= 0 && remainder <= (result << 1));
+            return result;
         }
 
-        private static BigInteger ShiftRight(BigInteger value, long shift) {
-            for (; shift > 0; shift -= Int32.MaxValue) {
-                value >>= (int)Math.Min(shift, Int32.MaxValue);
+        // floor(sqrt(n)) for 0 <= n < 2**106 (SmallSqrtBits): the double's root of n, which is off by a few units at most
+        // (n rounds to a double, and the root to an integer), corrected to the exact floor.
+        private static ulong SmallSqrt(UInt128 n) {
+            Debug.Assert(n >> SmallSqrtBits == UInt128.Zero);
+            ulong root = (ulong)Math.Sqrt((double)(ulong)(n >> 64) * 18446744073709551616.0 + (double)(ulong)n);
+            while ((UInt128)root * root > n) {
+                root--;
             }
-            return value;
+            while ((UInt128)(root + 1) * (root + 1) <= n) {
+                root++;
+            }
+            return root;
         }
 
         // floor(sqrt(n)) for 0 <= n < 2**62: the double's root, corrected by one either way where
