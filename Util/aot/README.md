@@ -366,8 +366,9 @@ Where it is built:
   RID-specific publish leaves no `Src/Prism/bin/Release/<tfm>/IronRuby.Prism.dll` for the compiler,
   whose build failed with CS0006 in every release up to 4.0.5). Before archiving, it runs
   `Util/aot/startup-smoke.rb` from the staged tree through its own launchers, with the library and
-  without it: the library ships only if the archive loads it, uses it for all of its files, and
-  prints the same with it. Otherwise it is left out, which costs only the speedup; the log (and on
+  without it: the library ships only if the archive loads it, uses it for all of its files,
+  prints the same with it, and starts faster with it (the best of 5 `ir -e 1` each way).
+  Otherwise it is left out, which costs only the speedup; the log (and on
   GitHub Actions the job summary) says why, or gives `ir -e 1` with and without it. release.yml then
   checks it again from the archive itself. `IR_STARTUP_LIBRARY=0` leaves it out on purpose. Every
   path under the tree that the

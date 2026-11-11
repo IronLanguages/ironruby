@@ -117,7 +117,7 @@ fi
 # prelude, rubygems and the rest - compiled ahead of time against exactly this build and the archive's own copy
 # of the standard library (`ir -e 1` ~17% faster). Building it needs the SDK and runtime of $IR_TFM, running it
 # does not. It ships only if the archive runs Util/aot/startup-smoke.rb the same with it as without it, using
-# it: without the SDK, or if it fails to build or that check, the archive goes without it, which costs only the
+# it, and starts faster with it: without the SDK, or if it fails to build or those checks, the archive goes without it, which costs only the
 # speedup, never a broken download. IR_STARTUP_LIBRARY=0 leaves it out. Made after the launchers are final,
 # because it is checked through them, as a user runs the unpacked archive.
 bin="$STAGE/Src/Console/bin/Release/$IR_TFM"
@@ -183,12 +183,15 @@ if [ -f "$bin/IronRuby.Startup.dll" ]; then
       t=$(now); IR_STARTUP_DLL=none stage_ir -e 1 >/dev/null; echo $(( $(now) - t )) >> "$check/off"
     done
     on=$(sort -n "$check/on" | sed -n 3p) off=$(sort -n "$check/off" | sed -n 3p)
-    # a library that does not make the start faster is only a risk
-    if [ "$on" -lt "$off" ]; then
-      startup_note "startup library used; \`ir -e 1\` $on ms with it, $off ms without (median of 5)"
+    best_on=$(sort -n "$check/on" | sed -n 1p) best_off=$(sort -n "$check/off" | sed -n 1p)
+    times="\`ir -e 1\` $on ms with it, $off ms without (median of 5; best $best_on / $best_off ms)"
+    # A library that does not make the start faster is only a risk. Judged by the best run of each, which a busy
+    # machine disturbs least: on a box at load 30 the medians once had it the other way round.
+    if [ "$best_on" -lt "$best_off" ]; then
+      startup_note "startup library used; $times"
     else
       rm -f "$bin"/IronRuby.Startup*.dll
-      startup_note "no startup library: \`ir -e 1\` took $on ms with it, $off ms without (median of 5)"
+      startup_note "no startup library: it did not make the start faster, $times"
       if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::warning::$NAME ships without the startup library: it did not make the start faster"; fi
     fi
   fi
