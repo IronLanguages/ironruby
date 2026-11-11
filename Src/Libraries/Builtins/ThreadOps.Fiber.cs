@@ -180,9 +180,23 @@ namespace IronRuby.Builtins {
             }
 
             /// <summary>
-            /// Take without spinning, giving up after <paramref name="milliseconds"/>; for the pool.
+            /// Take, giving up after <paramref name="milliseconds"/>; for the pool. It spins first, as
+            /// <see cref="Take"/> does and paused the same way: a program that makes fibers one after
+            /// another hands the parked thread its next fiber within microseconds, and waking it
+            /// from Monitor.Wait instead was most of what a fiber's first resume cost.
             /// </summary>
             internal bool TryTake(int milliseconds, out object message) {
+                if (_count == 0 && _canSpin) {
+                    if (_misses < SpinMissesToPause || ++_pausedTakes >= PausedTakesPerProbe) {
+                        _pausedTakes = 0;
+                        if (Spin()) {
+                            _misses = 0;
+                        } else if (_misses < SpinMissesToPause) {
+                            _misses++;
+                        }
+                    }
+                }
+
                 long deadline = Environment.TickCount64 + milliseconds;
                 while (true) {
                     bool interrupted = false;
