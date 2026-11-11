@@ -397,6 +397,20 @@ namespace IronRuby.Aot {
                 return finder._used.Where(t => !finder._defined.Contains(t)).ToList();
             }
 
+            // a rethrow outside the catch it is in (a block in a catch handler being the one split) could not move either
+            private static readonly LabelTarget Rethrow = Expression.Label("rethrow");
+            private int _catches;
+
+            protected override CatchBlock VisitCatchBlock(CatchBlock node) {
+                _catches++;
+                try { return base.VisitCatchBlock(node); } finally { _catches--; }
+            }
+
+            protected override Expression VisitUnary(UnaryExpression node) {
+                if (node.NodeType == ExpressionType.Throw && node.Operand == null && _catches == 0) _used.Add(Rethrow);
+                return base.VisitUnary(node);
+            }
+
             protected override Expression VisitGoto(GotoExpression node) {
                 _used.Add(node.Target);
                 return base.VisitGoto(node);
