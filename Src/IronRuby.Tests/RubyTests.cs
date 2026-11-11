@@ -975,6 +975,8 @@ namespace IronRuby.Tests {
                 Backtrace_CompiledLoopLine1,
                 Backtrace_CompiledLoopLineFrameReleased1,
                 Enumerator_Copy1,
+                Enumerator_ExternalCursor1,
+                Enumerator_ExternalFiber1,
                 Io_Messages1,
                 Encoding_Misc1,
                 Encoding_List1,

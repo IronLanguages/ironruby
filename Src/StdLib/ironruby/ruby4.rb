@@ -349,6 +349,8 @@ module Enumerable
       self
     end
   end
+  # Enumerator#next walks [...].each_with_index with a cursor while this is the method.
+  ::Enumerator.__iter_cursor_method__(self, :each_with_index)
 
   # Ruby 2.5 gave the predicates an optional pattern, matched with #===.
   # The built-ins only know the block form, and because they are defined on
@@ -5026,10 +5028,12 @@ class Enumerator
   alias :to_s :inspect
 
   # --- external iteration ------------------------------------------------
-  # #next has to suspend `each` half way through, which needs a coroutine.
-  # Fiber is a background thread plus a mailbox here. A native iteration source
-  # is detached from the public enumerator, so dropping the latter can collect
-  # its fiber handle and release the worker.
+  # #next, #peek, #next_values, #peek_values and #feed are C# (Enumerator.cs). They walk a
+  # built-in method over one of its own receivers - Array#each, Hash#each_pair, Integer#times... -
+  # with a cursor, and hand everything else to __iter_slow__ here, which suspends `each` half way
+  # through in a fiber: a background thread plus a mailbox here. A native iteration source is
+  # detached from the public enumerator, so dropping the latter can collect its fiber handle and
+  # release the worker.
   def __iter_fiber__
     @__fiber__ ||= begin
       @__iter_done__ = false
@@ -5047,10 +5051,17 @@ class Enumerator
   end
   private :__iter_fiber__
 
+  # get_next_values: the end is raised once as such, and from then on as a new
+  # StopIteration whose cause is that first one.
   def __iter_stop__
     error = ::StopIteration.new("iteration reached an end")
     error.__set_result__(@__iter_result__)
-    ::Kernel.raise(error)
+    first = @__iter_stop_exc__
+    unless first
+      @__iter_stop_exc__ = error
+      ::Kernel.raise(error)
+    end
+    ::Kernel.raise(error, cause: first)
   end
   private :__iter_stop__
 
@@ -5059,23 +5070,11 @@ class Enumerator
   def __iter_advance__
     return if @__peeked__
     __iter_stop__ if @__iter_done__
-    # The built-in Array#each over an Array needs no fiber: a cursor walks it by
-    # index the way #each would (Enumerator#__ir_array_cursor__ says when).
-    cursor = @__iter_cursor__
-    if cursor.nil? && @__fiber__.nil?
-      cursor = @__iter_cursor__ = __ir_array_cursor__
-      @__iter_started__ = false
-    end
-    return __iter_cursor_advance__(cursor) if cursor
     fiber = __iter_fiber__
     fed = nil
     # A fed value is what the suspended yield returns, so it waits while the
     # fiber has not reached a yield yet.
-    if @__iter_started__
-      fed = @__feed__
-      @__feed__ = nil
-      @__has_feed__ = false
-    end
+    fed = __iter_take_feed__ if @__iter_started__
     @__iter_started__ = true
     begin
       tag, payload = fiber.resume(fed)
@@ -5091,62 +5090,26 @@ class Enumerator
       @__iter_done__ = true
       @__iter_result__ = payload
       @__fiber__ = nil
+      __iter_take_feed__
       __iter_stop__
     end
   end
   private :__iter_advance__
 
-  def __iter_cursor_advance__(cursor)
-    values = __ir_array_cursor_next__(cursor)
-    # false: the iteration belongs to another thread, as a fiber would
-    ::Kernel.raise(::FiberError, "fiber called across threads") if values.equal?(false)
-    if @__iter_started__
-      @__feed__ = nil
-      @__has_feed__ = false
-    end
-    @__iter_started__ = true
-    if values
-      @__peek__ = values
-      @__peeked__ = true
-    else
-      @__iter_done__ = true
-      @__iter_result__ = __ir_array_cursor_source__(cursor)
-      @__iter_cursor__ = nil
-      __iter_stop__
-    end
-  end
-  private :__iter_cursor_advance__
-
-  def next_values
+  # The fiber's half of #next (op 0: the values of the next step, taken), #peek
+  # (op 1: the same values, left for the next #next; the caller copies them) - and
+  # the FiberError of a cursor another thread started (op 2).
+  def __iter_slow__(op)
+    ::Kernel.raise(::FiberError, "fiber called across threads") if op == 2
     __iter_advance__
     values = @__peek__
-    @__peeked__ = false
-    @__peek__ = nil
+    if op == 0
+      @__peeked__ = false
+      @__peek__ = nil
+    end
     values
   end
-
-  def peek_values
-    __iter_advance__
-    @__peek__.dup
-  end
-
-  def next
-    values = next_values
-    values.size <= 1 ? values[0] : values
-  end
-
-  def peek
-    values = peek_values
-    values.size <= 1 ? values[0] : values
-  end
-
-  # The value the *suspended* `yield` inside the source method will return.
-  def feed(value)
-    ::Kernel.raise(::TypeError, "feed value already set") if @__has_feed__
-    @__has_feed__ = true
-    @__feed__ = value
-    nil
-  end
+  private :__iter_slow__
 
   # MRI refuses to copy an enumerator whose external iteration (#next, #peek) is under
   # way; a fresh or finished one copies as a fresh enumerator.
@@ -5158,43 +5121,46 @@ class Enumerator
       ::Kernel.raise(::TypeError, "can't copy execution context")
     end
     __enum_initialize_copy__(other)
-    @__fiber__ = nil
-    @__iter_cursor__ = nil
-    @__iter_done__ = false
-    @__iter_result__ = nil
-    @__iter_started__ = false
-    @__peeked__ = false
-    @__peek__ = nil
-    @__feed__ = nil
-    @__has_feed__ = false
+    __iter_forget__
     self
   end
   private :initialize_copy
 
+  def __iter_forget__
+    __iter_reset__
+    @__fiber__ = nil
+    @__iter_done__ = false
+    @__iter_result__ = nil
+    @__iter_stop_exc__ = nil
+    @__iter_started__ = false
+    @__peeked__ = false
+    @__peek__ = nil
+  end
+  private :__iter_forget__
+
   def __iter_in_progress__
+    # a built-in method walked by a cursor (Enumerator.cs) is under way just as a fiber is
+    cursor = __iter_cursor_in_progress__
+    return cursor unless cursor.nil?
     return false if @__iter_done__ || !(@__iter_started__ || @__peeked__)
-    # an Array walked by a cursor (__iter_advance__) is under way just as a fiber is
-    return true if @__iter_cursor__
     fiber = @__fiber__
     !fiber.nil? && fiber.alive?
   end
   private :__iter_in_progress__
 
+  # enumerator_rewind: the receiver's #rewind first (rb_check_funcall, which finds a
+  # private one too), then the iteration is forgotten.
   def rewind
-    fiber = @__fiber__
-    @__fiber__ = nil
-    @__iter_cursor__ = nil
-    @__iter_done__ = false
-    @__iter_result__ = nil
-    @__peeked__ = false
-    @__peek__ = nil
-    @__feed__ = nil
-    @__has_feed__ = false
-    # Unwind the abandoned fiber so its ensure blocks run and its thread exits.
-    fiber.kill if fiber && fiber.alive?
+    if frozen?
+      ::Kernel.raise(::FrozenError.new("can't modify frozen #{self.class}: #{inspect}", receiver: self))
+    end
     target = (@__generator__ ? nil : __enum_target__)
     receiver = target && target[0]
-    receiver.rewind if receiver && receiver.respond_to?(:rewind)
+    receiver.__send__(:rewind) if receiver && receiver.respond_to?(:rewind, true)
+    fiber = @__fiber__
+    __iter_forget__
+    # Unwind the abandoned fiber so its ensure blocks run and its thread exits.
+    fiber.kill if fiber && fiber.alive?
     self
   end
 
@@ -11098,6 +11064,8 @@ class Struct
     return to_enum(:each) unless block
     __struct_each__(&block)
   end
+  # Enumerator#next walks a struct with a cursor while this is the method.
+  ::Enumerator.__iter_cursor_method__(self, :each)
 
   # each_pair yields one [name, value] array, so that a single-parameter block
   # receives the pair rather than just the name

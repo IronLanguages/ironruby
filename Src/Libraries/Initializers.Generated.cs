@@ -145,7 +145,7 @@ namespace IronRuby.Builtins {
             IronRuby.Builtins.RubyClass def49 = DefineClass("Encoding::Converter", typeof(IronRuby.Builtins.RubyEncodingOps.RubyConverter), 0x0000000F, Context.ObjectClass, LoadEncoding__Converter_Instance, LoadEncoding__Converter_Class, LoadEncoding__Converter_Constants, IronRuby.Builtins.RubyModule.EmptyArray, 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Collections.Generic.IDictionary<System.Object, System.Object>>, IronRuby.Builtins.RubyClass, System.Object, System.Object, System.Object, IronRuby.Builtins.RubyEncodingOps.RubyConverter>(IronRuby.Builtins.RubyEncodingOps.RubyConverter.Create)
             );
-            DefineGlobalClass("Enumerator", typeof(IronRuby.Builtins.Enumerator), 0x0000000F, Context.ObjectClass, LoadEnumerator_Instance, null, null, new IronRuby.Builtins.RubyModule[] {def71}, 
+            DefineGlobalClass("Enumerator", typeof(IronRuby.Builtins.Enumerator), 0x0000000F, Context.ObjectClass, LoadEnumerator_Instance, LoadEnumerator_Class, null, new IronRuby.Builtins.RubyModule[] {def71}, 
                 new Func<IronRuby.Builtins.RubyClass, System.Object, System.String, System.Object[], IronRuby.Builtins.Enumerator>(IronRuby.Builtins.Enumerator.Create)
             );
             IronRuby.Builtins.RubyClass def79 = Context.ExceptionClass = DefineGlobalClass("Exception", typeof(System.Exception), 0x00000007, Context.ObjectClass, LoadException_Instance, LoadException_Class, null, IronRuby.Builtins.RubyModule.EmptyArray, 
@@ -1584,24 +1584,29 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Enumerator, System.Object>(IronRuby.Builtins.Enumerator.GetTarget)
             );
             
-            DefineLibraryMethod(module, "__ir_array_cursor__", 0x52, 
+            DefineLibraryMethod(module, "__iter_cursor_in_progress__", 0x52, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Enumerator, IronRuby.Builtins.Enumerator.ArrayCursor>(IronRuby.Builtins.Enumerator.GetArrayCursor)
+                new Func<IronRuby.Builtins.Enumerator, System.Object>(IronRuby.Builtins.Enumerator.IsCursorInProgress)
             );
             
-            DefineLibraryMethod(module, "__ir_array_cursor_next__", 0x52, 
-                0x00000002U, 
-                new Func<IronRuby.Builtins.Enumerator, IronRuby.Builtins.Enumerator.ArrayCursor, System.Object>(IronRuby.Builtins.Enumerator.ArrayCursorNext)
+            DefineLibraryMethod(module, "__iter_reset__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.Enumerator, System.Object>(IronRuby.Builtins.Enumerator.ResetExternalIteration)
             );
             
-            DefineLibraryMethod(module, "__ir_array_cursor_source__", 0x52, 
-                0x00000002U, 
-                new Func<IronRuby.Builtins.Enumerator, IronRuby.Builtins.Enumerator.ArrayCursor, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.Enumerator.ArrayCursorSource)
+            DefineLibraryMethod(module, "__iter_take_feed__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.Enumerator, System.Object>(IronRuby.Builtins.Enumerator.TakeFeed)
             );
             
             DefineLibraryMethod(module, "each", 0x51, 
                 0x80000000U, 
                 new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, System.Collections.IList, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.Enumerator, System.Object[], System.Object>(IronRuby.Builtins.Enumerator.EachFromCaller)
+            );
+            
+            DefineLibraryMethod(module, "feed", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Enumerator, System.Object, System.Object>(IronRuby.Builtins.Enumerator.Feed)
             );
             
             DefineLibraryMethod(module, "initialize", 0x52, 
@@ -1612,6 +1617,34 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "initialize_copy", 0x52, 
                 0x00000002U, 
                 new Func<IronRuby.Builtins.Enumerator, IronRuby.Builtins.Enumerator, IronRuby.Builtins.Enumerator>(IronRuby.Builtins.Enumerator.InitializeCopy)
+            );
+            
+            DefineLibraryMethod(module, "next", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Builtins.Enumerator, System.Object>(IronRuby.Builtins.Enumerator.Next)
+            );
+            
+            DefineLibraryMethod(module, "next_values", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Builtins.Enumerator, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.Enumerator.NextValues)
+            );
+            
+            DefineLibraryMethod(module, "peek", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Builtins.Enumerator, System.Object>(IronRuby.Builtins.Enumerator.Peek)
+            );
+            
+            DefineLibraryMethod(module, "peek_values", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Builtins.Enumerator, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.Enumerator.PeekValues)
+            );
+            
+        }
+        
+        private static void LoadEnumerator_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__iter_cursor_method__", 0x61, 
+                0x0004000cU, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubyModule, System.String, System.Object>(IronRuby.Builtins.Enumerator.RegisterCursorMethod)
             );
             
         }
