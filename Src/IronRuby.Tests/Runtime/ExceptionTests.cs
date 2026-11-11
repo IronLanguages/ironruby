@@ -1445,6 +1445,27 @@ $log.join(""|"")
         }
 
         /// <summary>
+        /// An interpreted class body that catches an exception gets its backtrace wrong when the frames the exception came out of
+        /// did not catch it, so an exception does not go through a compiled ensure clause without a backtrace while such a body is
+        /// on the stack (RubyExceptionData.CanPassUntraced): the compiled method's ensure clause takes it, as before. The expected
+        /// output is CRuby 4.0's.
+        /// </summary>
+        public void Exception_EnsurePassUntracedModuleBody1() {
+            const string script = @"def bt(e) = e.backtrace.map { |f| f[/:\d+:in '[^']*'/] }.join("","")
+def m5; raise ArgumentError; ensure; $z = 2; end
+def m3; eval ""class ::Foo\n begin\n  m5\n ensure\n  $z = 1\n end\nend""; end
+def top; m3; rescue => e; bt(e); end
+r = []; 30.times { r << top }; r.uniq.join(""|"")
+";
+            const string expected = ":2:in 'Object#m5',:3:in '<class:Foo>',:1:in 'Object#m3',:3:in 'Kernel#eval',:3:in 'Object#m3',:4:in 'Object#top',:5:in 'block in <main>',:5:in 'Integer#times',:5:in '<main>'";
+
+            var interpreting = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = Int32.MaxValue; });
+            AreEqual(interpreting.CreateScriptSourceFromString(script, "pass10.rb", SourceCodeKind.File).Execute().ToString(), expected);
+            var compiling = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = 1; });
+            AreEqual(compiling.CreateScriptSourceFromString(script, "pass10.rb", SourceCodeKind.File).Execute().ToString(), expected);
+        }
+
+        /// <summary>
         /// The walk of the stack below a rescuing frame waits only for an exception Kernel#raise made itself: C# code may keep the
         /// exception it throws and hand it to Ruby code after the frame is gone (Encoding::Converter#last_error is the one convert
         /// threw), and so may a CLR exception thrown again. Their backtraces must keep the callers of the rescuing frame, and no

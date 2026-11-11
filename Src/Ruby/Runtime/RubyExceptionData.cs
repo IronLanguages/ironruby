@@ -319,6 +319,14 @@ namespace IronRuby.Runtime {
                 !HasBuiltinSetBacktrace(context)) {
                 return false;
             }
+            // An interpreted class or module body that catches the exception takes a backtrace that misses or misorders frames
+            // when the frames above it did not catch it (as master does for a body without the ensure clause): the catch here
+            // takes it, as it did before.
+            for (var interpreted = InterpretedFrame.CurrentFrame.Value; interpreted != null; interpreted = interpreted.Parent) {
+                if (RubyStackTraceBuilder.IsModuleBodyName(interpreted.Name)) {
+                    return false;
+                }
+            }
             _passedUntraced = true;
             return true;
         }

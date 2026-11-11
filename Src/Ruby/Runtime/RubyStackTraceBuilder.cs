@@ -187,8 +187,8 @@ namespace IronRuby.Runtime {
             /// </param>
             /// <param name="passed">
             /// What was taken of the trace where the exception went through ensure clauses before any frame took it
-            /// (RubyExceptionData.EnterPassedEnsure): the interpreted frames, the compiled frames' lines and the loops' lines as they
-            /// were before the clauses ran Ruby code, which reuses the records of the frames left. Taken from there, not now.
+            /// (RubyExceptionData.EnterPassedEnsure): the compiled frames' lines and the loops' lines as they were before the clauses
+            /// ran Ruby code, which reuses the records of the frames left. Taken from there, not now.
             /// </param>
             internal CapturedTrace(RubyContext/*!*/ context, Exception/*!*/ exception, StackTrace throwSiteTrace, StackTrace catchSiteTrace,
                 bool isCatchSiteInterpreted, bool deferThrowSite, CapturedTrace passed) {
@@ -201,7 +201,9 @@ namespace IronRuby.Runtime {
                     _throwSiteTrace = throwSiteTrace ?? GetClrStackTrace(exception, NeedsClrFileInfo(context));
                 }
                 if (passed != null) {
-                    InterpretedFrames = passed.InterpretedFrames;
+                    // The interpreted frames are those saved on the exception, which the interpreter adds to as the exception
+                    // leaves each interpreted frame - after the ensure clauses before it have run - and no clause changes.
+                    InterpretedFrames = GetInterpretedFrames(exception);
                     CompiledFrames = passed.CompiledFrames;
                     LoopLines = passed.LoopLines;
                 } else {
@@ -1193,6 +1195,16 @@ namespace IronRuby.Runtime {
                 ToString();
         }
         
+        /// <summary>Whether the encoded name is a class, module or singleton class body's (ModuleDefinition).</summary>
+        internal static bool IsModuleBodyName(string name) {
+            if (name == null || !name.StartsWith(RubyMethodPrefix, StringComparison.Ordinal)) {
+                return false;
+            }
+            int s = RubyMethodPrefix.Length;
+            return String.CompareOrdinal(name, s, "<class:", 0, 7) == 0 || String.CompareOrdinal(name, s, "<module:", 0, 8) == 0 ||
+                String.CompareOrdinal(name, s, "singleton class\u2236", 0, 16) == 0;
+        }
+
         // \u2111\u211c:{method-name}:{line-number}:{unique-id}:{file-name}
         internal static bool TryParseRubyMethodName(ref string methodName, ref string fileName, ref int line) {
             if (methodName != null && methodName.StartsWith(RubyMethodPrefix, StringComparison.Ordinal)) {
