@@ -17,15 +17,15 @@ namespace IronRuby {
         public const string ShortReleaseLevel = "final";
 
         public const string Series = "4.0";
-        public const string DisplayVersion = "4.0.4";
-        public const string DisplayName = "IronRuby 4.0.4";
+        public const string DisplayVersion = "4.0.5";
+        public const string DisplayName = "IronRuby 4.0.5";
 
         // Stays 4.0.0.0 across 4.0.x, so that what was built against one 4.0 release binds
         // to the next; the file version and the display version say which release it is.
         public const string AssemblyVersion = "4.0.0.0";
 
-        public const string AssemblyFileVersion = "4.0.4.0";
-        public const string AssemblyInformationalVersion = "IronRuby 4.0.4";
+        public const string AssemblyFileVersion = "4.0.5.0";
+        public const string AssemblyInformationalVersion = "IronRuby 4.0.5";
 
         public static readonly Version Version = new Version(Major, Minor, Micro);
     }

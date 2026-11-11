@@ -1,9 +1,11 @@
 name: Release
 
-# Binary builds: a self-contained IronRuby for each platform, made by
-# Util/package-release.sh, and for Windows also an installer made from that archive by
-# Util/installer/build-installer.sh. Pushing a tag v* publishes them as a GitHub release (a
-# pre-release while the version has a suffix such as -preview1), with
+# Binary builds: a self-contained IronRuby for each platform and each target framework,
+# made by Util/package-release.sh, and for Windows also an installer made from the net10.0
+# archive by Util/installer/build-installer.sh. net10.0 (LTS) is the main download and keeps
+# the plain names (ironruby-<version>-<rid>.*, and the -setup.exe); net11.0 archives sit
+# beside them as ironruby-<version>-net11-<rid>.*. Pushing a tag v* publishes them all as a
+# GitHub release (a pre-release while the version has a suffix such as -preview1), with
 # Docs/releases/<tag>.md as the notes when there is one; running the workflow by hand, or
 # a pull request that changes the packaging, only keeps them as workflow artifacts.
 # Each published file gets a signed build provenance attestation (actions/attest) in the
@@ -49,18 +51,18 @@ env:
 
 jobs:
   # The pull requests and pushes of ci.yml test net11.0 only; the downloads are built on
-  # net10.0, so a v* tag runs ci.yml's whole net10.0 test set first, and the release job
-  # below publishes nothing unless it passed. (The Release PR, from a release/* branch,
-  # has run it on both frameworks already.)
+  # net10.0 and net11.0, so a v* tag runs ci.yml's whole test set on both first, and the
+  # release job below publishes nothing unless it passed. (The Release PR, from a release/*
+  # branch, has run it on both frameworks already.)
   tests:
-    name: net10.0 tests
+    name: tests
     if: github.event_name == 'push' && github.ref_type == 'tag'
     uses: ./.github/workflows/ci.yml
     with:
-      tfms: net10.0
+      tfms: both
 
   package:
-    name: ${{ matrix.rid }}
+    name: ${{ matrix.rid }} ${{ matrix.tfm }}
     if: github.event_name != 'workflow_dispatch' || inputs.video_for == ''
     runs-on: ${{ matrix.os }}
     # macOS is untested (README, Platforms): a failure there does not hold the release back.
@@ -75,9 +77,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest,  rid: linux-x64, experimental: false }
-          - { os: windows-latest, rid: win-x64,   experimental: false }
-          - { os: macos-latest,   rid: osx-arm64, experimental: true }
+          - { os: ubuntu-latest,  rid: linux-x64, tfm: net10.0, sdk: 10.0.x, experimental: false }
+          - { os: windows-latest, rid: win-x64,   tfm: net10.0, sdk: 10.0.x, experimental: false }
+          - { os: macos-latest,   rid: osx-arm64, tfm: net10.0, sdk: 10.0.x, experimental: true }
+          - { os: ubuntu-latest,  rid: linux-x64, tfm: net11.0, sdk: 11.0.x, experimental: false }
+          - { os: windows-latest, rid: win-x64,   tfm: net11.0, sdk: 11.0.x, experimental: false }
+          - { os: macos-latest,   rid: osx-arm64, tfm: net11.0, sdk: 11.0.x, experimental: true }
     defaults:
       run:
         shell: bash
@@ -110,12 +115,13 @@ jobs:
             git -C dlr apply "../$patch"
           done
 
-      # The DLR multi-targets up to net10.0, so the build needs the .NET 10 SDK; the
-      # release itself targets net10.0 (Util/package-release.sh's IR_TFM).
+      # The DLR multi-targets up to net10.0, so the build needs at least the .NET 10 SDK.
+      # Each job installs its own framework's SDK: the .NET 10 one for net10.0, as for every
+      # release before, and the .NET 11 one for net11.0, which a net11.0 build needs (and
+      # whose runtime the startup library's compiler, Util/aot, runs on).
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: |
-            10.0.x
+          dotnet-version: ${{ matrix.sdk }}
 
       - uses: ruby/setup-ruby@v1
         with:
@@ -175,6 +181,8 @@ jobs:
 
       - name: Package
         working-directory: ironruby
+        env:
+          IR_TFM: ${{ matrix.tfm }}
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             export IR_VERSION="${GITHUB_REF_NAME#v}"
@@ -193,9 +201,11 @@ jobs:
         run: cd ironruby-*-win-x64 && cmd //c ir.cmd Samples/Notepad/test_notepad.rb
 
       # Inno Setup, for the installer: its release from GitHub, pinned by version and by the
-      # SHA-256 GitHub lists for that asset, installed for this job only.
+      # SHA-256 GitHub lists for that asset, installed for this job only. Only the net10.0
+      # archive becomes an installer: there is one, and it installs into C:\IronRuby40-x64
+      # whichever framework it carries.
       - name: Inno Setup
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && matrix.tfm == 'net10.0'
         env:
           INNO_VERSION: 6.7.3
           INNO_SHA256: 9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732
@@ -212,7 +222,7 @@ jobs:
 
       # The installer carries the archive just made, unchanged.
       - name: Installer, from the archive
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && matrix.tfm == 'net10.0'
         working-directory: ironruby
         run: Util/installer/build-installer.sh "$GITHUB_WORKSPACE"/dist/ironruby-*-win-x64.zip
 
@@ -220,7 +230,7 @@ jobs:
       # `igem install rack` from the PATH a new terminal gets, then the uninstaller, which
       # must leave no file and the PATH as it was.
       - name: Install, run and uninstall
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && matrix.tfm == 'net10.0'
         timeout-minutes: 15
         shell: pwsh
         working-directory: dist
@@ -234,8 +244,9 @@ jobs:
       # Signed SLSA build provenance for the archive a tag publishes, with GitHub's own
       # actions/attest, pinned to the commit of its v4.2.2 tag: `gh attestation verify
       # <archive> --repo Largo/ironruby` shows that this workflow built it, from which
-      # commit and in which run. dist/ironruby-<version>-<rid>*.* is the archive, and on
-      # Windows the installer, -setup.exe; not the directory the archive was packed from.
+      # commit and in which run. dist/ironruby-<version>-[net11-]<rid>*.* is the archive, and
+      # on Windows net10.0 the installer, -setup.exe; not the directory the archive was
+      # packed from.
       - name: Attest build provenance
         if: github.event_name == 'push' && github.ref_type == 'tag'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
@@ -244,7 +255,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: ironruby-${{ matrix.rid }}
+          name: ironruby-${{ matrix.rid }}-${{ matrix.tfm }}
           path: |
             dist/*.tar.gz
             dist/*.zip
@@ -333,7 +344,8 @@ jobs:
         with:
           sparse-checkout: Docs/releases
 
-      # ironruby-* only: the archives, not the review stills (the video is not rendered here).
+      # ironruby-* only: the archives of every RID and framework and the installer, not the
+      # review stills (the video is not rendered here). SHA256SUMS lists all of them.
       - uses: actions/download-artifact@v8
         with:
           path: dist

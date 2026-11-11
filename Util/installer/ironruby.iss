@@ -3,8 +3,8 @@
 ; Util/installer/build-installer.sh builds it from the win-x64 release archive that
 ; Util/package-release.sh makes, and installs the archive's tree unchanged:
 ;
-;   Util/installer/build-installer.sh dist/ironruby-4.0.4-win-x64.zip
-;     -> dist/ironruby-4.0.4-win-x64-setup.exe
+;   Util/installer/build-installer.sh dist/ironruby-4.0.5-win-x64.zip
+;     -> dist/ironruby-4.0.5-win-x64-setup.exe
 ;
 ; It installs into C:\IronRuby40-x64 by default, as RubyInstaller installs into
 ; C:\Ruby40-x64: `igem install` writes the gems into the install tree
@@ -18,9 +18,9 @@
 ; included), and the PATH entry.
 ;
 ; build-installer.sh passes these; to run ISCC by hand, pass them the same way:
-;   /DAppVersion=4.0.4           the version, as in the archive's name
-;   /DNumericVersion=4.0.4       its leading numbers, for the setup program's file version
-;   /DSourceDir=C:\...\ironruby-4.0.4-win-x64   the unpacked archive
+;   /DAppVersion=4.0.5           the version, as in the archive's name
+;   /DNumericVersion=4.0.5       its leading numbers, for the setup program's file version
+;   /DSourceDir=C:\...\ironruby-4.0.5-win-x64   the unpacked archive
 
 #ifndef AppVersion
   #error Pass /DAppVersion=<version>, as Util/installer/build-installer.sh does

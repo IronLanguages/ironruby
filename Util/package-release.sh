@@ -4,7 +4,11 @@
 #   Util/package-release.sh linux-x64            # -> dist/ironruby-<version>-linux-x64.tar.gz
 #   Util/package-release.sh win-x64 out          # -> out/ironruby-<version>-win-x64.zip
 #   IR_VERSION=4.0.0-preview1 Util/package-release.sh osx-arm64
+#   IR_TFM=net11.0 Util/package-release.sh linux-x64   # -> dist/ironruby-<version>-net11-linux-x64.tar.gz
 #
+# IR_TFM picks the target framework, and so the .NET runtime the archive carries. The
+# default, net10.0 (LTS), is the main download and keeps the plain name; any other
+# framework is named in the archive's (and its directory's) name, net11.0 as -net11-.
 # The archive keeps the source tree's layout - the launchers at the top, the build in
 # Src/Console/bin/Release/<tfm>, the standard library in Src/StdLib - so ir.sh/ir.cmd,
 # igem, iirb and irubyc work from the unpacked directory exactly as they do in a
@@ -30,9 +34,17 @@ set -euo pipefail
 RID=${1:?usage: Util/package-release.sh RID [OUTDIR]}
 IR_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUT=$(mkdir -p "${2:-dist}" && cd "${2:-dist}" && pwd)
-: "${IR_TFM:=net10.0}"
+DEFAULT_TFM=net10.0
+: "${IR_TFM:=$DEFAULT_TFM}"
 VERSION=${IR_VERSION:-$(sed -n 's/.*DisplayVersion = "\(.*\)";.*/\1/p' "$IR_ROOT/Src/Ruby/CurrentVersion.cs")}
-NAME="ironruby-$VERSION-$RID"
+# Not passed on to what this runs: the checks below must find the build the way the unpacked
+# archive's own launchers do, with no IR_TFM set.
+export -n IR_TFM
+if [ "$IR_TFM" = "$DEFAULT_TFM" ]; then
+  NAME="ironruby-$VERSION-$RID"
+else
+  NAME="ironruby-$VERSION-${IR_TFM%.0}-$RID"
+fi
 STAGE="$OUT/$NAME"
 
 # A release is CI's build: not one from a ../dlr that has fallen behind Build/dlr-patches.
@@ -91,6 +103,21 @@ cp -R "$IR_ROOT/Src/Public" "$STAGE/License"
 case "$RID" in
   win-*) cp -R "$IR_ROOT/Samples" "$STAGE/" ;;
 esac
+
+# The launchers run Src/Console/bin/<config>/net10.0 unless IR_TFM says otherwise. An archive
+# of another framework has only that framework's build, so its launchers default to it.
+if [ "$IR_TFM" != "$DEFAULT_TFM" ]; then
+  for f in ironruby ironruby.cmd Samples/Notepad/notepad.cmd; do
+    [ -f "$STAGE/$f" ] || continue
+    sed -i.bak -e "s/IR_TFM:-$DEFAULT_TFM}/IR_TFM:-$IR_TFM}/g" -e "s/IR_TFM:=$DEFAULT_TFM}/IR_TFM:=$IR_TFM}/" \
+      -e "s/\"IR_TFM=$DEFAULT_TFM\"/\"IR_TFM=$IR_TFM\"/" "$STAGE/$f"
+    rm -f "$STAGE/$f.bak"
+    if grep -q "IR_TFM[:=-]*$DEFAULT_TFM" "$STAGE/$f" || ! grep -q "IR_TFM[:=-]*$IR_TFM" "$STAGE/$f"; then
+      echo "package-release.sh: could not make $IR_TFM the default framework of $f" >&2
+      exit 1
+    fi
+  done
+fi
 
 # The archive carries Microsoft's runtime - .NET, and for Windows also the Windows
 # Desktop runtime with Windows Forms and WPF - so it carries their license and

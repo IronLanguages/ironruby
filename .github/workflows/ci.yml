@@ -5,7 +5,8 @@ name: CI
 #   breakage shows first;
 # - a pull request from a release/* branch (the "Release X.Y.Z" PR), a run by hand
 #   (workflow_dispatch, `tfms` input, both by default) and the gate in release.yml
-#   (workflow_call on a v* tag): net10.0 as well, the LTS the downloads are built on.
+#   (workflow_call on a v* tag, with tfms: both): net10.0 as well. The downloads are built
+#   on both: net10.0, the LTS, is the main one, and net11.0 archives ship beside it.
 on:
   push:
     branches: [master, modernize, 'ci/**']
