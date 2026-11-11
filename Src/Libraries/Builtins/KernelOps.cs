@@ -350,6 +350,7 @@ namespace IronRuby.Builtins {
         public static object ToFloat(UnaryOpStorage/*!*/ toF, object self, object value, [Keywords, Optional]object options) {
             // the options are checked first, even for a Float: Float(1.0, foo: 1) raises
             RubyContext context = toF.Context;
+            bool keywordCall = options != Missing.Value;
             bool raise = (options == Missing.Value) || TakeExceptionOption(context, ref options, Missing.Value, 1);
 
             if (value is double) {
@@ -371,7 +372,7 @@ namespace IronRuby.Builtins {
                     double parsed;
                     return RubyOps.TryConvertKernelFloat(context, str, out parsed) ? (object)parsed : null;
                 }
-                return RubyOps.ConvertKernelFloat(context, str);
+                return RubyOps.ConvertKernelFloat(context, str, keywordCall);
             }
             if (value == null || value is bool) {
                 if (!raise) {
@@ -522,8 +523,9 @@ namespace IronRuby.Builtins {
             var str = value.ConvertToString();
 
             // MRI complains about the string before it complains about the radix, so
-            // Integer("\n", 1) is "invalid value", not "invalid radix".
-            if (!HasIntegerDigits(str)) {
+            // Integer("\n", 1) is "invalid value", not "invalid radix" - but not about an empty one,
+            // whose radix is checked first: Integer("", 1) is "invalid radix", with exception: false too.
+            if (str.Length > 0 && !HasIntegerDigits(str)) {
                 return raise ? throw InvalidIntegerValue(value) : null;
             }
 
