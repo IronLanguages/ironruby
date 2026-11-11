@@ -367,6 +367,7 @@ namespace IronRuby.Tests {
                 RubyInitializersCaching2,
                 RubyInitializersCaching3,
                 RubyAllocators1,
+                NewKeywordsDirect1,
 
                 RubyForLoop1,
                 WhileLoop1,
