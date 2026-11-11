@@ -2394,7 +2394,8 @@ unless defined?(Fiber)
     def initialize(blocking: false, storage: true, &block)
       # what fiber_t_alloc raises; the handle is registered with its FiberCore only once
       Fiber.__err__(::RuntimeError, "cannot initialize twice") if @__state__
-      @__state__ = State.new(self, blocking: blocking, storage: storage, &block)
+      # positional: keywords cost a Hash and a binding of their own on every Fiber.new
+      @__state__ = State.new(self, blocking, storage, &block)
     end
 
     def initialize_copy(other)
@@ -2472,7 +2473,7 @@ unless defined?(Fiber)
 
       # ---- construction ----------------------------------------------------
 
-      def initialize(handle, blocking: false, storage: true, &block)
+      def initialize(handle, blocking, storage, &block)
         Fiber.__err__(::ArgumentError, "tried to create Proc object without a block") unless block
         cur          = State.current
         @block       = block
@@ -2490,8 +2491,9 @@ unless defined?(Fiber)
         @thread      = nil
         @scheduler   = nil
         @root_fiber  = cur.__root_fiber__
-        loc          = (block.source_location rescue nil)
-        @location    = loc ? "#{loc[0]}:#{loc[1]}" : nil
+        # "path:line" of the block, made when #inspect first wants it: making it here was a
+        # quarter of what Fiber.new cost.
+        @location    = nil
       end
 
       # ---- internal accessors (used across fibers of the same group) --------
@@ -2546,7 +2548,12 @@ unless defined?(Fiber)
                 else                  "resumed"
                 end
         id = "%016x" % (__handle__.object_id.abs << 1)
-        @location ? "#<Fiber:0x#{id} #{@location} (#{state})>" : "#<Fiber:0x#{id} (#{state})>"
+        location = @location
+        if location.nil?
+          loc = @block && (@block.source_location rescue nil)
+          location = @location = loc ? "#{loc[0]}:#{loc[1]}" : false
+        end
+        location ? "#<Fiber:0x#{id} #{location} (#{state})>" : "#<Fiber:0x#{id} (#{state})>"
       end
 
       alias :to_s :inspect
