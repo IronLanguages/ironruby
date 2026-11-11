@@ -917,6 +917,14 @@ namespace IronRuby.Runtime.Precompiled {
             return frames.SetLoopLineSlow(frame, 0) ?? new LoopLine();
         }
 
+        /// <summary>
+        /// The loop the record was looked up for has been left: the record no longer holds on to the frame, whose locals it would
+        /// keep alive after the frame returned. It keeps its depth and line, which an exception the loop left reads.
+        /// </summary>
+        public static void LeaveLoopLine(LoopLine/*!*/ record) {
+            record.Frame = null;
+        }
+
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
         private LoopLine SetLoopLineSlow(Microsoft.Scripting.Interpreter.InterpretedFrame frame, int line) {
             if (frame == null) {

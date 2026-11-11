@@ -1119,5 +1119,29 @@ def call_uncaught = (begin; uncaught; rescue => e; lines(e.backtrace[0, 4]); end
             }
             AreEqual(Engine.CreateScriptSourceFromString(script, "t3.rb", SourceCodeKind.File).Execute().ToString(), expected);
         }
+
+        /// <summary>
+        /// The line record of a frame running a loop the interpreter compiled lets go of the frame once the loop is left: it
+        /// kept the frame's locals alive after the method returned (found in review).
+        /// </summary>
+        public void Backtrace_CompiledLoopLineFrameReleased1() {
+            const string script = @"class Big; end
+def build
+  big = Big.new
+  $w = ObjectSpace::WeakMap.new
+  $w[1] = big
+  i = 0
+  while i < 5000; i += 1; end
+  nil
+end
+build
+10.times { GC.start }
+($w.key?(1) && !$w[1].nil?).inspect";
+
+            foreach (int threshold in new[] { Int32.MaxValue, 1 }) {
+                var engine = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = threshold; });
+                AreEqual(engine.CreateScriptSourceFromString(script, "release1.rb", SourceCodeKind.File).Execute().ToString(), "false");
+            }
+        }
     }
 }
