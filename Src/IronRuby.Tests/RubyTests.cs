@@ -1102,6 +1102,7 @@ namespace IronRuby.Tests {
                 Thread_KillBehindRaiseInFiberWait1,
                 Thread_KillBehindRaiseInFiberMailbox1,
                 Thread_KillBeforeFiberMailboxWait1,
+                Thread_RaiseLeavesNoWakeupBehind1,
                 DeepNesting1,
 
                 Scenario_RubyThreads1,

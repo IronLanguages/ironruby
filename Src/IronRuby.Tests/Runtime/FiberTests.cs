@@ -571,6 +571,58 @@ p [r, $rescued&.message, t.status]
         }
 
         /// <summary>
+        /// A Thread#raise that ends a Kernel#sleep leaves nothing behind for the thread's next sleep.
+        /// Thread#raise interrupts the thread and then wakes it through the run signal, for a sleep the
+        /// interrupt cannot reach yet; that wake-up came after the interrupt had ended the sleep often
+        /// enough, and stayed latched: the next sleep returned at once. For a thread that rescued the
+        /// exception it was its own next sleep; for a fiber thread back in the pool it was the sleep of
+        /// whichever fiber - of whichever thread - ran on it next, and that thread ended before it ever
+        /// slept. MRI's wake-up only wakes a thread that is sleeping.
+        /// </summary>
+        public void Thread_RaiseLeavesNoWakeupBehind1() {
+            TestOutput(@"
+require 'ruby4'
+
+woken = 0
+200.times do
+  second = false
+  t = Thread.new do
+    begin
+      sleep
+    rescue RuntimeError
+    end
+    second = true
+    sleep
+  end
+  sleep 0.001 until t.status == 'sleep'
+  t.raise 'boom'
+  deadline = Time.now + 10
+  sleep 0.001 until (second && t.status == 'sleep') || !t.alive? || Time.now > deadline
+  woken += 1 unless t.alive?
+  t.kill
+  t.join
+end
+
+# the same through a pooled fiber thread: the next fiber to run on it sleeps at once
+fiber_woken = 0
+100.times do
+  t = Thread.new do
+    Thread.current.report_on_exception = false
+    Fiber.new { sleep }.resume
+  end
+  deadline = Time.now + 10
+  sleep 0.001 until t.status == 'sleep' || !t.alive? || Time.now > deadline
+  fiber_woken += 1 unless t.alive?
+  t.raise 'boom'
+  t.join(10) rescue nil
+end
+p [woken, fiber_woken]
+", @"
+[0, 0]
+");
+        }
+
+        /// <summary>
         /// Keywords given to Fiber#resume / #transfer reach the fiber's block as keywords and come
         /// back from Fiber.yield as a plain Hash; Fiber.schedule hands them on to the scheduler.
         /// The FiberError messages for resuming a fiber that is resumed or was left by #transfer,

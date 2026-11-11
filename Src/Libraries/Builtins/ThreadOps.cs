@@ -130,7 +130,7 @@ namespace IronRuby.Builtins {
                     return false;
                 }
                 // as RaiseAsyncException does: Kernel#sleep waits on the run signal
-                FromThread(to).Run();
+                FromThread(to).RunForInterrupt();
                 return true;
             }
             private readonly Dictionary<RubySymbol, object> _threadLocalStorage;
@@ -143,7 +143,10 @@ namespace IronRuby.Builtins {
             private volatile bool _inManagedWait;
             private bool _abortOnException;
             private AutoResetEvent _runSignal = new AutoResetEvent(false);
+            // Guarded by _sleepLock, which makes "is it sleeping? then wake it" (Run) and "the sleep is
+            // over; drop a wake-up it did not take" (EndSleep) happen one after the other.
             private bool _isSleeping;
+            private readonly object/*!*/ _sleepLock = new object();
 
             private RubyThreadInfo(Thread thread) {
                 _threadLocalStorage = new Dictionary<RubySymbol, object>();
@@ -500,23 +503,24 @@ namespace IronRuby.Builtins {
                 // on, which would never end.
                 RubyUtils.CheckAsyncException();
                 bool wasWaiting = _inManagedWait;
+                bool wasSleeping = BeginSleep();
                 try {
-                    _isSleeping = true;
+                    // One parked since that look found no sleep to end (RunForInterrupt); one parked
+                    // from now on does.
+                    RubyUtils.CheckAsyncException();
                     _inManagedWait = true;
                     try {
                         _runSignal.WaitOne();
                     } catch (ThreadInterruptedException) {
                         // Thread#kill / Thread#raise nudged us: deliver the parked exception. If there is none
                         // the interrupt was spurious and the sleep simply ends (MRI's sleep is also allowed to
-                        // return early). Both wake us - Run() sets the signal and RaiseAsyncException
-                        // interrupts - so drop the signal the interrupt left latched, or the next sleep
-                        // would return at once.
-                        _runSignal.Reset();
+                        // return early). The RunForInterrupt that follows the interrupt finds the exception
+                        // still parked or not: if it does, the end of the sleep drops its wake-up.
                         _inManagedWait = wasWaiting;
                         RubyUtils.TranslateThreadInterrupt();
                     }
                 } finally {
-                    _isSleeping = false;
+                    EndSleep(wasSleeping);
                     _inManagedWait = wasWaiting;
                 }
             }
@@ -527,26 +531,70 @@ namespace IronRuby.Builtins {
             internal bool Sleep(int milliseconds) {
                 RubyUtils.CheckAsyncException();
                 bool wasWaiting = _inManagedWait;
+                bool wasSleeping = BeginSleep();
                 try {
-                    _isSleeping = true;
+                    RubyUtils.CheckAsyncException();
                     _inManagedWait = true;
                     try {
                         return _runSignal.WaitOne(milliseconds);
                     } catch (ThreadInterruptedException) {
-                        _runSignal.Reset();
                         _inManagedWait = wasWaiting;
                         RubyUtils.TranslateThreadInterrupt();
                         return false;
                     }
                 } finally {
-                    _isSleeping = false;
+                    EndSleep(wasSleeping);
                     _inManagedWait = wasWaiting;
                 }
             }
 
+            // Answers whether the thread was sleeping already: a trap handler run by a sleep's safe point
+            // may sleep in its turn.
+            private bool BeginSleep() {
+                using (new RubyUtils.UninterruptedLock(_sleepLock)) {
+                    bool wasSleeping = _isSleeping;
+                    _isSleeping = true;
+                    return wasSleeping;
+                }
+            }
+
+            /// <summary>
+            /// Ends a sleep, and drops a Run() it did not take. Thread#raise and Thread#kill interrupt
+            /// the thread and then Run() it, for a sleep the interrupt cannot reach yet; a Run() that
+            /// came after the interrupt had ended the sleep stayed latched, and the thread's next sleep
+            /// returned at once - for a fiber thread from the pool, the sleep of another thread's fiber.
+            /// MRI's Thread#wakeup only wakes a thread that is sleeping, and a later sleep is not cut
+            /// short by it either.
+            /// </summary>
+            private void EndSleep(bool wasSleeping) {
+                using (new RubyUtils.UninterruptedLock(_sleepLock)) {
+                    _isSleeping = wasSleeping;
+                    if (!wasSleeping) {
+                        _runSignal.Reset();
+                    }
+                }
+            }
+
             internal void Run() {
-                if (_isSleeping) {
-                    _runSignal.Set();
+                using (new RubyUtils.UninterruptedLock(_sleepLock)) {
+                    if (_isSleeping) {
+                        _runSignal.Set();
+                    }
+                }
+            }
+
+            /// <summary>
+            /// The Run() that follows a Thread#raise / Thread#kill parked for this thread, for a sleep the
+            /// interrupt could not reach (RubyUtils.NudgeThread interrupts only a thread that is already
+            /// waiting). Only while the exception is still parked: once the thread has taken it, the
+            /// sleep it ended is over, and a sleep the thread has gone into since - after rescuing the
+            /// exception - is not this raise's to end.
+            /// </summary>
+            internal void RunForInterrupt() {
+                using (new RubyUtils.UninterruptedLock(_sleepLock)) {
+                    if (_isSleeping && RubyUtils.HasPendingAsyncException(_thread)) {
+                        _runSignal.Set();
+                    }
                 }
             }
 
@@ -892,7 +940,7 @@ namespace IronRuby.Builtins {
             }
 
             RubyUtils.ExitThread(self);
-            info.Run();
+            info.RunForInterrupt();
             return self;
         }
 
@@ -994,7 +1042,7 @@ namespace IronRuby.Builtins {
 
             // Kernel#sleep and Thread.stop use the Ruby run signal. This is race-safe even when
             // the target has announced sleep but has not entered WaitOne yet.
-            info.Run();
+            info.RunForInterrupt();
         }
 
         /// <summary>
