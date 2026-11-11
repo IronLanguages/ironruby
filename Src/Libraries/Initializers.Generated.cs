@@ -10657,7 +10657,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "__fiber_park__", 0x61, 
                 0x00000000U, 
-                new Func<System.Object, System.Object>(IronRuby.Builtins.ThreadOps.ParkFiberThread)
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.ParkFiberThread)
             );
             
             DefineLibraryMethod(module, "__fiber_post__", 0x61, 
@@ -10697,7 +10697,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "__terminating__", 0x61, 
                 0x00000000U, 
-                new Func<System.Object, System.Boolean>(IronRuby.Builtins.ThreadOps.IsTerminating)
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Boolean>(IronRuby.Builtins.ThreadOps.IsTerminating)
             );
             
             DefineLibraryMethod(module, "abort_on_exception", 0x61, 

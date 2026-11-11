@@ -1885,7 +1885,17 @@ namespace IronRuby.Builtins {
             return owner;
         }
 
-        private static volatile bool _terminating;
+        // The runtimes whose program has ended. Per runtime: several share a process (hosting,
+        // IronRuby.Tests), and one that had shut down used to count as the end of every other's
+        // program too - a fiber that finished in another runtime afterwards never handed control
+        // back, and its resumer waited for ever.
+        private static readonly ConditionalWeakTable<RubyContext, object>/*!*/ _terminatingContexts =
+            new ConditionalWeakTable<RubyContext, object>();
+
+        internal static bool IsTerminating(RubyContext/*!*/ context) {
+            object mark;
+            return _terminatingContexts.TryGetValue(context, out mark);
+        }
 
         /// <summary>
         /// True once the program has ended and the remaining threads are being killed. The Fiber
@@ -1893,8 +1903,8 @@ namespace IronRuby.Builtins {
         /// resumed it: that fiber is suspended, and in MRI nothing of it runs again.
         /// </summary>
         [RubyMethod("__terminating__", RubyMethodAttributes.PublicSingleton)]
-        public static bool IsTerminating(object self) {
-            return _terminating;
+        public static bool IsTerminating(RubyContext/*!*/ context, object self) {
+            return IsTerminating(context);
         }
 
         /// <summary>
@@ -1904,7 +1914,7 @@ namespace IronRuby.Builtins {
         /// kill the CLR thread of the fiber that is running, and leave the others parked.
         /// </summary>
         private static void TerminateAllThreads(RubyContext/*!*/ context) {
-            _terminating = true;
+            _terminatingContexts.AddOrUpdate(context, context);
 
             List<Thread> killed = new List<Thread>();
             List<Thread> busy = new List<Thread>();
@@ -1912,6 +1922,12 @@ namespace IronRuby.Builtins {
             foreach (RubyThreadInfo info in RubyThreadInfo.Threads) {
                 Thread thread = info.Thread;
                 if (thread == Thread.CurrentThread || thread == context.MainThread || !info.CreatedFromRuby || !thread.IsAlive) {
+                    continue;
+                }
+
+                // Another runtime's thread: its program has not ended (see _terminatingContexts).
+                RubyContext owner = info.Context;
+                if (owner != null && owner != context) {
                     continue;
                 }
 

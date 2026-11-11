@@ -586,7 +586,7 @@ namespace IronRuby.Builtins {
         /// time, or the program is ending).
         /// </summary>
         [RubyMethod("__fiber_park__", RubyMethodAttributes.PublicSingleton)]
-        public static object ParkFiberThread(object self) {
+        public static object ParkFiberThread(RubyContext/*!*/ context, object self) {
             Thread current = Thread.CurrentThread;
             IronRuby.StandardLibrary.Threading.RubyMutex.ReleaseLocksOf(current);
             // A Thread#raise that reached the fiber as it finished belongs to the fiber now running
@@ -609,7 +609,7 @@ namespace IronRuby.Builtins {
 
             FiberWorker worker = _fiberWorker ?? (_fiberWorker = new FiberWorker(current));
             using (new RubyUtils.UninterruptedLock(_idleFiberWorkers)) {
-                if (_terminating || _idleFiberWorkers.Count >= MaxIdleFiberWorkers) {
+                if (IsTerminating(context) || _idleFiberWorkers.Count >= MaxIdleFiberWorkers) {
                     return null;
                 }
                 info.IsIdleFiberWorker = true;
