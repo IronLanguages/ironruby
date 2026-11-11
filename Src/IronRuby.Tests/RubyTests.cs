@@ -1269,6 +1269,7 @@ namespace IronRuby.Tests {
                 Integer_OutOfFloatRange1,
                 BasicObject_EqualIdentity1,
                 Kernel_ConversionKeywordEntry1,
+                Integer_BignumBitsSlice1,
             };
         }
     }

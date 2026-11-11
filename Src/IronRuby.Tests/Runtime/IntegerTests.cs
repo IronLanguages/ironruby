@@ -1536,5 +1536,37 @@ mine [""5""] {exception: false}
 NoMethodError
 ");
         }
+
+        /// <summary>
+        /// Integer#[offset, size] on a Bignum reads up to 62 bits straight from its two's complement bytes (ClrInteger.ExtractBits);
+        /// a negative value's sign extends past its last byte. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Integer_BignumBitsSlice1() {
+            TestOutput(@"
+vals = [2**64, -(2**64), 2**70 + 12345, -(2**70 + 12345), 2**63, -(2**63) - 1, 2**127 - 1, -(2**127), 2**2040 + 7, -(2**2040) + 5, 2**2050 - 1, -(2**2050), 0xDEADBEEFCAFEBABE1234567890ABCDEF, -0xDEADBEEFCAFEBABE1234567890ABCDEF]
+sum = 0
+n = 0
+vals.each do |v|
+  [0, 1, 7, 8, 9, 31, 32, 63, 64, 65, 100, 127, 128, 2040, 2047, 2048, 2100, 2**31 - 1].each do |o|
+    [1, 2, 3, 7, 8, 31, 32, 33, 61, 62, 63, 64, 0, -1].each do |s|
+      r = v[o, s]
+      n += 1
+      sum = (sum * 31 + r) % (2**61 - 1)
+    end
+  end
+end
+puts n, sum
+p (2**70 + 12345)[2, 3], (-(2**70 + 12345))[2, 3], (2**70)[69, 2], (-(2**70))[69, 2], (-(2**70))[100, 62], (2**70)[2**31 - 1, 5]
+", @"
+3528
+634082703501885368
+6
+1
+2
+2
+4611686018427387903
+0
+");
+        }
     }
 }
