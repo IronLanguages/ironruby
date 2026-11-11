@@ -3497,11 +3497,13 @@ namespace IronRuby.Runtime {
                 return PassEnsureWithoutCurrentException;
             }
 
+            // `raise ""message""' makes a RuntimeError that no #new has marked handled: CanRescue would only mark it (IsHandledInPlace)
             var data = RubyExceptionData.TryGetInstance(exception);
-            if (data == null || !data.Handled ||
+            if (data == null || !(data.Handled || frameDepth >= 0 && RubyExceptionData.IsHandledInPlace(scope.RubyContext, exception)) ||
                 !(data.HasBacktrace || data.RaiseBacktrace != null || frameDepth >= 0 && data.CanPassUntraced(scope, frameDepth))) {
                 return null;
             }
+            data.Handled = true;
 
             data.TrySetCause(scope.RubyContext.CurrentException);
             // the ensure clause will run Ruby code before an outer frame's rescue clauses are matched (see RescuePassMayTest)

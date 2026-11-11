@@ -1466,6 +1466,43 @@ r = []; 30.times { r << top }; r.uniq.join(""|"")
         }
 
         /// <summary>
+        /// An ensure clause that calls a block - a block literal, a block passed (&amp;:to_s), a yield, a zsuper, a define_method
+        /// with a block - has a jump of the DLR's out of it (the label a break from the block returns through), which the DLR's
+        /// FlowControlRewriter makes a catch and a `throw' again of the exception: its CLR trace then has the frame twice, so the
+        /// exception does not go through such a clause without a backtrace (Body.GotoFinder). And `raise ""message""', which no
+        /// #new marks handled, does go through the other ensure clauses. Each case is run 40 times, so that the methods are
+        /// compiled. The expected output is CRuby 4.0's.
+        /// </summary>
+        public void Exception_EnsurePassUntracedJumps1() {
+            const string script = @"def bt(e) = e.backtrace.map { |f| f[/:\d+:in '[^']*'/] }.join("","")
+class B; def s; end; def take(&b) = b; end
+class C < B
+  def s; raise ArgumentError, ""a""; ensure; super; end
+  def amp; raise ArgumentError, ""a""; ensure; take(&:to_s); end
+  def dm; raise ArgumentError, ""a""; ensure; Class.new.send(:define_method, :zz) { }; end
+  def blk; raise ArgumentError, ""a""; ensure; [1].each { }; end
+  def yld; raise ArgumentError, ""a""; ensure; yield; end
+  def str; raise ""a""; ensure; $z = 1; end
+  def str_exposed; raise ""a""; ensure; $seen = bt($!); end
+end
+def run(m); C.new.send(m) { }; rescue => e; bt(e); end
+r = []
+[:s, :amp, :dm, :blk, :yld, :str, :str_exposed].each { |m| seen = []; 40.times { seen << run(m) }; r << ""#{m} #{seen.uniq.join("" / "")}"" }
+r << $seen
+r.join(""|"")
+";
+            const string expected = "s :4:in 'C#s',:12:in 'Object#run',:14:in 'block (2 levels) in <main>',:14:in 'Integer#times',:14:in 'block in <main>',:14:in 'Array#each',:14:in '<main>'|amp :5:in 'C#amp',:12:in 'Object#run',:14:in 'block (2 levels) in <main>',:14:in 'Integer#times',:14:in 'block in <main>',:14:in 'Array#each',:14:in '<main>'|dm :6:in 'C#dm',:12:in 'Object#run',:14:in 'block (2 levels) in <main>',:14:in 'Integer#times',:14:in 'block in <main>',:14:in 'Array#each',:14:in '<main>'|blk :7:in 'C#blk',:12:in 'Object#run',:14:in 'block (2 levels) in <main>',:14:in 'Integer#times',:14:in 'block in <main>',:14:in 'Array#each',:14:in '<main>'|yld :8:in 'C#yld',:12:in 'Object#run',:14:in 'block (2 levels) in <main>',:14:in 'Integer#times',:14:in 'block in <main>',:14:in 'Array#each',:14:in '<main>'|str :9:in 'C#str',:12:in 'Object#run',:14:in 'block (2 levels) in <main>',:14:in 'Integer#times',:14:in 'block in <main>',:14:in 'Array#each',:14:in '<main>'|str_exposed :10:in 'C#str_exposed',:12:in 'Object#run',:14:in 'block (2 levels) in <main>',:14:in 'Integer#times',:14:in 'block in <main>',:14:in 'Array#each',:14:in '<main>'|:10:in 'C#str_exposed',:12:in 'Object#run',:14:in 'block (2 levels) in <main>',:14:in 'Integer#times',:14:in 'block in <main>',:14:in 'Array#each',:14:in '<main>'";
+
+            var interpreting = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = Int32.MaxValue; });
+            AreEqual(interpreting.CreateScriptSourceFromString(script, "pass11.rb", SourceCodeKind.File).Execute().ToString(), expected);
+            var compiling = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = 0; });
+            AreEqual(compiling.CreateScriptSourceFromString(script, "pass11.rb", SourceCodeKind.File).Execute().ToString(), expected);
+            var synchronous = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = 1; });
+            AreEqual(synchronous.CreateScriptSourceFromString(script, "pass11.rb", SourceCodeKind.File).Execute().ToString(), expected);
+            AreEqual(Engine.CreateScriptSourceFromString(script, "pass11.rb", SourceCodeKind.File).Execute().ToString(), expected);
+        }
+
+        /// <summary>
         /// The walk of the stack below a rescuing frame waits only for an exception Kernel#raise made itself: C# code may keep the
         /// exception it throws and hand it to Ruby code after the frame is gone (Encoding::Converter#last_error is the one convert
         /// threw), and so may a CLR exception thrown again. Their backtraces must keep the callers of the rescuing frame, and no
