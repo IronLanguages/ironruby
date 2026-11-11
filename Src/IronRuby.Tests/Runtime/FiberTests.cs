@@ -544,8 +544,9 @@ p [r, $rescued&.message, t.status]
                     Volatile.Write(ref go, true);
 
                     if (!kill) {
-                        // the raise stays parked and the take blocks, waiting for its message
-                        while (!(bool)blocked.GetValue(mailbox) || (worker.ThreadState & ThreadState.WaitSleepJoin) == 0) {
+                        // the raise stays parked and the take blocks, waiting for its message (a take that
+                        // throws ends the worker instead, and the asserts below report it)
+                        while (worker.IsAlive && (!(bool)blocked.GetValue(mailbox) || (worker.ThreadState & ThreadState.WaitSleepJoin) == 0)) {
                             Thread.Yield();
                         }
                         mailbox.Post("control");
