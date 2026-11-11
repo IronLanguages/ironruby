@@ -432,18 +432,12 @@ namespace IronRuby.Builtins {
             return Run(() => sys_close(fd), out errno);
         }
 
-        [DllImport("libc", EntryPoint = "ioctl", SetLastError = true)]
-        private static extern int sys_ioctl(int fd, UIntPtr request, byte[] arg);
-
-        [DllImport("libc", EntryPoint = "ioctl", SetLastError = true)]
-        private static extern int sys_ioctl(int fd, UIntPtr request, IntPtr arg);
-
         /// <summary>ioctl(2) with a buffer, or with a plain integer when buffer is null.</summary>
         internal static int Ioctl(int fd, long request, byte[] buffer, long arg, out int errno) {
             errno = 0;
             Marshal.SetLastSystemError(0);
             var req = new UIntPtr(unchecked((ulong)request));
-            int rc = (buffer != null) ? sys_ioctl(fd, req, buffer) : sys_ioctl(fd, req, new IntPtr(arg));
+            int rc = (buffer != null) ? LibcVariadic.Ioctl(fd, req, buffer) : LibcVariadic.Ioctl(fd, req, new IntPtr(arg));
             if (rc < 0) {
                 errno = Marshal.GetLastWin32Error();
             }

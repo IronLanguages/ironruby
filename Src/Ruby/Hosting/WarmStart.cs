@@ -86,12 +86,12 @@ namespace IronRuby.Hosting {
             if (!Int32.TryParse(value, out fd) || fd < 0) {
                 return;
             }
-            fcntl(fd, F_SETFD, FD_CLOEXEC);
+            LibcVariadic.Fcntl(fd, F_SETFD, FD_CLOEXEC);
             _brokerFd = fd;
             _debug = Environment.GetEnvironmentVariable(DebugVariable) != null;
             if (_debug) {
                 // the broker's log, which descriptor 2 stops being once a request is taken over
-                _logFd = fcntl(2, F_DUPFD_CLOEXEC, 3);
+                _logFd = LibcVariadic.Fcntl(2, F_DUPFD_CLOEXEC, 3);
             }
             _startupEnvironment = CaptureEnvironment();
         }
@@ -824,7 +824,6 @@ namespace IronRuby.Hosting {
         [DllImport("libc", SetLastError = true)] private static extern IntPtr write(int fd, byte[] buffer, IntPtr length);
         [DllImport("libc", SetLastError = true)] private static extern int close(int fd);
         [DllImport("libc", SetLastError = true)] private static extern int dup2(int fd, int fd2);
-        [DllImport("libc", SetLastError = true)] private static extern int fcntl(int fd, int cmd, int arg);
         [DllImport("libc")] private static extern int umask(int mask);
         [DllImport("libc")] private static extern int geteuid();
         [DllImport("libc")] private static extern int isatty(int fd);

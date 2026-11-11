@@ -33,8 +33,9 @@ puts "format: #{format("%05.2f|%-3s|%x", 3.14159, "a", 255)}"
 # Methods of the library whose code runs only when called, not at startup: a method compiled wrong fails here, at its
 # first call (a Fiber's block and IO.pipe once threw InvalidProgramException, and the fiber then hung).
 puts "fiber: #{Fiber.new { |x| Fiber.yield(x + 1); :end }.then { |f| [f.resume(1), f.resume, f.alive?] }.inspect}"
-# (what a pipe raises is printed, not raised: the check compares the two runs, and IO.pipe failing on a platform
-# without the library too - macOS has no pipe2 - is not the library's doing)
+# (what a pipe raises is printed, not raised, so that the two runs still compare; release.yml fails the job when either
+# line is not the pipe's or the command's output - macOS's libc has no pipe2, and both raised EntryPointNotFoundException
+# there until the fallback to pipe and fcntl)
 begin
   r, w = IO.pipe
   w.write("piped")
