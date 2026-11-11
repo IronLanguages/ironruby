@@ -6789,6 +6789,7 @@ p calls
 [[:b_call, :o], [:call, :x], [:b_call, :q]]
 ");
         }
+
         /// <summary>
         /// `defined?' in a condition makes no call to #freeze, as in CRuby: only whether the answer is nil counts, also for an
         /// operand of &amp;&amp; or || in a condition. Expected output is CRuby 4.0's.
@@ -6815,7 +6816,51 @@ p r, $c
 ");
         }
 
-
+        /// <summary>
+        /// A method whose first statement is `return ... unless defined?(yield)' - Kernel#then, written as CRuby writes it - is
+        /// still a light frame (MethodDefinition.IsBlockGuard): given a block it makes no scope, and without one the guard makes
+        /// the scope on demand for the enumerator it returns. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Method_LightFrameBlockGuard1() {
+            TestOutput(@"
+require 'ruby4'
+p 5.then { |x| x + 1 }, 5.yield_self { |x| x * 2 }
+e = 5.then
+p e.class, e.size, e.each { |x| x * 3 }
+p 3.method(:then).arity, 3.method(:yield_self).name
+def m = 1.then { |x| return x + 100 }
+p m
+p 2.then { |x| break x * 7 }, [1, 2].then(&:sum), 4.then(&->(v) { v - 1 })
+p 40.times.map { |i| i.then { |v| v * v } }.sum
+begin; 1.then { raise ArgumentError, ""x"" }; rescue => ex; p ex.class; end
+class Opt
+  def each_twice
+    return to_enum(:each_twice) { 2 } unless defined?(yield)
+    yield 1
+    yield 2
+  end
+end
+o = Opt.new
+p o.each_twice.to_a, o.each_twice.size, 40.times.map { s = 0; o.each_twice { |v| s += v }; s }.uniq
+", @"
+6
+10
+Enumerator
+1
+15
+0
+:yield_self
+101
+14
+3
+3
+20540
+ArgumentError
+[1, 2]
+2
+[3]
+");
+        }
 
         /// <summary>
         /// BigDecimal against CRuby 4.0's bigdecimal 4.0.1: a Rational operand of a comparison is expanded as

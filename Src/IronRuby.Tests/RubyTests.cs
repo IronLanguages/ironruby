@@ -1063,6 +1063,7 @@ namespace IronRuby.Tests {
                 Method_LightFrame2,
                 Block_RegisterLocals1,
                 Defined_ConditionNoFreeze1,
+                Method_LightFrameBlockGuard1,
                 BigDecimal_Ruby4_1,
                 BigDecimal_Engine1,
                 BigDecimal_ExponentLimits1,
