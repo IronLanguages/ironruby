@@ -103,6 +103,16 @@ namespace IronRuby.Builtins {
                     }
                 }
 
+                // A message that is already here needs no nudgeable wait, and registering one takes
+                // the process-wide lock on every fiber switch.
+                if (_count != 0) {
+                    using (new RubyUtils.UninterruptedLock(_lock)) {
+                        if (_count != 0) {
+                            return Dequeue();
+                        }
+                    }
+                }
+
                 // A Thread#kill or Thread#raise that comes before the wait has blocked - while the
                 // take spins, say - is not lost (RubyUtils.BeginNudgeableWait): what is parked is
                 // looked at before every Monitor.Wait, and a nudge from then on pulses _lock.
@@ -132,11 +142,7 @@ namespace IronRuby.Builtins {
                             // Raising it instead would leave the message for the next take - a later
                             // Fiber#resume would return at once, with the fiber it resumed still running.
                             if (_count != 0) {
-                                object message = _message;
-                                int count = _count - 1;
-                                _message = (count > 0) ? _overflow.Dequeue() : null;
-                                _count = count;
-                                return message;
+                                return Dequeue();
                             }
                         }
 
@@ -147,6 +153,15 @@ namespace IronRuby.Builtins {
                 } finally {
                     RubyUtils.EndNudgeableWait();
                 }
+            }
+
+            // Called with _lock held and _count != 0.
+            private object Dequeue() {
+                object message = _message;
+                int count = _count - 1;
+                _message = (count > 0) ? _overflow.Dequeue() : null;
+                _count = count;
+                return message;
             }
 
             private void TranslateInterrupt() {
