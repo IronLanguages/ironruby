@@ -28,6 +28,10 @@
  * Its :c_call and :c_return events are the ordinary call's, so while those are traced the
  * ordinary call is made.
  *
+ * So can Class#new, `Point.new(x: 1, y: 2)': where the rule would allocate a plain instance and
+ * call the class's Ruby initialize, and that initialize is a specialized keyword method, the site
+ * allocates the instance and passes the values to the initialize's direct entry (ResolveConstruction).
+ *
  * A receiverless call may call a method of any visibility, so resolving the name on the
  * receiver's class with every visibility allowed is what the call site does too. A call with
  * an explicit receiver (other than `self') resolves the name with only public methods visible,
@@ -100,6 +104,10 @@ namespace IronRuby.Runtime.Jit {
             internal object[] OmittedPositionals;
             // The name resolves to a library method with an entry for this call's shape (LibraryKeywordEntryAttribute).
             internal LibraryKeywordEntry Library;
+            // The name resolves to Class#new and the receiver is this class, which it allocates a plain instance of
+            // (Allocator, or a RubyObject if that is null) before calling Stub, the class's initialize. Null otherwise.
+            internal RubyClass Constructed;
+            internal Func<RubyClass, object> Allocator;
         }
 
         private volatile State _state;
@@ -151,12 +159,14 @@ namespace IronRuby.Runtime.Jit {
             int version = RubyModule.GlobalMethodVersion;
             RubyClass cls = JitRuntime.ClassOf(_context, self);
             State state = _state;
-            if (state == null || state.Class != cls || state.Version != version) {
+            // Receivers of the same class can be different classes, and the class a call of Class#new
+            // constructs is the receiver itself.
+            if (state == null || state.Class != cls || state.Version != version || (state.Constructed != null && state.Constructed != self)) {
                 if (++_misses > MaxMisses) {
                     Off = true;
                     return NoDirect;
                 }
-                _state = state = Resolve(cls, version);
+                _state = state = Resolve(self, cls, version);
                 // what the site is waiting for is this resolution's to give
                 _deadCalls = 0;
                 _undecidedCalls = 0;
@@ -199,6 +209,17 @@ namespace IronRuby.Runtime.Jit {
                     p1 = omitted[0];
                 }
             }
+            RubyClass constructed = state.Constructed;
+            if (constructed != null) {
+                // Class#new: the ordinary call reports its :c_call and :c_return.
+                if (TracePoint.CCallTracing) { return NoDirect; }
+                var allocator = state.Allocator;
+                object instance = (allocator != null) ? allocator(constructed) : new RubyObject(constructed);
+                // An entry that declines (a guard, a deopt) has not run the body: the ordinary call makes an
+                // instance of its own and initializes that one, and this one is garbage nobody has seen.
+                object result = direct(instance, p0, p1, d0, d1, d2);
+                return (result == NoDirect) ? NoDirect : RubyOps.PropagateRetrySingleton(instance, result);
+            }
             return direct(self, p0, p1, d0, d1, d2);
         }
 
@@ -220,7 +241,7 @@ namespace IronRuby.Runtime.Jit {
         /// What <see cref="_name"/> means on an instance of <paramref name="cls"/>, under method
         /// version <paramref name="version"/>, for this site.
         /// </summary>
-        private State/*!*/ Resolve(RubyClass/*!*/ cls, int version) {
+        private State/*!*/ Resolve(object self, RubyClass/*!*/ cls, int version) {
             var state = new State { Class = cls, Version = version };
             try {
                 // Refining the name re-versions the class, so the state is resolved again when it is.
@@ -234,6 +255,16 @@ namespace IronRuby.Runtime.Jit {
                 // inherited m, still public itself: the forwarder's own visibility is what hides it,
                 // and only a lookup that sees nothing but public methods asks about it.
                 var resolved = cls.ResolveMethod(_name, _publicOnly ? PublicOnly : VisibilityContext.AllVisible);
+                if (resolved.Found && resolved.Info is RubyCustomMethodInfo custom && custom.IsInstanceConstructor) {
+                    // Class#new. Marked as a site marks it, for the same reason as a library method below.
+                    using (cls.Context.ClassHierarchyLocker()) {
+                        resolved = cls.ResolveMethodForSiteNoLock(_name, _publicOnly ? PublicOnly : VisibilityContext.AllVisible);
+                    }
+                    if (resolved.Found && resolved.Info is RubyCustomMethodInfo marked && marked.IsInstanceConstructor) {
+                        ResolveConstruction(state, self as RubyClass);
+                    }
+                    return state;
+                }
                 if (resolved.Found && resolved.Info is RubyLibraryMethodInfo) {
                     // A library entry answers from the first call on, so no ordinary site binds the method and marks it
                     // as cached in one; unmarked, a change that copies it (private_class_method, `private :m' in a
@@ -251,42 +282,76 @@ namespace IronRuby.Runtime.Jit {
                 var info = resolved.Found ? resolved.Info as RubyMethodInfo : null;
                 if (info == null) { return state; }
 
-                var stub = info.GetDelegate().Target as JitStub;
-                if (stub == null || stub.Keywords == null) { return state; }
-
-                // The call passes every mandatory positional and, of the optional ones, a leading run;
-                // the rest get their literal defaults here, as the entry would fill them in.
-                var keywords = stub.Keywords;
-                int mandatory = stub.Positional - keywords.OptionalPositionals;
-                if (_positional < mandatory || _positional > stub.Positional || stub.Positional > MaxPositional) { return state; }
-                if (_positional < stub.Positional) {
-                    var omitted = new object[stub.Positional - _positional];
-                    for (int i = 0; i < omitted.Length; i++) {
-                        omitted[i] = keywords.OptionalDefaults[_positional + i - mandatory];
-                    }
-                    state.OmittedPositionals = omitted;
-                }
-
-                // The keywords this call passes must be ones the method's prologue binds without
-                // raising: each a declared one, and every required one among them.
-                var slots = new int[keywords.Count];
-                int matched = 0;
-                for (int j = 0; j < slots.Length; j++) {
-                    slots[j] = Array.IndexOf(_keys, keywords.Symbols[j]);
-                    if (slots[j] >= 0) {
-                        matched++;
-                    } else if (keywords.Required[j]) {
-                        return state;
-                    }
-                }
-                if (matched != _keys.Length) { return state; }
-
-                state.Stub = stub;
-                state.Slots = slots;
+                BindStub(state, info.GetDelegate().Target as JitStub);
             } catch (Exception) {
                 state.Stub = null;
+                state.Constructed = null;
             }
             return state;
+        }
+
+        /// <summary>
+        /// `C.new(k: v)' resolved to Class#new: the call allocates the instance itself and calls C's initialize
+        /// directly, when the rule would build exactly that - a plain instance (RubyClass.TryGetPlainAllocation)
+        /// and a call of the Ruby initialize the class resolves - and the initialize is a specialized keyword method
+        /// that takes this call's shape. The keyword hash is then never made, as for any other direct call.
+        /// </summary>
+        private void ResolveConstruction(State/*!*/ state, RubyClass target) {
+            Func<RubyClass, object> allocator;
+            if (target == null || !target.TryGetPlainAllocation(out allocator)) { return; }
+
+            RubyMemberInfo initializer;
+            // (the class's own runtime's lock, as for the method the site calls)
+            using (target.Context.ClassHierarchyLocker()) {
+                initializer = target.ResolveMethodForSiteNoLock(Symbols.Initialize, VisibilityContext.AllVisible).Info;
+            }
+            var method = initializer as RubyMethodInfo;
+            if (method == null || method.GetType() != typeof(RubyMethodInfo) || method.DefinitionName != Symbols.Initialize) { return; }
+
+            if (BindStub(state, method.GetDelegate().Target as JitStub)) {
+                state.Constructed = target;
+                state.Allocator = allocator;
+            }
+        }
+
+        /// <summary>
+        /// Makes the state call <paramref name="stub"/>'s direct entry if the method is a specialized keyword
+        /// method whose prologue binds this call's arguments without complaint.
+        /// </summary>
+        private bool BindStub(State/*!*/ state, JitStub stub) {
+            if (stub == null || stub.Keywords == null) { return false; }
+
+            // The call passes every mandatory positional and, of the optional ones, a leading run;
+            // the rest get their literal defaults here, as the entry would fill them in.
+            var keywords = stub.Keywords;
+            int mandatory = stub.Positional - keywords.OptionalPositionals;
+            if (_positional < mandatory || _positional > stub.Positional || stub.Positional > MaxPositional) { return false; }
+            object[] omitted = null;
+            if (_positional < stub.Positional) {
+                omitted = new object[stub.Positional - _positional];
+                for (int i = 0; i < omitted.Length; i++) {
+                    omitted[i] = keywords.OptionalDefaults[_positional + i - mandatory];
+                }
+            }
+
+            // The keywords this call passes must be ones the method's prologue binds without
+            // raising: each a declared one, and every required one among them.
+            var slots = new int[keywords.Count];
+            int matched = 0;
+            for (int j = 0; j < slots.Length; j++) {
+                slots[j] = Array.IndexOf(_keys, keywords.Symbols[j]);
+                if (slots[j] >= 0) {
+                    matched++;
+                } else if (keywords.Required[j]) {
+                    return false;
+                }
+            }
+            if (matched != _keys.Length) { return false; }
+
+            state.OmittedPositionals = omitted;
+            state.Stub = stub;
+            state.Slots = slots;
+            return true;
         }
 
         /// <summary>

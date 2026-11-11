@@ -42,5 +42,12 @@ namespace IronRuby.Compiler.Ast {
         internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             return AstUtils.Box(Methods.IsKeywordArgumentsHash.OpCall(AstUtils.Box(_value.TransformRead(gen))));
         }
+
+        // The test is only ever a condition (the separation checks of a keyword prologue, which run on
+        // every call): the Boolean as it is, rather than boxed into a new object for IsTrue to unbox.
+        internal override MSA.Expression/*!*/ TransformReadBoolean(AstGenerator/*!*/ gen, bool positive) {
+            var test = Methods.IsKeywordArgumentsHash.OpCall(AstUtils.Box(_value.TransformRead(gen)));
+            return positive ? test : MSA.Expression.Not(test);
+        }
     }
 }

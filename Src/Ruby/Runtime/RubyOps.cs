@@ -2118,6 +2118,17 @@ namespace IronRuby.Runtime {
             return result;
         }
 
+        /// <summary>
+        /// The same default for a method without **rest: its prologue only reads the hash - whether it
+        /// is keyword arguments, whether it matches the declared keywords, the value of each - and an
+        /// empty one answers all of that without being made anew on every call. The runtime's one
+        /// shared, frozen hash (RubyContext.OmittedKeywordArguments); MRI allocates nothing here either.
+        /// </summary>
+        [Emitted]
+        public static Hash/*!*/ GetOmittedKeywordArguments(RubyScope/*!*/ scope) {
+            return scope.RubyContext.OmittedKeywordArguments;
+        }
+
         // `f(a: x)`, `f(a: x, b: y)` and `f(a: x, b: y, c: z)` with Symbol literals for keys, the
         // usual keyword call: no item array to allocate, and none of the conversions
         // SetHashElement applies to a String or nil key. A repeated key keeps the last value, as

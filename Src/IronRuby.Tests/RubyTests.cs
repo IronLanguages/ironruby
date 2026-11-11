@@ -367,6 +367,7 @@ namespace IronRuby.Tests {
                 RubyInitializersCaching2,
                 RubyInitializersCaching3,
                 RubyAllocators1,
+                NewKeywordsDirect1,
 
                 RubyForLoop1,
                 WhileLoop1,
@@ -383,6 +384,7 @@ namespace IronRuby.Tests {
                 UntilModifier1,
                 WhileModifier2,
                 UntilModifier2,
+                JitGlobals1,
 
                 RangeConditionInclusive1,
                 RangeConditionExclusive1,
@@ -1122,6 +1124,7 @@ namespace IronRuby.Tests {
                 MethodArity_LibraryArguments1,
                 MethodArity_PreludeMethods1,
                 MethodDef_SymbolInBody1,
+                KeywordsOmitted1,
                 ToIntegerConversion1,
                 Kernel_IntegerFloat1,
                 Kernel_FloatOptions1,

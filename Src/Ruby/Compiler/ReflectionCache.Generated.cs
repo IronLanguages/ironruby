@@ -314,6 +314,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _GetMissingConstant;
         public static MethodInfo/*!*/ GetMutableStringBytes { get { return _GetMutableStringBytes ?? (_GetMutableStringBytes = CallInstruction.CacheFunc<IronRuby.Builtins.MutableString, System.Byte[]>(RubyOps.GetMutableStringBytes)); } }
         private static MethodInfo _GetMutableStringBytes;
+        public static MethodInfo/*!*/ GetOmittedKeywordArguments { get { return _GetOmittedKeywordArguments ?? (_GetOmittedKeywordArguments = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, IronRuby.Builtins.Hash>(RubyOps.GetOmittedKeywordArguments)); } }
+        private static MethodInfo _GetOmittedKeywordArguments;
         public static MethodInfo/*!*/ GetParentLocals { get { return _GetParentLocals ?? (_GetParentLocals = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, Microsoft.Scripting.MutableTuple>(RubyOps.GetParentLocals)); } }
         private static MethodInfo _GetParentLocals;
         public static MethodInfo/*!*/ GetParentScope { get { return _GetParentScope ?? (_GetParentScope = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, IronRuby.Runtime.RubyScope>(RubyOps.GetParentScope)); } }

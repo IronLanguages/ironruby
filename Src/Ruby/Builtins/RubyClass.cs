@@ -1711,21 +1711,30 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// True when Class#new makes an instance of this class the way BuildObjectConstructionNoFlow does for a plain Ruby class:
+        /// a RubyObject - <paramref name="allocator"/> null - or an instance of the type generated for a class implementing CLR
+        /// interfaces (one that mixes in Comparable or Enumerable is an IComparable or an IEnumerable, see GetImpliedClrInterface),
+        /// allocated the same way by <paramref name="allocator"/>; and then calls initialize, whatever it is, and nothing else.
+        /// </summary>
+        internal bool TryGetPlainAllocation(out Func<RubyClass, object> allocator) {
+            allocator = null;
+            if (IsSingletonClass || _isUninitializedAllocation || _structInfo != null || !(_isRubyClass || IsObjectClass) || IsException() ||
+                _factories.Length != 0) {
+                return false;
+            }
+
+            Type type = GetUnderlyingSystemType();
+            return type == typeof(object) || type == typeof(RubyObject) || (allocator = RubyTypeDispenser.TryGetObjectAllocator(type)) != null;
+        }
+
+        /// <summary>
         /// The construction BuildObjectConstructionNoFlow builds for a call of Class#new with <paramref name="count"/> arguments and
         /// no block, in the cases it is the allocation of a RubyObject and maybe a call of a Ruby initializer of that arity and
         /// nothing else; null otherwise.
         /// </summary>
         internal ObjectConstruction TryGetObjectConstruction(int count) {
-            if (IsSingletonClass || _isUninitializedAllocation || _structInfo != null || !(_isRubyClass || IsObjectClass) || IsException() ||
-                _factories.Length != 0) {
-                return null;
-            }
-
-            // A RubyObject - or an instance of the type generated for a class implementing CLR interfaces (one that mixes in
-            // Comparable or Enumerable is an IComparable or an IEnumerable, see GetImpliedClrInterface), allocated the same way.
-            Type type = GetUnderlyingSystemType();
-            Func<RubyClass, object> allocator = null;
-            if (type != typeof(object) && type != typeof(RubyObject) && (allocator = RubyTypeDispenser.TryGetObjectAllocator(type)) == null) {
+            Func<RubyClass, object> allocator;
+            if (!TryGetPlainAllocation(out allocator)) {
                 return null;
             }
 
