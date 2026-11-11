@@ -162,7 +162,12 @@ namespace IronRuby.Aot {
             var context = AotHost.CreateContext(out _);
             var compiler = new AotCompiler(context, "IronRuby.Startup", library: true) {
                 OutputDirectory = Path.GetFullPath(outDir), DependencyIds = ids.ToArray(),
-                Root = root, RootFromLibrary = Path.GetRelativePath(host, root)
+                Root = root, RootFromLibrary = Path.GetRelativePath(host, root),
+                // arm64 ReadyToRun code of a method over 1 MB is wrong (AotCompiler.LargeMethodsJittedOver); arm64 code is
+                // at most ~4.4x its IL, so a top level of 128 KB of IL or more is left to the JIT
+                // (IR_AOT_LARGE_JIT=0 compiles them all, to see the check in Crossgen catch it)
+                LargeMethodsJittedOver = r2r && rid.EndsWith("-arm64", StringComparison.Ordinal) &&
+                    Environment.GetEnvironmentVariable("IR_AOT_LARGE_JIT") != "0" ? LargeMethodILBytes : 0
             };
             compiler.Compile(null, files, dll);
             Console.Error.WriteLine($"wrote {dll} ({new FileInfo(dll).Length:N0} bytes, {files.Count} files) in {sw.ElapsedMilliseconds} ms");
@@ -191,6 +196,10 @@ namespace IronRuby.Aot {
             }
             return 0;
         }
+
+        internal const int LargeMethodILBytes = 128 * 1024;
+        // the reach of arm64's adr: a method whose code is longer addresses its read-only data with adrp+add
+        private const long ArmMethodLimit = 1024 * 1024;
 
         // what the saved IL references: IronRuby.Libraries is not among them (library methods are reached through binders)
         private static readonly string[] DependencyNames = { "IronRuby", "Microsoft.Dynamic", "Microsoft.Scripting" };
@@ -254,6 +263,9 @@ namespace IronRuby.Aot {
             var arguments = new List<string> { assembly, "-o", tmp };
             if (framework != null) arguments.AddRange(new[] { "-r", framework + "/*.dll" });
             arguments.AddRange(new[] { "-r", host + "/*.dll", "-r", Path.GetFullPath(outDir) + "/*.dll", "--targetos", os, "--targetarch", arch, "-O" });
+            // arm64: the map says how large each method's code is, which must stay under 1 MB (AotCompiler.LargeMethodsJittedOver)
+            bool arm64 = arch == "arm64";
+            if (arm64) arguments.Add("--map");
             foreach (var a in arguments) psi.ArgumentList.Add(a);
             var sw = System.Diagnostics.Stopwatch.StartNew();
             using var p = System.Diagnostics.Process.Start(psi);
@@ -263,6 +275,20 @@ namespace IronRuby.Aot {
             if (p.ExitCode != 0) {
                 Console.Error.WriteLine("crossgen2 failed on " + assembly + ":\n" + output);
                 return false;
+            }
+            if (arm64) {
+                string map = Path.ChangeExtension(tmp, ".map");
+                var tooLarge = File.ReadLines(map)
+                    .Select(line => System.Text.RegularExpressions.Regex.Match(line, @"^0x[0-9A-F]+ \| 0x([0-9A-F]+) .*\| (\S+)\s+\(MethodWithGCInfo\)"))
+                    .Where(m => m.Success && Convert.ToInt64(m.Groups[1].Value, 16) >= ArmMethodLimit)
+                    .Select(m => m.Groups[2].Value + " (" + Convert.ToInt64(m.Groups[1].Value, 16).ToString("N0") + " bytes)").ToList();
+                File.Delete(map);
+                if (tooLarge.Count > 0) {
+                    File.Delete(tmp);
+                    Console.Error.WriteLine("crossgen2's arm64 code for " + string.Join(", ", tooLarge) + " is over 1 MB, which RyuJIT " +
+                        "gets wrong in a ReadyToRun image (AotCompiler.LargeMethodsJittedOver): no library rather than a broken one");
+                    return false;
+                }
             }
             long before = new FileInfo(assembly).Length;
             File.Move(tmp, assembly, true);

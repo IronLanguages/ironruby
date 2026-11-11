@@ -174,6 +174,11 @@ namespace IronRuby.Aot {
                 _entryPoints.Add(lambda.Name);
                 _entryMethods.Add(method);
                 ExpressionCompiler.CompileToMethod(rewritten, method);
+                // see LargeMethodsJittedOver
+                if (LargeMethodsJittedOver > 0 && method.GetILGenerator().ILOffset >= LargeMethodsJittedOver) {
+                    method.SetImplementationFlags(MethodImplAttributes.AggressiveOptimization);
+                    Count("top levels too large for ReadyToRun code on arm64, left to the JIT (AggressiveOptimization)");
+                }
                 if (Library) _type.CreateType();
                 Console.Error.WriteLine($"compiled {paths[i]} in {sw.ElapsedMilliseconds} ms");
                 if (Environment.GetEnvironmentVariable("IR_AOT_CHECK_BRANCHES") == "1") CheckBranches();
@@ -235,6 +240,17 @@ namespace IronRuby.Aot {
         /// File and class bodies, which run once, keep their ReadyToRun code. IR_AOT_LOOP_JIT=0 turns this off.
         /// </summary>
         public bool LoopMethodsJitted = Environment.GetEnvironmentVariable("IR_AOT_LOOP_JIT") != "0";
+
+        /// <summary>
+        /// A file's top level of at least this many bytes of IL is left to the JIT (AggressiveOptimization: crossgen2 does not
+        /// compile it); 0 compiles every one. For an arm64 library (StartupCommand): RyuJIT's arm64 code for a method over
+        /// 1 MB - ruby4.rb's top level is ~480 KB of IL and 2.1 MB of code - reaches the method's read-only data with
+        /// adrp+add computed as if it knew the method's place in the image, which in a ReadyToRun image it does not: the
+        /// 16-byte constants of its coalesced stores were read from its own instructions (crossgen2 10.0.15 and 11.0.0, osx
+        /// and linux alike; the osx-arm64 archive of 58099b4e died on a Symbol made of them). The JIT at run time knows
+        /// where the method is, and gets it right.
+        /// </summary>
+        public int LargeMethodsJittedOver;
 
         private static bool IsMethodOrBlock(LambdaExpression lambda) {
             // the encoded Ruby frame name: "\u2111\u211c:" + label; file and class bodies are labelled <top (required)>, <main>, <class:X>...
@@ -527,7 +543,9 @@ namespace IronRuby.Aot {
             tb.CreateType();
             string path = Path.Combine(OutputDirectory, name + ".dll");
             ab.Save(path);
-            result = Assembly.LoadFrom(path).GetType("D");
+            // from its bytes, not the file: a loaded file is locked on Windows, and crossgen2's ReadyToRun image of it
+            // (StartupCommand --r2r) must replace it there (UnauthorizedAccessException in 4.0.5's win-x64 package job)
+            result = Assembly.Load(File.ReadAllBytes(path)).GetType("D");
             ExtraAssemblies.Add(path);
             return _persistedDelegates[inMemory] = result;
         }
