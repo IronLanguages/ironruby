@@ -2090,6 +2090,17 @@ namespace IronRuby.Builtins {
                 return MutableString.Create(quoted, RubyEncoding.Ascii);
             }
 
+            if (self.Encoding != RubyEncoding.UTF8 && !self.IsAscii()) {
+                // Outside UTF-8, rb_str_dump writes every non-ASCII byte as \xHH, a multibyte
+                // character as much as an invalid byte. The character representation, which a
+                // string switches to once it is read by character (#length, #inspect), wrote
+                // the character inspect's way ("\x{A4A2}") or, for an invalid byte, the byte
+                // itself.
+                var dumped = MutableString.AppendBinaryRepresentation(new StringBuilder().Append('"'), self.ToByteArray(),
+                    MutableString.Escape.Special | MutableString.Escape.NonAscii, '"').Append('"').ToString();
+                return self.CreateDerived().Append(dumped);
+            }
+
             return self.CreateDerived().Append(GetQuotedStringRepresentation(self, true, '"'));
         }
 

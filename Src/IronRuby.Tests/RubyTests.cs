@@ -1282,6 +1282,7 @@ namespace IronRuby.Tests {
                 Array_Cycle1,
                 Range_Recursive1,
                 Array_JoinRecursive1,
+                String_DumpNonUnicode1,
             };
         }
     }

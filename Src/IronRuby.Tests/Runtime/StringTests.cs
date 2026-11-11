@@ -463,5 +463,28 @@ p [""xyz"".count(""x""), """".count(""x""), ""x"".squeeze, ""xx"".squeeze, ""あ
 [1, 0, ""x"", ""x"", ""あ"", 2, 2]
 ");
         }
+
+        /// <summary>
+        /// String#dump writes a non-ASCII byte of a string outside UTF-8 as \xHH, as MRI's rb_str_dump does. A string
+        /// that had been read by character (#length, #inspect) wrote its characters inspect's way ("\x{A4A2}"), or an
+        /// invalid byte as the byte itself, which made CRuby's test_m17n_comb fail on its own descriptions.
+        /// </summary>
+        public void String_DumpNonUnicode1() {
+            TestOutput(@"
+s = ""\xA4\xA2"".dup.force_encoding('EUC-JP')
+s.length
+puts s.dump
+t = ""\xA1"".dup.force_encoding('EUC-JP')
+t.inspect
+puts t.dump
+u = ""\x82\xA0#{'#'}{\""\\"".dup.force_encoding('Shift_JIS')
+u.size
+puts u.dump
+", @"
+""\xA4\xA2""
+""\xA1""
+""\x82\xA0\#{\""\\""
+");
+        }
     }
 }
