@@ -571,6 +571,155 @@ p [r, $rescued&.message, t.status]
         }
 
         /// <summary>
+        /// A Thread#raise that ends a Kernel#sleep leaves nothing behind for the thread's next sleep.
+        /// Thread#raise interrupts the thread and then wakes it through the run signal, for a sleep the
+        /// interrupt cannot reach yet; that wake-up came after the interrupt had ended the sleep often
+        /// enough, and stayed latched: the next sleep returned at once. For a thread that rescued the
+        /// exception it was its own next sleep; for a fiber thread back in the pool it was the sleep of
+        /// whichever fiber - of whichever thread - ran on it next, and that thread ended before it ever
+        /// slept. MRI's wake-up only wakes a thread that is sleeping.
+        /// </summary>
+        public void Thread_RaiseLeavesNoWakeupBehind1() {
+            TestOutput(@"
+require 'ruby4'
+
+woken = 0
+200.times do
+  second = false
+  t = Thread.new do
+    begin
+      sleep
+    rescue RuntimeError
+    end
+    second = true
+    sleep
+  end
+  sleep 0.001 until t.status == 'sleep'
+  t.raise 'boom'
+  deadline = Time.now + 10
+  sleep 0.001 until (second && t.status == 'sleep') || !t.alive? || Time.now > deadline
+  woken += 1 unless t.alive?
+  t.kill
+  t.join
+end
+
+# the same through a pooled fiber thread: the next fiber to run on it sleeps at once
+fiber_woken = 0
+100.times do
+  t = Thread.new do
+    Thread.current.report_on_exception = false
+    Fiber.new { sleep }.resume
+  end
+  deadline = Time.now + 10
+  sleep 0.001 until t.status == 'sleep' || !t.alive? || Time.now > deadline
+  fiber_woken += 1 unless t.alive?
+  t.raise 'boom'
+  t.join(10) rescue nil
+end
+p [woken, fiber_woken]
+", @"
+[0, 0]
+");
+        }
+
+        /// <summary>
+        /// A Thread#raise that lands in the bookkeeping of a fiber switch - who resumed whom, the
+        /// target's thread - waits until the switch is done. That bookkeeping is Ruby code (ruby4.rb),
+        /// and its every method entry is a safe point: raised in the middle of Fiber#resume, after the
+        /// fiber had been told who resumed it, the exception left a fiber that had never run marked as
+        /// resumed, and the next resume failed with "attempt to resume a resumed fiber (double
+        /// resume)"; raised in the middle of Fiber.yield, after the fiber had let go of its resumer
+        /// but before the resumer had let go of it, the fiber finished by handing control to itself,
+        /// and its thread waited in Fiber#resume for ever. MRI raises the exception once the switch
+        /// is done.
+        /// </summary>
+        public void Fiber_ThreadRaiseInSwitchBookkeeping1() {
+            TestOutput(@"
+require 'ruby4'
+
+errors = Hash.new(0)
+count = 0
+t = Thread.new do
+  Thread.current.report_on_exception = false
+  f = nil
+  Thread.handle_interrupt(RuntimeError => :never) do
+    loop do
+      begin
+        f = Fiber.new { loop { begin; Fiber.yield; rescue RuntimeError; end } } unless f && f.alive?
+        Thread.handle_interrupt(RuntimeError => :immediate) { f.resume }
+      rescue RuntimeError
+      rescue => e
+        errors[""#{e.class}: #{e.message}""] += 1
+        f = nil
+      end
+      count += 1
+    end
+  end
+end
+sleep 0.001 until count > 0
+
+hung = false
+deadline = Time.now + 3
+until hung || Time.now > deadline
+  before = count
+  20.times { t.raise 'boom'; Thread.pass }
+  wait = Time.now + 10
+  sleep 0.001 until count > before || Time.now > wait
+  hung = count == before
+end
+t.kill
+t.join(10)
+p [hung, errors]
+", @"
+[false, {}]
+");
+        }
+
+        /// <summary>
+        /// A fiber thread from the pool belongs to the runtime whose fiber it runs. The pool is the
+        /// process's, and a thread one runtime had parked there kept that runtime as its own when
+        /// another one's fiber took it: the end of the second runtime then left the fiber running
+        /// (its ensure ran only when the first one ended), and the end of the first killed it.
+        /// </summary>
+        [Options(NoRuntime = true)]
+        public void Fiber_PooledThreadBelongsToItsRuntime1() {
+            var first = Ruby.CreateEngine();
+            var second = Ruby.CreateEngine();
+            var log = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            bool secondEnded = false;
+            try {
+                // a fiber of the first runtime finishes, and its thread waits in the pool
+                first.Execute("require 'ruby4'; Fiber.new { 1 }.resume; sleep 0.2");
+
+                var scope = second.CreateScope();
+                scope.SetVariable("log", log);
+                second.Execute(@"
+require 'ruby4'
+$t = Thread.new do
+  Fiber.new do
+    begin
+      sleep
+    ensure
+      log.Enqueue('ensure')
+    end
+  end.resume
+end
+deadline = Time.now + 10
+sleep 0.01 until $t.status == 'sleep' || Time.now > deadline
+", scope);
+                second.Runtime.Shutdown();
+                secondEnded = true;
+                log.Enqueue("second runtime ended");
+            } finally {
+                first.Runtime.Shutdown();
+                if (!secondEnded) {
+                    second.Runtime.Shutdown();
+                }
+            }
+            AssertEquals(String.Join(", ", log), "ensure, second runtime ended");
+        }
+
+        /// <summary>
         /// Keywords given to Fiber#resume / #transfer reach the fiber's block as keywords and come
         /// back from Fiber.yield as a plain Hash; Fiber.schedule hands them on to the scheduler.
         /// The FiberError messages for resuming a fiber that is resumed or was left by #transfer,
