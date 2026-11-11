@@ -10650,6 +10650,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.SetCurrentFiber)
             );
             
+            DefineLibraryMethod(module, "__fiber_hold__", 0x61, 
+                0x00000000U, 
+                new Func<System.Object, System.Int32>(IronRuby.Builtins.ThreadOps.HoldFiberSwitch)
+            );
+            
             DefineLibraryMethod(module, "__fiber_mailbox__", 0x61, 
                 0x00000000U, 
                 new Func<System.Object, IronRuby.Builtins.ThreadOps.FiberMailbox>(IronRuby.Builtins.ThreadOps.CreateFiberMailbox)
@@ -10681,13 +10686,18 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "__fiber_switch__", 0x61, 
-                0x0000000dU, 
-                new Func<IronRuby.Runtime.BlockParam, System.Object, IronRuby.Builtins.ThreadOps.FiberCore, IronRuby.Builtins.ThreadOps.FiberCore, System.Int32, System.Object, System.Boolean, System.Object>(IronRuby.Builtins.ThreadOps.FiberSwitch)
+                0x00000006U, 
+                new Func<System.Object, IronRuby.Builtins.ThreadOps.FiberCore, IronRuby.Builtins.ThreadOps.FiberCore, System.Int32, System.Object, System.Boolean, System.Int32, System.Object>(IronRuby.Builtins.ThreadOps.FiberSwitch)
             );
             
             DefineLibraryMethod(module, "__fiber_take__", 0x61, 
                 0x00000006U, 
                 new Func<System.Object, IronRuby.Builtins.ThreadOps.FiberMailbox, System.Threading.Thread, System.Object>(IronRuby.Builtins.ThreadOps.FiberTake)
+            );
+            
+            DefineLibraryMethod(module, "__fiber_unhold__", 0x61, 
+                0x00000000U, 
+                new Func<System.Object, System.Int32, System.Object>(IronRuby.Builtins.ThreadOps.ReleaseFiberSwitchHold)
             );
             
             DefineLibraryMethod(module, "__set_fiber_owner__", 0x61, 

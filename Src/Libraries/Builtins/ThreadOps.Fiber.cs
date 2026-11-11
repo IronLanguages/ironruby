@@ -712,30 +712,39 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// Hands control from <paramref name="current"/> to <paramref name="target"/>, as FiberCore.Switch,
-        /// and answers the message that brings it back. The block first does the switch's bookkeeping
-        /// in Ruby - who resumed whom, the target's thread (Fiber#resume, Fiber.yield... in ruby4.rb) -
-        /// with interrupts held (RubyUtils.HoldInterrupts) until control is handed over. Every Ruby
-        /// method and block entry in it is a safe point, and a Thread#raise raised at one of them left
-        /// the bookkeeping half done: a fiber that took it in Fiber.yield after letting go of its
-        /// resumer, but before the resumer had let go of it, finished by handing control to itself,
-        /// and its thread waited in Fiber#resume for ever. Held, the exception is parked until the
-        /// switch, which hands it on with control (FiberCore.MakeRunning): MRI raises it once the
-        /// switch is done, too.
+        /// Begins a fiber switch: interrupts are held (RubyUtils.HoldInterrupts) while the switch's
+        /// bookkeeping runs in Ruby - who resumed whom, the target's thread (Fiber#resume,
+        /// Fiber.yield... in ruby4.rb) - until <see cref="FiberSwitch"/> hands control over. Every Ruby
+        /// method entry in the bookkeeping is a safe point, and a Thread#raise raised at one of them
+        /// left it half done: a fiber that took it in Fiber.yield after letting go of its resumer, but
+        /// before the resumer had let go of it, finished by handing control to itself, and its thread
+        /// waited in Fiber#resume for ever. Held, the exception is parked until the switch, which
+        /// hands it on with control (FiberCore.MakeRunning): MRI raises it once the switch is done,
+        /// too. Answers the hold, for __fiber_switch__ - and for __fiber_unhold__, which the caller's
+        /// rescue calls should the bookkeeping fail.
+        /// </summary>
+        [RubyMethod("__fiber_hold__", RubyMethodAttributes.PublicSingleton)]
+        public static int HoldFiberSwitch(object self) {
+            return RubyUtils.HoldInterrupts();
+        }
+
+        [RubyMethod("__fiber_unhold__", RubyMethodAttributes.PublicSingleton)]
+        public static object ReleaseFiberSwitchHold(object self, int hold) {
+            RubyUtils.ReleaseInterrupts(hold);
+            return null;
+        }
+
+        /// <summary>
+        /// Ends the hold <paramref name="hold"/> (<see cref="HoldFiberSwitch"/>) and hands control from
+        /// <paramref name="current"/> to <paramref name="target"/>, as FiberCore.Switch; answers the
+        /// message that brings it back. Nothing between the end of the hold and the handing over is a
+        /// safe point.
         /// </summary>
         [RubyMethod("__fiber_switch__", RubyMethodAttributes.PublicSingleton)]
-        public static object FiberSwitch([NotNull]BlockParam/*!*/ bookkeeping, object self, [NotNull]FiberCore/*!*/ current,
-            [NotNull]FiberCore/*!*/ target, int kind, object payload, bool resumed) {
+        public static object FiberSwitch(object self, [NotNull]FiberCore/*!*/ current, [NotNull]FiberCore/*!*/ target,
+            int kind, object payload, bool resumed, int hold) {
 
-            RubyUtils.HoldInterrupts();
-            try {
-                object blockResult;
-                if (bookkeeping.Yield(out blockResult)) {
-                    return blockResult;
-                }
-            } finally {
-                RubyUtils.ReleaseInterrupts();
-            }
+            RubyUtils.ReleaseInterrupts(hold);
             if (kind == FiberCore.FiberMessage.YieldKind) {
                 payload = FiberCore.PackArguments((RubyArray)payload);
             }

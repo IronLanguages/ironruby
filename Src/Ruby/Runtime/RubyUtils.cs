@@ -2434,17 +2434,20 @@ namespace IronRuby.Runtime {
         /// Holds back everything a safe point delivers on this thread - Thread#raise, Thread#kill, trap
         /// handlers, finalizers - until <see cref="ReleaseInterrupts"/>; it stays parked meanwhile. For
         /// Ruby code that has to run to its end once it has begun: the bookkeeping of a fiber switch
-        /// (ThreadOps.FiberSwitch), which is Ruby code in the prelude and full of safe points. Unlike
-        /// Thread.handle_interrupt it holds back a Thread#kill too, and costs a thread-static
-        /// increment; it must not be held across a wait.
+        /// (ThreadOps.HoldFiberSwitch), which is Ruby code in the prelude and full of safe points.
+        /// Unlike Thread.handle_interrupt it holds back a Thread#kill too, and costs a thread-static
+        /// increment; it must not be held across a wait. Answers what to pass to ReleaseInterrupts.
         /// </summary>
-        public static void HoldInterrupts() {
-            _interruptHolds++;
+        public static int HoldInterrupts() {
+            return _interruptHolds++;
         }
 
-        /// <summary>Ends what <see cref="HoldInterrupts"/> began. Delivers nothing: the caller's next safe point does.</summary>
-        public static void ReleaseInterrupts() {
-            _interruptHolds--;
+        /// <summary>
+        /// Ends what the <see cref="HoldInterrupts"/> that answered <paramref name="depth"/> began, and any
+        /// hold inside it; ending it again does nothing. Delivers nothing: the caller's next safe point does.
+        /// </summary>
+        public static void ReleaseInterrupts(int depth) {
+            _interruptHolds = depth;
         }
 
         private static void CheckAsyncException(bool atBlockingCall, bool killOnly) {
