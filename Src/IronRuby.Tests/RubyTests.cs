@@ -1304,6 +1304,7 @@ namespace IronRuby.Tests {
                 String_UndumpUnicodeEncoding1,
                 Marshal_RangeRecord1,
                 Marshal_LoadedClasses1,
+                Time_NewDstStdZone1,
             };
         }
     }

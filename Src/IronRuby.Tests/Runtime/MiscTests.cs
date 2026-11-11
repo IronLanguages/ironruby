@@ -7109,5 +7109,29 @@ TypeError
 TypeError
 ");
         }
+
+        /// <summary>
+        /// Time.new takes :dst and :std for the zone, as MRI's time_init_args does: a local time, the symbol choosing
+        /// between the two readings of an hour the clocks go back over. They were "can't convert Symbol into an exact
+        /// number", which failed 47 of CRuby's test_time_tz tests.
+        /// </summary>
+        public void Time_NewDstStdZone1() {
+            TestOutput(@"
+local = Time.new(2000, 1, 1, 12, 0, 0)
+p Time.new(2000, 1, 1, 12, 0, 0, :std) == local, Time.new(2000, 1, 1, 12, 0, 0, :dst) == local
+p Time.new(2000, 1, 1, 12, 0, 0, :std).utc?, Time.new(2000, 7, 1, 12, 0, 0, :dst).utc_offset == Time.new(2000, 7, 1, 12, 0, 0).utc_offset
+p((Time.new(2000, 1, 1, 0, 0, 0, :foo) rescue $!))
+p Time.new(2019, 1, 1, 0, 0, 0, 'utc').utc?, Time.new(2019, 1, 1, 0, 0, 0, 'Utc').utc?, (Time.new(2019, 1, 1, 0, 0, 0, 'z') rescue $!.class)
+", @"
+true
+true
+false
+true
+#<TypeError: can't convert Symbol into an exact number>
+true
+true
+ArgumentError
+");
+        }
     }
 }
