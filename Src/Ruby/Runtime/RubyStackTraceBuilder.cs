@@ -37,6 +37,13 @@ namespace IronRuby.Runtime {
         // matched with the innermost one of its name not matched yet.
         private Precompiled.PrecompiledFrames.Frame[] _compiledFrames;
         private int _compiledFrameIndex;
+        // The lines of the interpreted frames that run a loop the interpreter has compiled, by depth (see PrecompiledFrames.SetLoopLine).
+        private Precompiled.PrecompiledFrames.LoopLineInfo[] _loopLines;
+        // An exception's trace: a compiled frame whose ensure clause raised may be there twice (see IsFuncletParent).
+        private bool _isExceptionTrace;
+        // The CLR frame the walk last went by, and whether the compiled frame record matched with it was in an ensure clause.
+        private MethodBase _previousMethod;
+        private bool _previousInEnsure;
         // Frames reported with the source info of the next frame out that has its own: a library
         // method's, and a core method written in Ruby (see IsInternalFile). Innermost first.
         private readonly List<string>/*!*/ _deferredMethodNames = new List<string>();
@@ -76,6 +83,8 @@ namespace IronRuby.Runtime {
             StackTrace throwSiteTrace = GetClrStackTrace(exception, _needsClrFileInfo);
             _interpretedFrames = GetInterpretedFrames(exception);
             SetCompiledFrames(Precompiled.PrecompiledFrames.CaptureLines(true));
+            _loopLines = Precompiled.PrecompiledFrames.CaptureLoopLines();
+            _isExceptionTrace = true;
             AddExceptionBacktrace(throwSiteTrace, catchSiteTrace, isCatchSiteInterpreted);
         }
 
@@ -83,6 +92,8 @@ namespace IronRuby.Runtime {
             : this(captured.Context, captured.Encoding) {
             _interpretedFrames = captured.InterpretedFrames;
             SetCompiledFrames(captured.CompiledFrames);
+            _loopLines = captured.LoopLines;
+            _isExceptionTrace = true;
             if (captured.IsCatchSiteClr) {
                 AddClrCaughtBacktrace(captured.ThrowSiteTrace, captured.CatchSiteTrace);
             } else if (captured.CatchSiteFrames != null) {
@@ -111,7 +122,19 @@ namespace IronRuby.Runtime {
         }
 
         private void AddExceptionBacktrace(StackTrace/*!*/ throwSiteTrace, StackTrace catchSiteTrace, bool isCatchSiteInterpreted) {
-            AddBacktrace(throwSiteTrace.GetFrames(), 0, false);
+            var throwFrames = throwSiteTrace.GetFrames();
+            AddBacktrace(throwFrames, 0, false);
+
+            // A loop the interpreter has compiled (CompiledLoopInstruction) catches in its own DynamicMethod, which the
+            // interpreted frame's Run method called: the throw-site trace ends with that method, not with Run, and the Run frame
+            // below it, which the catch-site walk has next, is the catching frame's own - not one already matched. Skipping it
+            // gave the frame's line to the frame below and lost the outermost one.
+            if (isCatchSiteInterpreted && throwFrames.Length > 0 && !IsInterpreterRunFrame(throwFrames[throwFrames.Length - 1])) {
+                if (catchSiteTrace != null) {
+                    AddBacktrace(catchSiteTrace.GetFrames(), 0, false, false);
+                }
+                return;
+            }
 
             // Compiled trace: contains frames above and including the first Ruby filter/catch site that the exception was caught by:
             if (catchSiteTrace != null) {
@@ -137,6 +160,7 @@ namespace IronRuby.Runtime {
             internal readonly StackTrace CatchSiteTrace;
             internal readonly IList<InterpretedFrameInfo> InterpretedFrames;
             internal readonly Precompiled.PrecompiledFrames.Frame[] CompiledFrames;
+            internal readonly Precompiled.PrecompiledFrames.LoopLineInfo[] LoopLines;
             internal readonly bool IsCatchSiteInterpreted;
             internal readonly bool IsCatchSiteClr;
 
@@ -160,6 +184,7 @@ namespace IronRuby.Runtime {
                 InterpretedFrames = GetInterpretedFrames(exception);
                 // the compiled frames' lines change as they run on, and the frames it has left are reused by the next call:
                 CompiledFrames = Precompiled.PrecompiledFrames.CaptureLines(true);
+                LoopLines = Precompiled.PrecompiledFrames.CaptureLoopLines();
                 CatchSiteTrace = catchSiteTrace;
                 IsCatchSiteInterpreted = isCatchSiteInterpreted;
             }
@@ -216,6 +241,7 @@ namespace IronRuby.Runtime {
                 new List<InterpretedFrameInfo>(InterpretedFrame.CurrentFrame.Value.GetStackTraceDebugInfo()) :
                 null;
             SetCompiledFrames(Precompiled.PrecompiledFrames.CaptureLines(false));
+            _loopLines = Precompiled.PrecompiledFrames.CaptureLoopLines();
 
             AddBacktrace(trace.GetFrames(), skipFrames, false);
         }
@@ -238,8 +264,14 @@ namespace IronRuby.Runtime {
         /// does not.
         /// </summary>
         internal RubyStackTraceBuilder(RubyContext/*!*/ context, InterpretedFrame frame, Precompiled.PrecompiledFrames.Frame[]/*!*/ precompiled,
-            int maxFrames = Int32.MaxValue)
+            Precompiled.PrecompiledFrames.LoopLineInfo[] loopLines, int maxFrames = Int32.MaxValue)
             : this(context) {
+
+            // the depth of each frame in the chain, which the loop lines are kept by
+            int frameDepth = -1;
+            for (var f = frame; f != null && frameDepth < MaxThreadBacktraceDepth; f = f.Parent) {
+                frameDepth++;
+            }
 
             int next = 0;
             for (int depth = 0; (frame != null || next < precompiled.Length) && depth < MaxThreadBacktraceDepth && _trace.Count < maxFrames; depth++) {
@@ -263,12 +295,13 @@ namespace IronRuby.Runtime {
                     var debugInfo = frame.GetDebugInfo(frame.InstructionIndex);
                     if (debugInfo != null) {
                         file = debugInfo.FileName;
-                        line = debugInfo.StartLine;
+                        line = GetLine(debugInfo, loopLines, frameDepth);
                     } else {
                         file = null;
                         line = 0;
                     }
                     frame = frame.Parent;
+                    frameDepth--;
 
                     if (methodName == InterpretedCallSiteName) {
                         continue;
@@ -298,6 +331,15 @@ namespace IronRuby.Runtime {
 
         private const int MaxThreadBacktraceDepth = 10000;
 
+        /// <summary>
+        /// The line of an interpreted frame at <paramref name="depth"/> in its chain: its sequence point's, or - when that is the
+        /// cleared one a loop starts with, and the frame runs the loop compiled - the line of the loop's statement it is at.
+        /// </summary>
+        private static int GetLine(DebugInfo/*!*/ debugInfo, Precompiled.PrecompiledFrames.LoopLineInfo[] loopLines, int depth) {
+            int line = debugInfo.StartLine;
+            return debugInfo.IsClear ? Precompiled.PrecompiledFrames.GetLoopLine(loopLines, depth, line) : line;
+        }
+
         // A frame in the path encoding. Under the C locale (US-ASCII) a frame with a non-ASCII file or method name is its
         // UTF-8 bytes in a BINARY string, as MRI's is and as the path layer hands out such a path (RubyContext.EncodePath):
         // a US-ASCII string of those characters was invalid, and require_relative, caller_locations(0)[0].path and the
@@ -319,6 +361,7 @@ namespace IronRuby.Runtime {
             for (int i = _compiledFrameIndex; i >= 0; i--) {
                 if (String.Equals(_compiledFrames[i].Name, encodedName, StringComparison.Ordinal)) {
                     _compiledFrameIndex = i - 1;
+                    _previousInEnsure = _compiledFrames[i].InEnsure;
                     return _compiledFrames[i].Line;
                 }
             }
@@ -339,7 +382,14 @@ namespace IronRuby.Runtime {
             file = null;
             line = 0;
             var frame = InterpretedFrame.CurrentFrame.Value;
-            for (int depth = 0; frame != null && depth < MaxThreadBacktraceDepth; depth++, frame = frame.Parent) {
+            var loopLines = Precompiled.PrecompiledFrames.CaptureLoopLines();
+            int frameDepth = -1;
+            if (loopLines != null) {
+                for (var f = frame; f != null && frameDepth < MaxThreadBacktraceDepth; f = f.Parent) {
+                    frameDepth++;
+                }
+            }
+            for (int depth = 0; frame != null && depth < MaxThreadBacktraceDepth; depth++, frameDepth--, frame = frame.Parent) {
                 string methodName = frame.Name;
                 if (methodName == InterpretedCallSiteName) {
                     continue;
@@ -350,7 +400,7 @@ namespace IronRuby.Runtime {
                 var debugInfo = frame.GetDebugInfo(frame.InstructionIndex);
                 if (debugInfo != null) {
                     frameFile = debugInfo.FileName;
-                    frameLine = debugInfo.StartLine;
+                    frameLine = GetLine(debugInfo, loopLines, frameDepth);
                 } else {
                     frameFile = null;
                     frameLine = 0;
@@ -475,6 +525,14 @@ namespace IronRuby.Runtime {
                     int line;
                     bool isClrFrame = false;
 
+                    MethodBase previousMethod = _previousMethod;
+                    bool previousInEnsure = _previousInEnsure;
+                    _previousMethod = frame.GetMethod();
+                    _previousInEnsure = false;
+                    if (_isExceptionTrace && previousInEnsure && IsFuncletParent(previousMethod, _previousMethod)) {
+                        continue;
+                    }
+
                     if (_interpretedFrames != null && _interpretedFrameIndex < _interpretedFrames.Count
                         && InterpretedFrame.IsInterpretedFrame(frame.GetMethod())) {
 
@@ -487,7 +545,7 @@ namespace IronRuby.Runtime {
 
                         if (info.DebugInfo != null) {
                             file = info.DebugInfo.FileName;
-                            line = info.DebugInfo.StartLine;
+                            line = GetLine(info.DebugInfo, _loopLines, _interpretedFrames.Count - _interpretedFrameIndex);
                         } else {
                             file = null;
                             line = 0;
@@ -574,6 +632,19 @@ namespace IronRuby.Runtime {
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// On .NET 9 and later (its managed exception handling) an exception thrown from a catch or finally block has the method
+        /// of the block twice in its own trace: the block - a funclet - and the method's body, which called it. A compiled Ruby
+        /// method's ensure clause is such a block, so `def m; raise A; ensure; raise B; end' showed m twice (net8.0 did not, nor
+        /// does a stack walk). The frame right below a frame of the same compiled method whose record says it was in an ensure
+        /// clause (PrecompiledFrames.Frame.InEnsure) is that body. Not just any frame below one of the same method: compiled
+        /// Ruby methods can call themselves with no frame in between.
+        /// </summary>
+        private static bool IsFuncletParent(MethodBase funclet, MethodBase method) {
+            return funclet != null && method != null && method.Name.StartsWith(RubyMethodPrefix, StringComparison.Ordinal) &&
+                (funclet == method || String.Equals(funclet.Name, method.Name, StringComparison.Ordinal) && funclet.DeclaringType == method.DeclaringType);
         }
 
         private static bool IsRubyMethodFrame(StackFrame/*!*/ frame) {

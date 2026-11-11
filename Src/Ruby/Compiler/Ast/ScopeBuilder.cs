@@ -40,6 +40,9 @@ namespace IronRuby.Compiler.Ast {
 
         private readonly AstParameters/*!*/ _hiddenVariables;
 
+        // How many ensure clauses of this scope the statements being transformed are in (see SourceLineMarker.InEnsure).
+        internal int EnsureDepth;
+
         // constant access site cache variables:
         private MSA.ParameterExpression _csCacheVariable;
         private MSA.ParameterExpression _csValueVariable;

@@ -185,7 +185,7 @@ namespace IronRuby.Runtime {
                 return null;
             }
 
-            return new RubyStackTraceBuilder(context, frame, precompiled).RubyTrace;
+            return new RubyStackTraceBuilder(context, frame, precompiled, Precompiled.PrecompiledFrames.SnapshotLoopLines(thread)).RubyTrace;
         }
 
         /// <summary>
@@ -196,7 +196,7 @@ namespace IronRuby.Runtime {
         /// </summary>
         public static MutableString GetCallerFrame(RubyContext/*!*/ context) {
             var trace = new RubyStackTraceBuilder(context, InterpretedFrame.CurrentFrame.Value,
-                Precompiled.PrecompiledFrames.Snapshot(Thread.CurrentThread), 1).RubyTrace;
+                Precompiled.PrecompiledFrames.Snapshot(Thread.CurrentThread), Precompiled.PrecompiledFrames.CaptureLoopLines(), 1).RubyTrace;
             return (trace.Count > 0) ? trace[0] as MutableString : null;
         }
 
@@ -763,6 +763,11 @@ namespace IronRuby.Runtime {
             var newInstanceData = GetInstance(newException);
             
             newInstanceData.Handled = true;
+            // a cause decided for the thrown exception (by a filter it went through: RubyOps.PassEnsure, RescuePassCommit,
+            // SetCauseLeavingEnsure) is the cause of the one Ruby code sees
+            if (instanceData._hasCause && !newInstanceData._hasCause) {
+                newInstanceData.SetCause(instanceData._cause);
+            }
             newInstanceData._backtrace = instanceData._backtrace;
             newInstanceData._capturedTrace = instanceData._capturedTrace;
             newInstanceData._pendingCatchSite = instanceData._pendingCatchSite;

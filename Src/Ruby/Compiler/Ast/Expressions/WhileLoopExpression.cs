@@ -20,6 +20,7 @@ using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Osr;
+using IronRuby.Runtime.Precompiled;
 
 namespace IronRuby.Compiler.Ast {
     using Ast = MSA.Expression;
@@ -69,6 +70,8 @@ namespace IronRuby.Compiler.Ast {
         }
 
         // break, next and redo in the loop's body are jumps to its labels (Break/Next/RedoStatement)
+        private static readonly System.Reflection.MethodInfo/*!*/ _LeaveLoopLine = typeof(PrecompiledFrames).GetMethod(nameof(PrecompiledFrames.LeaveLoopLine));
+
         internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             MSA.Expression resultVariable = gen.CurrentScope.DefineHiddenVariable("#loop-result", typeof(object));
             MSA.Expression redoVariable = gen.CurrentScope.DefineHiddenVariable("#skip-condition", typeof(bool));
@@ -96,7 +99,16 @@ namespace IronRuby.Compiler.Ast {
             MSA.LabelTarget breakLabel = Ast.Label();
             MSA.LabelTarget continueLabel = Ast.Label();
 
+            // the frame's line record while the interpreter runs the loop compiled (SourceLineMarker); an inner loop of the
+            // same frame shares the outer one's
+            var outerLoop = gen.CurrentLoop;
+            bool ownsLoopLine = outerLoop == null || outerLoop.LoopLineScope != gen.CurrentScope;
+            MSA.Expression loopLineVariable = ownsLoopLine ?
+                gen.CurrentScope.DefineHiddenVariable("#loop-line", typeof(PrecompiledFrames.LoopLine)) : outerLoop.LoopLineVariable;
+
             gen.EnterLoop(redoVariable, resultVariable, breakLabel, continueLabel);
+            gen.CurrentLoop.LoopLineVariable = loopLineVariable;
+            gen.CurrentLoop.LoopLineScope = gen.CurrentScope;
             MSA.Expression transformedBody = gen.TransformStatements(_statements, ResultOperation.Ignore);
             MSA.Expression transformedCondition = _condition.TransformCondition(gen, true);
             gen.LeaveLoop();
@@ -180,7 +192,7 @@ namespace IronRuby.Compiler.Ast {
                     // volatile load and a branch while nothing is pending). It carries the loop's
                     // own line, which is where MRI reports an exception raised at a back edge;
                     // without it the frame would show the cleared sequence point (0xFEEFEE).
-                    gen.AddDebugInfo(Ast.Call(RubyUtils.SafePointMethod), Location),
+                    gen.AddDebugInfo(Ast.Call(RubyUtils.SafePointMethod), Location, loopLineVariable),
                     backEdge,
                     AstUtils.Try(
 
@@ -211,6 +223,20 @@ namespace IronRuby.Compiler.Ast {
                 gen.ClearDebugInfo(),
                 AstUtils.Empty(),
             };
+
+            // The frame's line record lets go of the frame once the loop is left - it would keep the frame's locals alive after
+            // it returned - and is looked up again the next time (PrecompiledFrames.LeaveLoopLine). Not when an exception
+            // leaves: the record keeps its line, which the exception's backtrace reads by depth.
+            if (ownsLoopLine) {
+                loop = AstUtils.Try(
+                    loop
+                ).Finally(
+                    AstUtils.IfThen(Ast.NotEqual(loopLineVariable, AstUtils.Constant(null, typeof(PrecompiledFrames.LoopLine))),
+                        Ast.Call(_LeaveLoopLine, loopLineVariable),
+                        Ast.Assign(loopLineVariable, AstUtils.Constant(null, typeof(PrecompiledFrames.LoopLine)))
+                    )
+                );
+            }
 
             // wrap it to try finally that updates RFC state:
             if (!isInnerLoop) {
