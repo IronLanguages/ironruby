@@ -5,30 +5,26 @@
 #   AOT=0 wasm/build.sh           # IL only, Mono's interpreter (40 s build; boot ~5 s, code ~3x slower)
 #
 # DLR_DIR: a DLR checkout with Build/dlr-patches/*.patch applied (default ../dlr-wasm beside
-# the repository; created from ../dlr when missing).
+# the repository; created from ../dlr, at DLR_REF if set, when missing).
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 IR=$(dirname "$HERE")
 export DOTNET_ROOT=${DOTNET_ROOT:-/usr/local/dotnet}
 export PATH="$DOTNET_ROOT:$PATH"
 export MSBUILDDISABLENODEREUSE=1
-DLR_DIR_SET=${DLR_DIR:-}
 DLR_DIR=${DLR_DIR:-$(dirname "$IR")/dlr-wasm}
 DLR_SRC=$(dirname "$IR")/dlr
-# dlr-wasm is a copy of ../dlr plus the wasm patches: start it over when ../dlr has moved on
-# (new Build/dlr-patches committed there), and check ../dlr, since the wasm patches touch some
-# of the same files and make the build's own check (CheckDlrPatches) fail on the copy
-if [ -z "${DLR_DIR_SET:-}" ] && [ -d "$DLR_DIR/src/core" ] && [ -d "$DLR_SRC/.git" ] &&
-   [ "$(git -C "$DLR_DIR" rev-parse HEAD)" != "$(git -C "$DLR_SRC" rev-parse HEAD)" ]; then
-  echo "$DLR_SRC moved on: recreating $DLR_DIR"
-  rm -rf "$DLR_DIR"
-fi
-[ -d "$DLR_SRC/.git" ] && "$IR/Util/check-dlr-patches.sh" "$DLR_SRC/src/core"
 if [ ! -d "$DLR_DIR/src/core" ]; then
-  git clone -q --no-hardlinks "$(dirname "$IR")/dlr" "$DLR_DIR"
+  # a copy of ../dlr (at DLR_REF when given: ../dlr may be ahead of this branch's patches) with
+  # Build/dlr-patches checked before the wasm patches go on top - they touch some of the same
+  # files, which makes the build's own check (CheckDlrPatches, off below) fail on the copy.
+  # A new patch in Build/dlr-patches: delete ../dlr-wasm and run this again.
+  git clone -q --no-hardlinks "$DLR_SRC" "$DLR_DIR"
+  [ -n "${DLR_REF:-}" ] && git -C "$DLR_DIR" checkout -q "$DLR_REF"
   for p in "$IR"/Build/dlr-patches/*.patch; do
-    git -C "$DLR_DIR" apply --check "$p" 2>/dev/null && git -C "$DLR_DIR" apply "$p" || echo "skip (applied?) $p"
+    git -C "$DLR_DIR" apply --check "$p" 2>/dev/null && git -C "$DLR_DIR" apply "$p" || true
   done
+  "$IR/Util/check-dlr-patches.sh" "$DLR_DIR/src/core"
 fi
 for p in "$IR"/Build/dlr-patches/wasm/*.patch; do
   [ -f "$p" ] || continue
