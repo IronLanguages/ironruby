@@ -583,6 +583,7 @@ p c(""1+2i""), c(""-i""), c("" 2j ""), c(""""), c(""7__9""), c(""1_i""), c(""1+x
 p c(""\xff1+2i""), c(""1+2i\xff""), c(""1+2i\xff"".dup.force_encoding(""BINARY"")), c(""１+2i""), c(""1+2iü"".dup.force_encoding(""BINARY"").force_encoding(""UTF-8""))
 p Complex.__ir_scan__(""1.5e3-2/3i"", false), Complex.__ir_scan__(""1@2"", false), Complex.__ir_scan__(""1e+i"", false), Complex.__ir_scan__(""1+2/0x"", false)
 p Complex.__ir_scan__(""7__9"", true)[0], Complex.__ir_scan__(""1+2i x"", true)[0], Complex.__ir_scan__(""1+2i "", true)[0]
+p c(("" "" * 140) + ""-45+7i""), c(""1_2+3_4i"" + "" "" * 200)
 ", @"
 [1, 2]
 [0, -1]
@@ -605,6 +606,8 @@ p Complex.__ir_scan__(""7__9"", true)[0], Complex.__ir_scan__(""1+2i x"", true)[
 false
 false
 true
+[-45, 7]
+[12, 34]
 ");
         }
 
@@ -1455,6 +1458,117 @@ a..z: nil
 time: ""TypeError: can't iterate from Time""
 sub: 3
 enum: 2
+");
+        }
+
+        /// <summary>
+        /// Integer() and Float() with exception: from a JIT keyword call site go past the keyword Hash (KernelOps.IntegerKeywordEntry,
+        /// FloatKeywordEntry); what they leave to the ordinary call - errors, a bad keyword, a base that raises - must come out as it did,
+        /// and a redefined Kernel#Integer must be called instead while it is there. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Kernel_ConversionKeywordEntry1() {
+            TestOutput(@"
+def int(v) = Integer(v, exception: false)
+def int16(v, b) = Integer(v, b, exception: false)
+def flt(v) = Float(v, exception: false)
+def int!(v) = begin; Integer(v, exception: true); rescue => e; ""#{e.class}: #{e.message}""; end
+def flt!(v) = begin; Float(v, exception: true); rescue => e; ""#{e.class}: #{e.message}""; end
+vals = [""12"", "" -1_0 "", ""0x1f"", """", ""1__2"", ""z"", ""1.5"", ""1e2"", ""1\0"", nil, true, 2.9, 0.0 / 0.0, 2**64, 7]
+2.times do
+  puts vals.map { |v| [int(v), flt(v), int!(v), flt!(v)].inspect }
+  puts [int16(""ff"", 16), int16("""", 1).inspect, int16(""12"", 37)].inspect rescue puts ""#{$!.class}: #{$!.message}""
+  puts [int16(""11"", 2), int16(""z"", 36), int16(""9"", 8)].inspect
+end
+puts begin; Integer(""1"", exception: 1); rescue => e; ""#{e.class}: #{e.message}""; end
+puts begin; Float(""1"", exception: nil); rescue => e; ""#{e.class}: #{e.message}""; end
+puts begin; Integer(""1"", foo: false); rescue => e; ""#{e.class}: #{e.message}""; end
+module Kernel
+  alias_method :saved_Integer, :Integer
+  def Integer(*a, **k) = ""mine #{a.inspect} #{k.inspect}""
+end
+puts int(""5"")
+module Kernel
+  remove_method :Integer
+  alias_method :Integer, :saved_Integer
+end
+puts int(""6"")
+def ki(s) = Kernel.Integer(s, exception: false)
+3.times { ki(""1"") }
+Kernel.send(:private_class_method, :Integer)
+puts begin; ki(""5""); rescue NoMethodError; ""NoMethodError""; end
+", @"
+[12, 12.0, 12, 12.0]
+[-10, -10.0, -10, -10.0]
+[31, 31.0, 31, 31.0]
+[nil, nil, ""ArgumentError: invalid value for Integer(): \""\"""", ""ArgumentError: invalid value for Float(): \""\""""]
+[nil, nil, ""ArgumentError: invalid value for Integer(): \""1__2\"""", ""ArgumentError: invalid value for Float(): \""1__2\""""]
+[nil, nil, ""ArgumentError: invalid value for Integer(): \""z\"""", ""ArgumentError: invalid value for Float(): \""z\""""]
+[nil, 1.5, ""ArgumentError: invalid value for Integer(): \""1.5\"""", 1.5]
+[nil, 100.0, ""ArgumentError: invalid value for Integer(): \""1e2\"""", 100.0]
+[nil, nil, ""ArgumentError: invalid value for Integer(): \""1\\u0000\"""", ""ArgumentError: string for Float contains null byte""]
+[nil, nil, ""TypeError: can't convert nil into Integer"", ""TypeError: can't convert nil into Float""]
+[nil, nil, ""TypeError: can't convert true into Integer"", ""TypeError: can't convert true into Float""]
+[2, 2.9, 2, 2.9]
+[nil, NaN, ""FloatDomainError: NaN"", NaN]
+[18446744073709551616, 1.8446744073709552e+19, 18446744073709551616, 1.8446744073709552e+19]
+[7, 7.0, 7, 7.0]
+ArgumentError: invalid radix 1
+[3, 35, nil]
+[12, 12.0, 12, 12.0]
+[-10, -10.0, -10, -10.0]
+[31, 31.0, 31, 31.0]
+[nil, nil, ""ArgumentError: invalid value for Integer(): \""\"""", ""ArgumentError: invalid value for Float(): \""\""""]
+[nil, nil, ""ArgumentError: invalid value for Integer(): \""1__2\"""", ""ArgumentError: invalid value for Float(): \""1__2\""""]
+[nil, nil, ""ArgumentError: invalid value for Integer(): \""z\"""", ""ArgumentError: invalid value for Float(): \""z\""""]
+[nil, 1.5, ""ArgumentError: invalid value for Integer(): \""1.5\"""", 1.5]
+[nil, 100.0, ""ArgumentError: invalid value for Integer(): \""1e2\"""", 100.0]
+[nil, nil, ""ArgumentError: invalid value for Integer(): \""1\\u0000\"""", ""ArgumentError: string for Float contains null byte""]
+[nil, nil, ""TypeError: can't convert nil into Integer"", ""TypeError: can't convert nil into Float""]
+[nil, nil, ""TypeError: can't convert true into Integer"", ""TypeError: can't convert true into Float""]
+[2, 2.9, 2, 2.9]
+[nil, NaN, ""FloatDomainError: NaN"", NaN]
+[18446744073709551616, 1.8446744073709552e+19, 18446744073709551616, 1.8446744073709552e+19]
+[7, 7.0, 7, 7.0]
+ArgumentError: invalid radix 1
+[3, 35, nil]
+ArgumentError: expected true or false as exception: 1
+ArgumentError: expected true or false as exception: nil
+ArgumentError: unknown keyword: :foo
+mine [""5""] {exception: false}
+6
+NoMethodError
+");
+        }
+
+        /// <summary>
+        /// Integer#[offset, size] on a Bignum reads up to 62 bits straight from its two's complement bytes (ClrInteger.ExtractBits);
+        /// a negative value's sign extends past its last byte. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Integer_BignumBitsSlice1() {
+            TestOutput(@"
+vals = [2**64, -(2**64), 2**70 + 12345, -(2**70 + 12345), 2**63, -(2**63) - 1, 2**127 - 1, -(2**127), 2**2040 + 7, -(2**2040) + 5, 2**2050 - 1, -(2**2050), 0xDEADBEEFCAFEBABE1234567890ABCDEF, -0xDEADBEEFCAFEBABE1234567890ABCDEF]
+sum = 0
+n = 0
+vals.each do |v|
+  [0, 1, 7, 8, 9, 31, 32, 63, 64, 65, 100, 127, 128, 2040, 2047, 2048, 2100, 2**31 - 1].each do |o|
+    [1, 2, 3, 7, 8, 31, 32, 33, 61, 62, 63, 64, 0, -1].each do |s|
+      r = v[o, s]
+      n += 1
+      sum = (sum * 31 + r) % (2**61 - 1)
+    end
+  end
+end
+puts n, sum
+p (2**70 + 12345)[2, 3], (-(2**70 + 12345))[2, 3], (2**70)[69, 2], (-(2**70))[69, 2], (-(2**70))[100, 62], (2**70)[2**31 - 1, 5]
+", @"
+3528
+634082703501885368
+6
+1
+2
+2
+4611686018427387903
+0
 ");
         }
     }

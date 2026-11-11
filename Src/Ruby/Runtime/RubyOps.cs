@@ -4391,7 +4391,15 @@ namespace IronRuby.Runtime {
 
         /// <summary>Kernel#Float's conversion of a String.</summary>
         public static double ConvertKernelFloat(RubyContext/*!*/ context, MutableString/*!*/ value) {
-            return ConvertStringToFloat(context, value.ConvertToString(), value, KernelFloatLine);
+            return ConvertKernelFloat(context, value, false);
+        }
+
+        /// <summary>
+        /// Kernel#Float's conversion of a String; <paramref name="keywordCall"/> when the call passed exception:, which in
+        /// MRI takes the other line of its kernel.rb even when it says true.
+        /// </summary>
+        public static double ConvertKernelFloat(RubyContext/*!*/ context, MutableString/*!*/ value, bool keywordCall) {
+            return ConvertStringToFloat(context, value.ConvertToString(), value, keywordCall ? KernelFloatNoExceptionLine : KernelFloatLine);
         }
 
         /// <summary>Kernel#Float's conversion of a String with exception: false.</summary>
