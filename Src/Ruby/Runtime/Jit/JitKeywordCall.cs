@@ -239,7 +239,8 @@ namespace IronRuby.Runtime.Jit {
                     // as cached in one; unmarked, a change that copies it (private_class_method, `private :m' in a
                     // subclass) would not bump the method version, and the site would go on calling it. Resolved as a
                     // site resolves it, it is marked.
-                    using (_context.ClassHierarchyLocker()) {
+                    // (the class's own runtime's lock, as ResolveMethod takes it: the receiver may be another runtime's)
+                    using (cls.Context.ClassHierarchyLocker()) {
                         resolved = cls.ResolveMethodForSiteNoLock(_name, _publicOnly ? PublicOnly : VisibilityContext.AllVisible);
                     }
                     if (resolved.Found && resolved.Info is RubyLibraryMethodInfo library) {
