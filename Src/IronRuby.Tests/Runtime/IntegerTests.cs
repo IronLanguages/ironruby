@@ -662,6 +662,46 @@ nil
         }
 
         /// <summary>
+        /// A Regexp whose source is a single space splits as that source taken literally, whatever its
+        /// options (MRI's rb_str_split_m, SPLIT_TYPE_STRING): / /x splits at each space, as / / does,
+        /// although its pattern matches only the empty string. IronRuby split "a  b" by / /x into
+        /// ["a", " ", " ", "b"] (it came up in #188). / /x does not search, so $~ is left alone. Two spaces under /x
+        /// are a regexp again. An encoding error names the source's encoding, US-ASCII. The expected
+        /// output is CRuby 4.0.9's.
+        /// </summary>
+        public void String_SplitSpaceRegexp1() {
+            TestOutput(@"
+p ""a  b"".split(/ /x)
+p "" a  b "".split(/ /x)
+p "" a  b "".split(/ /x, -1)
+p ""a b c"".split(/ /x, 2)
+p ""a\tb\n c"".split(/ /x)
+p ""a  b"".split(/ /ix)
+p ""a  b"".split(Regexp.new("" "", Regexp::EXTENDED))
+p ""a  b"".split(/  /x)
+p ""a b"".split(/ /), ""a b"".split("" ""), ""a  b"".split("" "")
+""zz"" =~ /z/; ""a b"".split(/ /x); p $~
+p ""a b"".split(/ /x) { |s| print s, "","" }
+(""a b"".encode(""UTF-16LE"").split(/ /x) rescue p $!)
+", @"
+[""a"", """", ""b""]
+["""", ""a"", """", ""b""]
+["""", ""a"", """", ""b"", """"]
+[""a"", ""b c""]
+[""a\tb\n"", ""c""]
+[""a"", """", ""b""]
+[""a"", """", ""b""]
+[""a"", "" "", "" "", ""b""]
+[""a"", ""b""]
+[""a"", ""b""]
+[""a"", ""b""]
+#<MatchData ""z"">
+a,b,""a b""
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and US-ASCII>
+");
+        }
+
+        /// <summary>
         /// A shift width an Int32 does not hold (#89). MRI allocates 1 &lt;&lt; 2**31 (a 256 MB Integer); IronRuby
         /// raised RangeError. Shifts back by such widths, and bit references at such indexes, reach the real bits.
         /// From 2**32 on, a non-MRI implementation may say "shift width too big" (ruby/spec's left_shift_spec).

@@ -4611,6 +4611,15 @@ namespace IronRuby.Builtins {
                 return CharacterSplit(str, limit);
             }
 
+            return LiteralSplit(str, separator, limit);
+        }
+
+        /// <summary>
+        /// Splits at every occurrence of <paramref name="separator"/>, taken as it is (MRI's
+        /// SPLIT_TYPE_STRING). <paramref name="limit"/> is not 1.
+        /// </summary>
+        private static RubyArray/*!*/ LiteralSplit(MutableString/*!*/ str, MutableString/*!*/ separator, int limit) {
+            RubyArray result;
             if (limit <= 0) {
                 result = new RubyArray();
             } else {
@@ -4740,6 +4749,16 @@ namespace IronRuby.Builtins {
                 RubyArray result = new RubyArray(1);
                 result.Add(self.CreateDerived().Append(self));
                 return result;
+            }
+
+            if (regexp.Pattern.Length == 1 && regexp.Pattern.GetChar(0) == ' ') {
+                // MRI's rb_str_split_m splits at a Regexp whose source is a single space as at that
+                // source taken literally (SPLIT_TYPE_STRING, not " "'s awk-style split), whatever its
+                // options: / /x, whose pattern matches only the empty string, splits at each space.
+                // The source is in the regexp's encoding (Regexp#source), which an encoding error names.
+                MutableString source = MutableString.CreateAscii(" ");
+                source.ForceEncoding(regexp.Encoding);
+                return LiteralSplit(self, source, limit);
             }
 
             RubyArray fields = RegexSplit(self, regexp, limit, out lastMatch);

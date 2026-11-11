@@ -1100,6 +1100,7 @@ namespace IronRuby.Tests {
                 Thread_KillBehindRetractedRaise1,
                 Thread_KillBehindRaiseInFiberWait1,
                 Thread_KillBehindRaiseInFiberMailbox1,
+                Thread_KillBeforeFiberMailboxWait1,
                 DeepNesting1,
 
                 Scenario_RubyThreads1,
@@ -1264,6 +1265,7 @@ namespace IronRuby.Tests {
                 Complex_StringScan1,
                 Kernel_FloatParse1,
                 String_SplitMatchData1,
+                String_SplitSpaceRegexp1,
                 Integer_OutOfFloatRange1,
                 BasicObject_EqualIdentity1,
             };
