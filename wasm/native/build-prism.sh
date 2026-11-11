@@ -3,15 +3,16 @@
 # the browser-wasm host links in through NativeFileReference.  The archive is named prism.a so
 # the module name matches IronRuby.Prism's [DllImport("prism")].
 set -eu
+DN=${DOTNET_ROOT:-/usr/local/dotnet}
 HERE=$(cd "$(dirname "$0")" && pwd)
 PRISM=${PRISM_DIR:-$HERE/../../../prism}
-EMSDK=${EMSDK_DIR:-$(ls -d /usr/local/dotnet/packs/Microsoft.NET.Runtime.Emscripten.*.Sdk.*/*/tools | sort | tail -1)}
+EMSDK=${EMSDK_DIR:-$(ls -d $DN/packs/Microsoft.NET.Runtime.Emscripten.*.Sdk.*/*/tools | sort | tail -1)}
 export DOTNET_EMSCRIPTEN_LLVM_ROOT="$EMSDK/bin" DOTNET_EMSCRIPTEN_BINARYEN_ROOT="$EMSDK"
-export DOTNET_EMSCRIPTEN_NODE_JS=$(ls -d /usr/local/dotnet/packs/Microsoft.NET.Runtime.Emscripten.*.Node.*/*/tools/bin/node | sort | tail -1)
+export DOTNET_EMSCRIPTEN_NODE_JS=$(ls -d $DN/packs/Microsoft.NET.Runtime.Emscripten.*.Node.*/*/tools/bin/node | sort | tail -1)
 export EM_FROZEN_CACHE=1
 EMCC="$EMSDK/emscripten/emcc"
 EMAR="$EMSDK/emscripten/emar"
-export EM_CACHE=${EM_CACHE:-$(ls -d /usr/local/dotnet/packs/Microsoft.NET.Runtime.Emscripten.*.Cache.*/*/tools/emscripten/cache 2>/dev/null | sort | tail -1)}
+export EM_CACHE=${EM_CACHE:-$(ls -d $DN/packs/Microsoft.NET.Runtime.Emscripten.*.Cache.*/*/tools/emscripten/cache 2>/dev/null | sort | tail -1)}
 OUT="$HERE/build"
 rm -rf "$OUT"; mkdir -p "$OUT/obj"
 for c in "$PRISM"/src/*.c "$PRISM"/src/*/*.c; do
