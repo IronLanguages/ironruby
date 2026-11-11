@@ -21,9 +21,6 @@ using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Diagnostics;
-using Microsoft.Scripting.Generation;
-using System.Threading;
-using IronRuby.Runtime.Calls;
 using IronRuby.Runtime.Conversions;
 
 namespace IronRuby.Builtins {
@@ -45,13 +42,14 @@ namespace IronRuby.Builtins {
         }
 
         [RubyConstructor]
+        [ReceivesKeywords]
         public static Hash/*!*/ CreateHash(BlockParam block, RubyClass/*!*/ self, object defaultValue) {
             var result = new Hash(self.Context.EqualityComparer);
             return Initialize(self.Context, block, result, defaultValue);
         }
 
         [RubyConstructor]
-        public static Hash/*!*/ CreateHash(BlockParam block, RubyClass/*!*/ self, object defaultValue, object options) {
+        public static Hash/*!*/ CreateHash(BlockParam block, RubyClass/*!*/ self, object defaultValue, [Keywords]object options) {
             var result = new Hash(self.Context.EqualityComparer);
             return Initialize(self.Context, block, result, defaultValue, options);
         }
@@ -65,10 +63,13 @@ namespace IronRuby.Builtins {
 
         private static void CheckOptions(RubyContext/*!*/ context, Hash/*!*/ options) {
             var unknown = new List<string>();
-            foreach (var key in options.Keys) {
-                var symbol = key as RubySymbol;
+            foreach (var entry in options) {
+                var symbol = entry.Key as RubySymbol;
                 if (symbol == null || symbol.ToString() != "capacity") {
-                    unknown.Add(context.Inspect(key).ToString());
+                    unknown.Add(context.Inspect(entry.Key).ToString());
+                } else if (!(entry.Value is int || entry.Value is System.Numerics.BigInteger || entry.Value is double)) {
+                    // MRI converts the hint with to_int; the hint itself is not used here.
+                    throw RubyExceptions.CreateImplicitConversionError(context.GetClassDisplayName(entry.Value), "Integer");
                 }
             }
             if (unknown.Count > 0) {
@@ -78,9 +79,23 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// A lambda default proc has to be callable with (hash, key): MRI accepts arity 2 and any
+        /// negative arity down to -3, and refuses the rest up front.
+        /// </summary>
+        private static Proc CheckDefaultProc(Proc proc) {
+            if (proc != null && proc.Kind == ProcKind.Lambda) {
+                int arity = proc.Dispatcher.Arity;
+                if (arity != 2 && (arity >= 0 || arity < -3)) {
+                    throw RubyExceptions.CreateTypeError("default_proc takes two arguments (2 for {0})", arity);
+                }
+            }
+            return proc;
+        }
+
         [RubyConstructor]
         public static Hash/*!*/ CreateHash([NotNull]BlockParam/*!*/ defaultProc, RubyClass/*!*/ self) {
-            return new Hash(self.Context.EqualityComparer, defaultProc.Proc, null);
+            return new Hash(self.Context.EqualityComparer, CheckDefaultProc(defaultProc.Proc), null);
         }
 
         [RubyMethod("[]", RubyMethodAttributes.PublicSingleton)]
@@ -155,11 +170,12 @@ namespace IronRuby.Builtins {
 
         // Reinitialization. Not called when a factory/non-default ctor is called.
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        [ReceivesKeywords]
         public static Hash/*!*/ Initialize(RubyContext/*!*/ context, BlockParam block, Hash/*!*/ self, object defaultValue) {
             Assert.NotNull(self);
             if (IsOptions(defaultValue)) {
                 CheckOptions(context, (Hash)defaultValue);
-                self.DefaultProc = (block != null) ? block.Proc : null;
+                self.DefaultProc = (block != null) ? CheckDefaultProc(block.Proc) : null;
                 self.DefaultValue = null;
                 return self;
             }
@@ -172,7 +188,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-        public static Hash/*!*/ Initialize(RubyContext/*!*/ context, BlockParam block, Hash/*!*/ self, object defaultValue, object options) {
+        public static Hash/*!*/ Initialize(RubyContext/*!*/ context, BlockParam block, Hash/*!*/ self, object defaultValue, [Keywords]object options) {
             // a second argument is only allowed as keywords
             if (!IsOptions(options)) {
                 throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 2, expected 0..1)");
@@ -186,7 +202,7 @@ namespace IronRuby.Builtins {
         public static Hash/*!*/ Initialize([NotNull]BlockParam/*!*/ defaultProc, Hash/*!*/ self) {
             Assert.NotNull(self, defaultProc);
 
-            self.DefaultProc = defaultProc.Proc;
+            self.DefaultProc = CheckDefaultProc(defaultProc.Proc);
             self.DefaultValue = null;
             return self;
         }
@@ -232,7 +248,13 @@ namespace IronRuby.Builtins {
         }
         
         #region Instance Methods
-        
+
+        // Order-independent; see StructuralHash, which also covers hashes that contain themselves.
+        [RubyMethod("hash")]
+        public static int GetHashCode(UnaryOpStorage/*!*/ hashStorage, ConversionStorage<IntegerValue>/*!*/ toInt, Hash/*!*/ self) {
+            return StructuralHash.GetHashHash(hashStorage, toInt, self);
+        }
+
         [RubyMethod("[]")]
         public static object GetElement(BinaryOpStorage/*!*/ storage, IDictionary<object, object>/*!*/ self, object key) {
             object result;
@@ -284,6 +306,10 @@ namespace IronRuby.Builtins {
                 self.RequireNotFrozen();
                 return self;
             }
+            self.RequireNotFrozen();
+            if (self.IsIterating) {
+                throw RubyExceptions.CreateRuntimeError("can't replace hash during iteration");
+            }
 
             Hash otherHash = other as Hash;
             if (otherHash != null) {
@@ -295,21 +321,69 @@ namespace IronRuby.Builtins {
             return IDictionaryOps.ReplaceData(self, other);
         }
 
-        [RubyMethod("shift")]
-        public static object Shift(CallSiteStorage<Func<CallSite, Hash, object, object>>/*!*/ storage, Hash/*!*/ self) {
-            self.RequireNotFrozen();
-            
-            if (self.Count == 0) {
-                var site = storage.GetCallSite("default", 1);
-                return site.Target(site, self, null);
+        #endregion
+
+        #region key, slice, except
+
+        // The first key whose value is == to the argument (the value is the receiver of ==, as in
+        // CRuby's rb_hash_key), walked in place: the prelude's #each with a block per entry cost
+        // ten times as much.
+        [RubyMethod("key")]
+        public static object GetKey(BinaryOpStorage/*!*/ equals, Hash/*!*/ self, object value) {
+            var site = equals.GetCallSite("==");
+            self.BeginIteration();
+            try {
+                int index = 0;
+                object key, entryValue;
+                while (self.TryGetNextEntry(ref index, out key, out entryValue)) {
+                    if (Protocols.IsEqual(site, entryValue, value)) {
+                        return CustomStringDictionary.ObjToNull(key);
+                    }
+                }
+            } finally {
+                self.EndIteration();
             }
+            return null;
+        }
 
-            IEnumerator<KeyValuePair<object, object>> e = self.GetEnumerator();
-            e.MoveNext();
-            KeyValuePair<object, object> pair = e.Current;
-            self.Remove(pair.Key);
 
-            return IDictionaryOps.MakeArray(pair);
+        // A fresh result for the non-mutating combinators: a plain Hash, with neither the default
+        // value nor the default proc, but with the compare_by_identity flag, as in CRuby.
+        private static Hash/*!*/ CreateResultHash(Hash/*!*/ self, int capacity) {
+            var result = new Hash(self.Comparer, capacity);
+            if (self.ComparesByIdentity) {
+                result.SetComparesByIdentity(true, null);
+            }
+            return result;
+        }
+
+        // Looks each key up in the table itself, as CRuby does: an overridden #[] or #key?, and the
+        // default value or proc, take no part. The keys of the result are the arguments.
+        [RubyMethod("slice")]
+        public static Hash/*!*/ Slice(RubyContext/*!*/ context, Hash/*!*/ self, params object[]/*!*/ keys) {
+            var result = CreateResultHash(self, Math.Min(keys.Length, self.Count));
+            for (int i = 0; i < keys.Length; i++) {
+                object value;
+                if (self.TryGetValue(CustomStringDictionary.NullToObj(keys[i]), out value)) {
+                    RubyUtils.SetHashElement(context, result, keys[i], value);
+                }
+            }
+            return result;
+        }
+
+        // A copy of the entries as they are stored (no key is hashed again), less the given keys.
+        [RubyMethod("except")]
+        public static Hash/*!*/ Except(Hash/*!*/ self, params object[]/*!*/ keys) {
+            var result = CreateResultHash(self, 0);
+            if (!result.TryCopyEntriesFrom(self)) {
+                foreach (var entry in self) {
+                    result[entry.Key] = entry.Value;
+                }
+            }
+            for (int i = 0; i < keys.Length; i++) {
+                result.Remove(CustomStringDictionary.NullToObj(keys[i]));
+            }
+            return result;
         }
 
         #endregion

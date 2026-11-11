@@ -12,25 +12,24 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_PROCESS 
 
 using System;
 using System.Diagnostics;
-using System.Security;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
 using System.Collections.Generic;
 using System.IO;
 using System.Globalization;
+using System.Reflection;
+using System.Runtime.InteropServices;
 
 namespace IronRuby.Builtins {
 
     /// <summary>
     /// Process builtin module
     /// </summary>
-    [RubyModule("Process", BuildConfig = "FEATURE_PROCESS")]
+    [RubyModule("Process")]
     public static partial class RubyProcess {
         #region Utils
 
@@ -41,7 +40,9 @@ namespace IronRuby.Builtins {
             try {
                 Utils.Log(String.Format("Starting: '{0}' with args: '{1}'", psi.FileName, psi.Arguments), "PROCESS");
                 Process p = Process.Start(psi);
-                p.WaitForExit();
+                using (RubyUtils.BlockingWait.Enter()) {
+                    p.WaitForExit();
+                }
                 context.ChildProcessExitStatus = new RubyProcess.Status(p);
                 return p;
             } catch (Exception e) {
@@ -327,7 +328,7 @@ namespace IronRuby.Builtins {
         /// lets us distinguish "exited with 137" from "killed by signal 9" - a distinction
         /// System.Diagnostics.Process throws away when it folds a signal into ExitCode.
         /// </summary>
-        [RubyClass("Status", BuildConfig = "FEATURE_PROCESS")]
+        [RubyClass("Status")]
         [HideMethod("new", IsStatic = true)]
         public sealed class Status {
             private readonly int _pid;
@@ -413,11 +414,12 @@ namespace IronRuby.Builtins {
                 return self._status;
             }
 
+            // MRI's pst_equal compares #to_i only: two processes that exited alike are equal
             [RubyMethod("==")]
             public static bool Equals(Status/*!*/ self, object other) {
                 var status = other as Status;
                 if (status != null) {
-                    return self._pid == status._pid && self._status == status._status;
+                    return self._status == status._status;
                 }
                 return (other is int) && (int)other == self._status;
             }
@@ -508,6 +510,10 @@ namespace IronRuby.Builtins {
             if (toProcessGroup) {
                 signal = -signal;
             }
+            if (PosixSignals.IsUnsupportedOnWindows(signal)) {
+                // Negative means -errno; the prelude's Process.kill turns it into an Errno class.
+                return ScriptingRuntimeHelpers.Int32ToObject(-PosixSignals.EINVAL);
+            }
 
             foreach (var pid in pids) {
                 int target = Protocols.CastToFixnum(toInt, pid);
@@ -524,9 +530,23 @@ namespace IronRuby.Builtins {
                 // ever.
                 bool targetsUs = target == Environment.ProcessId;
 
-                if (targetsUs && PosixSignals.TerminatesByDefault(signal) && !PosixSignals.HasHandler(signal)) {
+                // trap(:TERM, "DEFAULT") after a handler is MRI's default again - a SignalException -
+                // and "SYSTEM_DEFAULT" is the OS's, which the real kill(2) below gives it.
+                bool standIn = targetsUs && !PosixSignals.HasRubyHandler(signal) && !PosixSignals.IsTrappedToSystemDefault(signal);
+
+                if (standIn && PosixSignals.TerminatesByDefault(signal)) {
+                    // SIGINT is the one MRI raises as Interrupt - what `rescue Interrupt` is
+                    // written for - and with an empty message, not "SIGINT"; #signo still says 2.
+                    if (signal == PosixSignals.SignalInterrupt) {
+                        throw new Interrupt(String.Empty);
+                    }
                     string name = PosixSignals.ToName(signal);
                     throw new SignalException((name != null) ? "SIG" + name : "SIG" + signal);
+                }
+
+                // PIPE, SYS and VTALRM: nothing happens, as in MRI, unless a #trap installed something.
+                if (standIn && PosixSignals.IgnoredByDefault(signal)) {
+                    continue;
                 }
 
                 // MRI checks for pending signals as soon as kill(2) returns, so signalling yourself
@@ -534,7 +554,7 @@ namespace IronRuby.Builtins {
                 // Process.kill still on the stack, which ruby/spec looks for in the handler's
                 // #caller. Going through the kernel would run it on .NET's signal thread some time
                 // later instead, so call it here and skip the round trip.
-                if (targetsUs && signal > 0 && PosixSignals.HasHandler(signal) && PosixSignals.IsMainThread) {
+                if (targetsUs && signal > 0 && PosixSignals.HasRubyHandler(signal) && PosixSignals.IsMainThread) {
                     PosixSignals.RunHandler(signal);
                     continue;
                 }
@@ -565,7 +585,9 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("ppid", RubyMethodAttributes.PublicSingleton)]
         public static int GetParentPid(RubyModule/*!*/ self) {
-            return SysGetPpid();
+            // a warm-start worker's own parent is the broker, not what started the program
+            int reported = RubyContext.ReportedParentProcessId;
+            return (reported > 0) ? reported : SysGetPpid();
         }
 
         // setpgid
@@ -578,33 +600,35 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("times", RubyMethodAttributes.PublicSingleton)]
         public static RubyStruct/*!*/ GetTimes(RubyModule/*!*/ self) {
-            var result = RubyStruct.Create(RubyStructOps.GetTmsClass(self.Context));
-            try {
-                FillTimes(result);
-            } catch (SecurityException) {
-                RubyStructOps.TmsSetUserTime(result, 0.0);
-                RubyStructOps.TmsSetSystemTime(result, 0.0);
-                RubyStructOps.TmsSetChildUserTime(result, 0.0);
-                RubyStructOps.TmsSetChildSystemTime(result, 0.0);
+            var result = RubyStruct.Create(GetTmsClass(self.Context));
+            if (OperatingSystem.IsBrowser()) {
+                // no process accounting in the browser: report the time since start as user time
+                result[0] = (DateTime.UtcNow - _StartTime).TotalSeconds;
+                result[1] = 0.0;
+            } else using (var process = Process.GetCurrentProcess()) {
+                result[0] = process.UserProcessorTime.TotalSeconds;
+                result[1] = process.PrivilegedProcessorTime.TotalSeconds;
             }
-
+            result[2] = 0.0;
+            result[3] = 0.0;
             return result;
         }
 
-        private static void FillTimes(RubyStruct/*!*/ result) {
-            if (OperatingSystem.IsBrowser()) {
-                // no process accounting in the browser: report the time since start as user time
-                RubyStructOps.TmsSetUserTime(result, (DateTime.UtcNow - _StartTime).TotalSeconds);
-                RubyStructOps.TmsSetSystemTime(result, 0.0);
-                RubyStructOps.TmsSetChildUserTime(result, 0.0);
-                RubyStructOps.TmsSetChildSystemTime(result, 0.0);
-                return;
-            }
-            var process = Process.GetCurrentProcess();
-            RubyStructOps.TmsSetUserTime(result, process.UserProcessorTime.TotalSeconds);
-            RubyStructOps.TmsSetSystemTime(result, process.PrivilegedProcessorTime.TotalSeconds);
-            RubyStructOps.TmsSetChildUserTime(result, 0.0);
-            RubyStructOps.TmsSetChildSystemTime(result, 0.0);
+        private static readonly object TmsClassKey = new object();
+
+        // Process::Tms, the struct Process.times returns. (It was Struct::Tms until Ruby 1.9.)
+        [RubyConstant("Tms")]
+        internal static RubyClass/*!*/ CreateTmsClass(RubyModule/*!*/ module) {
+            return GetTmsClass(module.Context);
+        }
+
+        // Process.times can run before Process's constants are initialized, so the class is kept on the context.
+        private static RubyClass/*!*/ GetTmsClass(RubyContext/*!*/ context) {
+            return (RubyClass)context.GetOrCreateLibraryData(TmsClassKey, () => {
+                var tms = RubyStruct.DefineStruct(context.GetClass(typeof(RubyStruct)), null, new[] { "utime", "stime", "cutime", "cstime" });
+                tms.SetName("Process::Tms", true);
+                return tms;
+            });
         }
 
         [RubyMethod("uid", RubyMethodAttributes.PublicSingleton)]
@@ -635,63 +659,177 @@ namespace IronRuby.Builtins {
             return new RubyArray();
         }
 
-    }
+        #region clock_gettime
 
-    #region Struct::Tms
+        // The clock ids, as Integers with Linux's numbers, which is what MRI has.
+        [RubyConstant] public const int CLOCK_REALTIME = 0;
+        [RubyConstant] public const int CLOCK_MONOTONIC = 1;
+        [RubyConstant] public const int CLOCK_PROCESS_CPUTIME_ID = 2;
+        [RubyConstant] public const int CLOCK_THREAD_CPUTIME_ID = 3;
+        [RubyConstant] public const int CLOCK_MONOTONIC_RAW = 4;
+        [RubyConstant] public const int CLOCK_REALTIME_COARSE = 5;
+        [RubyConstant] public const int CLOCK_MONOTONIC_COARSE = 6;
+        [RubyConstant] public const int CLOCK_BOOTTIME = 7;
+        [RubyConstant] public const int CLOCK_REALTIME_ALARM = 8;
+        [RubyConstant] public const int CLOCK_BOOTTIME_ALARM = 9;
+        [RubyConstant] public const int CLOCK_TAI = 11;
 
-    public static partial class RubyStructOps {
-        #region Tms
+        private enum ClockKind { Realtime, Monotonic, ProcessTime, ThreadTime }
 
-        internal static readonly object TmsStructClassKey = new object();
-        
-        [RubyConstant("Tms", BuildConfig = "FEATURE_PROCESS")]
-        internal static RubyClass/*!*/ CreateTmsClass(RubyModule/*!*/ module) {
-            // class is available for the library even if the constant is removed => store it on the context:
-            return (RubyClass)module.Context.GetOrCreateLibraryData(TmsStructClassKey, () => RubyStruct.DefineStruct(
-                (RubyClass)module, 
-                "Tms",
-                new[] { "utime", "stime", "cutime", "cstime" }
-            ));
-        }
+        private static readonly Dictionary<string, ClockKind> _emulatedClocks = new Dictionary<string, ClockKind> {
+            // MRI's emulated clocks, named by Symbols
+            { "GETTIMEOFDAY_BASED_CLOCK_REALTIME", ClockKind.Realtime },
+            { "TIME_BASED_CLOCK_REALTIME", ClockKind.Realtime },
+            { "GETRUSAGE_BASED_CLOCK_PROCESS_CPUTIME_ID", ClockKind.ProcessTime },
+            { "TIMES_BASED_CLOCK_PROCESS_CPUTIME_ID", ClockKind.ProcessTime },
+            { "CLOCK_BASED_CLOCK_PROCESS_CPUTIME_ID", ClockKind.ProcessTime },
+            { "TIMES_BASED_CLOCK_MONOTONIC", ClockKind.Monotonic },
+        };
 
-        public static RubyClass/*!*/ GetTmsClass(RubyContext/*!*/ context) {
-            ContractUtils.RequiresNotNull(context, "context");
+        /// <summary>
+        /// Process.clock_gettime(clock_id, unit = :float_second). ActiveSupport::Notifications reads
+        /// the monotonic clock twice for every event it instruments, so this is C#. .NET's Stopwatch
+        /// is the monotonic (and boot-time) source; CLOCK_PROCESS_CPUTIME_ID is the process's processor
+        /// time, and CLOCK_THREAD_CPUTIME_ID the calling thread's, which .NET does not expose: it is read
+        /// from the OS (<see cref="TryGetThreadCpuTime"/>). A clock that is not one of these is
+        /// Errno::EINVAL, as clock_gettime(2) has it.
+        /// </summary>
+        [RubyMethod("clock_gettime", RubyMethodAttributes.PublicSingleton)]
+        public static object ClockGetTime(ConversionStorage<int>/*!*/ fixnumCast, ConversionStorage<MutableString>/*!*/ tosConversion,
+            RubyModule/*!*/ self, object clockId, [Optional]object unit) {
 
-            object value;
-            if (context.TryGetLibraryData(TmsStructClassKey, out value)) {
-                return (RubyClass)value;
+            var context = self.Context;
+            ClockKind kind;
+            var symbol = clockId as RubySymbol;
+            if (symbol != null) {
+                if (!_emulatedClocks.TryGetValue(symbol.ToString(), out kind)) {
+                    throw RubyExceptions.CreateEINVAL("clock_gettime({0})", context.Inspect(clockId));
+                }
+            } else if (clockId == null) {
+                // NUM2CLOCKID's wording, not to_int's
+                throw RubyExceptions.CreateTypeError("no implicit conversion from nil to integer");
+            } else {
+                switch (Protocols.CastToFixnum(fixnumCast, clockId)) {
+                    case CLOCK_REALTIME: case CLOCK_REALTIME_COARSE: case CLOCK_REALTIME_ALARM: case CLOCK_TAI:
+                        kind = ClockKind.Realtime;
+                        break;
+                    case CLOCK_MONOTONIC: case CLOCK_MONOTONIC_RAW: case CLOCK_MONOTONIC_COARSE: case CLOCK_BOOTTIME: case CLOCK_BOOTTIME_ALARM:
+                        kind = ClockKind.Monotonic;
+                        break;
+                    case CLOCK_PROCESS_CPUTIME_ID:
+                        kind = ClockKind.ProcessTime;
+                        break;
+                    case CLOCK_THREAD_CPUTIME_ID:
+                        kind = ClockKind.ThreadTime;
+                        break;
+                    default:
+                        throw RubyExceptions.CreateEINVAL("clock_gettime({0})", context.Inspect(clockId));
+                }
             }
 
-            // trigger constant initialization of Struct class:
-            context.GetClass(typeof(RubyStruct)).TryGetConstant(null, "Tms", out value);
-
-            // try again:
-            if (context.TryGetLibraryData(TmsStructClassKey, out value)) {
-                return (RubyClass)value;
+            double seconds;
+            if (kind == ClockKind.ThreadTime) {
+                if (TryGetThreadCpuTime(out long nanoseconds)) {
+                    return ConvertClockTime(tosConversion, nanoseconds, unit);
+                }
+                // no per-thread figure on this platform: the process's, as before
+                kind = ClockKind.ProcessTime;
+            }
+            switch (kind) {
+                case ClockKind.Realtime:
+                    seconds = (double)(DateTime.UtcNow.Ticks - RubyTime.Epoch.Ticks) / TimeSpan.TicksPerSecond;
+                    break;
+                case ClockKind.ProcessTime:
+                    seconds = Process.GetCurrentProcess().TotalProcessorTime.TotalSeconds;
+                    break;
+                default:
+                    seconds = (double)Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
+                    break;
             }
 
-            throw Assert.Unreachable;
+            string unitName = (unit == Missing.Value || unit == null) ? "float_second" : (unit as RubySymbol)?.ToString();
+            switch (unitName) {
+                case "float_second": return seconds;
+                case "float_millisecond": return seconds * 1000.0;
+                case "float_microsecond": return seconds * 1000000.0;
+                case "second": return ClrFloat.ToInt(seconds);
+                case "millisecond": return ClrFloat.ToInt(seconds * 1000);
+                case "microsecond": return ClrFloat.ToInt(seconds * 1000000);
+                case "nanosecond": return ClrFloat.ToInt(seconds * 1000000000);
+                default:
+                    throw RubyExceptions.CreateArgumentError("unexpected unit: " + Protocols.ConvertToString(tosConversion, unit).ToString());
+            }
         }
 
-        public static void TmsSetUserTime(RubyStruct/*!*/ tms, double value) {
-            tms[0] = value;
+        // a clock read exactly, in nanoseconds: the Integer units are exact, as clock_gettime's timespec makes them in MRI
+        private static object ConvertClockTime(ConversionStorage<MutableString>/*!*/ tosConversion, long nanoseconds, object unit) {
+            string unitName = (unit == Missing.Value || unit == null) ? "float_second" : (unit as RubySymbol)?.ToString();
+            switch (unitName) {
+                case "float_second": return nanoseconds / 1e9;
+                case "float_millisecond": return nanoseconds / 1e6;
+                case "float_microsecond": return nanoseconds / 1e3;
+                case "second": return Protocols.Normalize(nanoseconds / 1000000000);
+                case "millisecond": return Protocols.Normalize(nanoseconds / 1000000);
+                case "microsecond": return Protocols.Normalize(nanoseconds / 1000);
+                case "nanosecond": return Protocols.Normalize(nanoseconds);
+                default:
+                    throw RubyExceptions.CreateArgumentError("unexpected unit: " + Protocols.ConvertToString(tosConversion, unit).ToString());
+            }
         }
 
-        public static void TmsSetSystemTime(RubyStruct/*!*/ tms, double value) {
-            tms[1] = value;
+        [StructLayout(LayoutKind.Sequential)]
+        private struct Timespec {
+            public IntPtr Seconds;      // time_t
+            public IntPtr Nanoseconds;  // long
         }
 
-        public static void TmsSetChildUserTime(RubyStruct/*!*/ tms, double value) {
-            tms[2] = value;
+        [DllImport("libc", EntryPoint = "clock_gettime")]
+        private static extern int clock_gettime(int clockId, out Timespec time);
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr GetCurrentThread();
+
+        [DllImport("kernel32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetThreadTimes(IntPtr thread, out long creationTime, out long exitTime, out long kernelTime, out long userTime);
+
+        // set once a platform call has failed, so that the next read does not try it again
+        private static bool _threadCpuTimeUnavailable;
+
+        /// <summary>
+        /// The CPU time the calling thread has used, in nanoseconds: clock_gettime(CLOCK_THREAD_CPUTIME_ID) on Unix, whose
+        /// id is 3 on Linux, 16 on macOS and 14 on FreeBSD, and GetThreadTimes' kernel and user time (in 100 ns units) on
+        /// Windows. A Ruby Thread is a CLR thread, which is an OS thread, so this is the Ruby Thread's CPU time as in MRI.
+        /// One difference remains: a Fiber runs on a worker thread of its own here (ThreadOps.Fiber.cs), while MRI runs it on
+        /// the thread that resumes it, so the CPU time a Fiber (or Enumerator#next) spends counts toward neither that thread's
+        /// clock nor, read inside the Fiber, the resuming thread's. Charging it back would cost two clock reads per switch.
+        /// </summary>
+        private static bool TryGetThreadCpuTime(out long nanoseconds) {
+            nanoseconds = 0;
+            if (_threadCpuTimeUnavailable) {
+                return false;
+            }
+            try {
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) {
+                    if (GetThreadTimes(GetCurrentThread(), out _, out _, out long kernel, out long user)) {
+                        nanoseconds = (kernel + user) * 100;
+                        return true;
+                    }
+                } else {
+                    int clockId = RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? 16 :
+                        RuntimeInformation.IsOSPlatform(OSPlatform.FreeBSD) ? 14 : CLOCK_THREAD_CPUTIME_ID;
+                    if (clock_gettime(clockId, out Timespec time) == 0) {
+                        nanoseconds = (long)time.Seconds * 1000000000 + (long)time.Nanoseconds;
+                        return true;
+                    }
+                }
+            } catch (DllNotFoundException) {
+            } catch (EntryPointNotFoundException) {
+            }
+            _threadCpuTimeUnavailable = true;
+            return false;
         }
 
-        public static void TmsSetChildSystemTime(RubyStruct/*!*/ tms, double value) {
-            tms[3] = value;
-        }
-
-#endregion
+        #endregion
     }
-
-#endregion
 }
-#endif

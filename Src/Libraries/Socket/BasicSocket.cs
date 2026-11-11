@@ -13,7 +13,6 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_SYNC_SOCKETS
 
 using System;
 using System.Collections.Generic;
@@ -29,14 +28,11 @@ using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
-using IronRuby.StandardLibrary.FileControl;
 using System.Numerics;
-using IronRuby.Runtime.Calls;
 using System.Globalization;
-using IronRuby.Compiler;
 
 namespace IronRuby.StandardLibrary.Sockets {
-    [RubyClass("BasicSocket", BuildConfig = "FEATURE_SYNC_SOCKETS")]
+    [RubyClass("BasicSocket")]
     public abstract class RubyBasicSocket : RubyIO {
         // TODO: do these escape out of the library?
         private static readonly MutableString BROADCAST_STRING = MutableString.CreateAscii("<broadcast>").Freeze();
@@ -101,7 +97,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             // an idle keep-alive connection (puma does, after every response) paid for both.
             // Bytes already in IronRuby's buffer are served without touching the socket.
             if (isRead && !Closed && _socket != null && !GetStream().DataBuffered
-                && !_socket.Poll(0, SelectMode.SelectRead)) {
+                && !IsReadableOrFailed(_socket, 0)) {
                 throw RubyIOOps.NonBlockingError(Context, true, "read would block");
             }
 
@@ -131,19 +127,6 @@ namespace IronRuby.StandardLibrary.Sockets {
                 Reset(new SocketStream(value), IOMode.ReadWrite | IOMode.PreserveEndOfLines);
                 _socket = value;
             }
-        }
-
-        public override WaitHandle/*!*/ CreateReadWaitHandle() {
-            return Socket.BeginReceive(Utils.EmptyBytes, 0, 0, SocketFlags.Peek, null, null).AsyncWaitHandle;
-        }
-
-        public override WaitHandle/*!*/ CreateWriteWaitHandle() {
-            return Socket.BeginSend(Utils.EmptyBytes, 0, 0, SocketFlags.Peek, null, null).AsyncWaitHandle;
-        }
-
-        public override WaitHandle/*!*/ CreateErrorWaitHandle() {
-            // TODO:
-            throw new NotSupportedException();
         }
 
         // The Linux fcntl(2) command numbers, which is what io/nonblock.rb, IO#fcntl and Fcntl use.
@@ -193,7 +176,6 @@ namespace IronRuby.StandardLibrary.Sockets {
         /// </summary>
         [RubyMethod("do_not_reverse_lookup=", RubyMethodAttributes.PublicSingleton)]
         public static void SetDoNotReverseLookup(RubyClass/*!*/ self, bool value) {
-            Protocols.CheckSafeLevel(self.Context, 4);
             DoNotReverseLookup(self.Context).Value = value;
         }
 
@@ -212,7 +194,6 @@ namespace IronRuby.StandardLibrary.Sockets {
         /// </summary>
         [RubyMethod("do_not_reverse_lookup=")]
         public static void SetDoNotReverseLookup(RubyBasicSocket/*!*/ self, bool value) {
-            Protocols.CheckSafeLevel(self.Context, 4);
             self._doNotReverseLookup = value;
         }
 
@@ -292,7 +273,7 @@ namespace IronRuby.StandardLibrary.Sockets {
         public static RubyArray/*!*/ CreateSocketPair(RubyClass/*!*/ self, [DefaultProtocol]int type, [DefaultProtocol]int protocol) {
             int[] descriptors = new int[2];
             if (PosixMessages.socketpair(UnixAddressFamilyNumber, type, protocol, descriptors) != 0) {
-                throw Posix.Error(Marshal.GetLastWin32Error(), null);
+                throw Posix.Error(Marshal.GetLastWin32Error(), null, self.Context);
             }
             RubyArray result = new RubyArray(2);
             result.Add(CreateForClass(self, new Socket(new SafeSocketHandle((IntPtr)descriptors[0], true))));
@@ -399,7 +380,7 @@ namespace IronRuby.StandardLibrary.Sockets {
         // never be killed. Wait for readiness in slices instead and check for a parked asynchronous
         // exception between them, which turns the wait into a Ruby safe point. mspec's block_caller
         // matcher does exactly "wait for status == sleep, then kill and join".
-        private const int PollSliceMicroseconds = 50 * 1000;
+        internal const int PollSliceMicroseconds = 50 * 1000;
 
         /// <summary>
         /// A read that waits for data. A *stream* socket that is not connected does not wait at all --
@@ -453,7 +434,7 @@ namespace IronRuby.StandardLibrary.Sockets {
                 // Only a socket left in blocking mode can park here; the *_nonblock family has
                 // already cleared Socket.Blocking and must not wait at all.
                 if (socket != null && socket.Blocking) {
-                    while (!socket.Poll(PollSliceMicroseconds, mode)) {
+                    while (mode == SelectMode.SelectRead ? !IsReadableOrFailed(socket, PollSliceMicroseconds) : !socket.Poll(PollSliceMicroseconds, mode)) {
                         RubyUtils.CheckAsyncException();
                     }
                 }
@@ -462,6 +443,16 @@ namespace IronRuby.StandardLibrary.Sockets {
                 info.Blocked = wasBlocked;
                 info.BlockedLabel = wasLabel;
             }
+        }
+
+        /// <summary>
+        /// Whether a read would not block: data, end of file, or a pending error, which poll(2)
+        /// reports as POLLERR and .NET's SelectRead does not count. A UDP socket an ICMP "port
+        /// unreachable" has failed (ECONNREFUSED in MRI) was never readable, so recv waited forever
+        /// and read_nonblock said EAGAIN.
+        /// </summary>
+        internal static bool IsReadableOrFailed(Socket/*!*/ socket, int microseconds) {
+            return socket.Poll(microseconds, SelectMode.SelectRead) || socket.Poll(0, SelectMode.SelectError);
         }
 
         internal static void Blocking(Action/*!*/ operation) {
@@ -480,24 +471,21 @@ namespace IronRuby.StandardLibrary.Sockets {
 #region Public Instance Methods
 
         [RubyMethod("close_read")]
-        public static void CloseRead(RubyContext/*!*/ context, RubyBasicSocket/*!*/ self) {
-            CheckSecurity(context, self, "can't close socket");
+        public static void CloseRead(RubyBasicSocket/*!*/ self) {
             // TODO: It would be nice to alter the SocketStream to be WriteOnly here
             self.Socket.Shutdown(SocketShutdown.Receive);
         }
 
         [RubyMethod("close_write")]
-        public static void CloseWrite(RubyContext/*!*/ context, RubyBasicSocket/*!*/ self) {
-            CheckSecurity(context, self, "can't close socket");
+        public static void CloseWrite(RubyBasicSocket/*!*/ self) {
             // TODO: It would be nice to alter the SocketStream to be ReadOnly here
             self.Socket.Shutdown(SocketShutdown.Send);
         }
 
         [RubyMethod("shutdown")]
-        public static int Shutdown(RubyContext/*!*/ context, RubyBasicSocket/*!*/ self, [DefaultProtocol, DefaultParameterValue(2)]int how) {
-            CheckSecurity(context, self, "can't shutdown socket");
+        public static int Shutdown(RubyBasicSocket/*!*/ self, [DefaultProtocol, DefaultParameterValue(2)]int how) {
             if (how < 0 || 2 < how) {
-                throw RubyExceptions.CreateArgumentError("`how' should be either 0, 1, 2");
+                throw RubyExceptions.CreateArgumentError("`how' should be either :SHUT_RD, :SHUT_WR, :SHUT_RDWR");
             }
             // This used to close() instead, to work around webrick trouble in 2009. Closing is
             // observably wrong -- the socket stays open after shutdown in every other Ruby, and
@@ -513,10 +501,7 @@ namespace IronRuby.StandardLibrary.Sockets {
         /// <param name="optname">optname is an integer, usually one of the SO_ constants, such as Socket::SO_REUSEADDR.</param>
         /// <param name="value">value is the value of the option, it is passed to the underlying setsockopt() as a pointer to a certain number of bytes. How this is done depends on the type.</param>
         [RubyMethod("setsockopt")]
-        public static void SetSocketOption(ConversionStorage<int>/*!*/ conversionStorage, RubyContext/*!*/ context, 
-            RubyBasicSocket/*!*/ self, [DefaultProtocol]int level, [DefaultProtocol]int optname, int value) {
-
-            Protocols.CheckSafeLevel(context, 2, "setsockopt");
+        public static void SetSocketOption(RubyBasicSocket/*!*/ self, [DefaultProtocol]int level, [DefaultProtocol]int optname, int value) {
             self.Socket.SetSocketOption((SocketOptionLevel)level, (SocketOptionName)optname, value);
         }
 
@@ -527,18 +512,13 @@ namespace IronRuby.StandardLibrary.Sockets {
         /// <param name="optname">optname is an integer, usually one of the SO_ constants, such as Socket::SO_REUSEADDR.</param>
         /// <param name="value">value is the value of the option, it is passed to the underlying setsockopt() as a pointer to a certain number of bytes. How this is done depends on the type.</param>
         [RubyMethod("setsockopt")]
-        public static void SetSocketOption(ConversionStorage<int>/*!*/ conversionStorage, RubyContext/*!*/ context, 
-            RubyBasicSocket/*!*/ self, [DefaultProtocol]int level, [DefaultProtocol]int optname, bool value) {
-
-            Protocols.CheckSafeLevel(context, 2, "setsockopt");
+        public static void SetSocketOption(RubyBasicSocket/*!*/ self, [DefaultProtocol]int level, [DefaultProtocol]int optname, bool value) {
             self.Socket.SetSocketOption((SocketOptionLevel)level, (SocketOptionName)optname, value);
         }
 
         /// <summary>
         /// Sets a socket option. These are protocol and system specific, see your local sytem documentation for details. 
         /// </summary>
-        /// <param name="context"></param>
-        /// <param name="self"></param>
         /// <param name="level">level is an integer, usually one of the SOL_ constants such as Socket::SOL_SOCKET, or a protocol level.</param>
         /// <param name="optname">optname is an integer, usually one of the SO_ constants, such as Socket::SO_REUSEADDR.</param>
         /// <param name="value">value is the value of the option, it is passed to the underlying setsockopt() as a pointer to a certain number of bytes. How this is done depends on the type.</param>
@@ -561,10 +541,8 @@ namespace IronRuby.StandardLibrary.Sockets {
         ///   sock.setsockopt(Socket::IPPROTO_IP, Socket::IP_ADD_MEMBERSHIP, optval)
         /// </example>
         [RubyMethod("setsockopt")]
-        public static void SetSocketOption(RubyContext/*!*/ context, RubyBasicSocket/*!*/ self, 
+        public static void SetSocketOption(RubyBasicSocket/*!*/ self,
             [DefaultProtocol]int level, [DefaultProtocol]int optname, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
-
-            Protocols.CheckSafeLevel(context, 2, "setsockopt");
             self.Socket.SetSocketOption((SocketOptionLevel)level, (SocketOptionName)optname, value.ConvertToBytes());
         }
 
@@ -603,9 +581,7 @@ namespace IronRuby.StandardLibrary.Sockets {
         //    SO_REUSEADDR cannot be set at all (see TCPServer.cs).
         // A libc layer needs the platform constants, which is a bigger change than it looks.
         [RubyMethod("getsockopt")]
-        public static MutableString GetSocketOption(ConversionStorage<int>/*!*/ conversionStorage, RubyContext/*!*/ context,
-            RubyBasicSocket/*!*/ self, [DefaultProtocol]int level, [DefaultProtocol]int optname) {
-            Protocols.CheckSafeLevel(context, 2, "getsockopt");
+        public static MutableString GetSocketOption(RubyBasicSocket/*!*/ self, [DefaultProtocol]int level, [DefaultProtocol]int optname) {
             // struct linger is two ints; everything else the specs ask about is one.
             int size = (level == (int)SocketOptionLevel.Socket && optname == (int)SocketOptionName.Linger) ? 8 : 4;
             byte[] value = self.Socket.GetSocketOption((SocketOptionLevel)level, (SocketOptionName)optname, size);
@@ -650,7 +626,6 @@ namespace IronRuby.StandardLibrary.Sockets {
         [RubyMethod("send")]
         public static int Send(ConversionStorage<int>/*!*/ fixnumCast, 
             RubyBasicSocket/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ message, object flags) {
-            Protocols.CheckSafeLevel(fixnumCast.Context, 4, "send");
             SocketFlags socketFlags = ConvertToSocketFlag(fixnumCast, flags);
             return Blocking(() => self.Socket.Send(message.ConvertToBytes(), socketFlags));
         }
@@ -658,7 +633,6 @@ namespace IronRuby.StandardLibrary.Sockets {
         [RubyMethod("send")]
         public static int Send(ConversionStorage<int>/*!*/ fixnumCast, RubyBasicSocket/*!*/ self,
             [DefaultProtocol, NotNull]MutableString/*!*/ message, object flags, [DefaultProtocol, NotNull]MutableString/*!*/ to) {
-            Protocols.CheckSafeLevel(fixnumCast.Context, 4, "send");
             // Convert the parameters
             SocketFlags socketFlags = ConvertToSocketFlag(fixnumCast, flags);
             // Unpack the socket address information from the to parameter
@@ -677,7 +651,6 @@ namespace IronRuby.StandardLibrary.Sockets {
 
             MutableString str = MutableString.CreateBinary(received);
             str.Append(buffer, 0, received);
-            str.IsTainted = true;
             return str;
         }
 
@@ -697,6 +670,18 @@ namespace IronRuby.StandardLibrary.Sockets {
         ///      p s.recv_nonblock(10) #=> "aaa"
         /// </example>
         #region libc getsockopt, setsockopt
+
+        /// <summary>
+        /// The socket's address family as .NET numbers it (InterNetwork 2, InterNetworkV6 23,
+        /// Unix 1), without a syscall. getsockopt needs the family and used to read it from
+        /// getsockname - but .NET's LocalEndPoint first finishes a pending non-blocking connect,
+        /// reading SO_ERROR to do it, which clears the very error a caller asking for SO_ERROR
+        /// after connect_nonblock wanted to see (cool.io's Connector, EventMachine-style code).
+        /// </summary>
+        [RubyMethod("__ir_raw_address_family", RubyMethodAttributes.PrivateInstance)]
+        public static int GetAddressFamily(RubyBasicSocket/*!*/ self) {
+            return (int)self.Socket.AddressFamily;
+        }
 
         /// <summary>
         /// getsockopt(2) with the *platform's* level and option numbers (the Ruby layer translates
@@ -899,7 +884,7 @@ namespace IronRuby.StandardLibrary.Sockets {
                 return true;  // let the operation itself raise IOError
             }
             var socket = self.Socket;
-            return self.GetStream().DataBuffered || socket.Poll(0, SelectMode.SelectRead);
+            return self.GetStream().DataBuffered || IsReadableOrFailed(socket, 0);
         }
 
         [RubyMethod("recv_nonblock")]
@@ -920,12 +905,6 @@ namespace IronRuby.StandardLibrary.Sockets {
 
 #region Internal Helpers
 
-        internal static void CheckSecurity(RubyContext/*!*/ context, object self, string message) {
-            if (context.CurrentSafeLevel >= 4 && context.IsObjectTainted(self)) {
-                throw RubyExceptions.CreateSecurityError("Insecure: " + message);
-            }
-        }
-
         // TODO: handle other invalid addresses
         internal static IPHostEntry/*!*/ GetHostEntry(IPAddress/*!*/ address, bool doNotReverseLookup) {
             Assert.NotNull(address);
@@ -944,7 +923,11 @@ namespace IronRuby.StandardLibrary.Sockets {
             } else if (hostNameOrAddress == IPAddress.Loopback.ToString()) {
                 return MakeEntry(IPAddress.Loopback, doNotReverseLookup);
             } else {
-                return Dns.GetHostEntry(hostNameOrAddress);
+                try {
+                    return Dns.GetHostEntry(hostNameOrAddress);
+                } catch (SocketException e) when (IsResolutionFailure(e)) {
+                    throw ResolutionFailure(e, "getaddrinfo: ");
+                }
             }
         }
 
@@ -953,9 +936,13 @@ namespace IronRuby.StandardLibrary.Sockets {
             if (IPAddress.TryParse(hostNameOrAddress, out address)) {
                 return address;
             }
-            // TODO: map exceptions
-
-            var addresses = Dns.GetHostAddresses(hostNameOrAddress);
+            IPAddress[] addresses;
+            try {
+                addresses = Dns.GetHostAddresses(hostNameOrAddress);
+            } catch (SocketException e) when (IsResolutionFailure(e)) {
+                // CRuby: Socket::ResolutionError, "getaddrinfo: Name or service not known".
+                throw ResolutionFailure(e, "getaddrinfo: ");
+            }
 
             // prefer V4 address:
             foreach (var hostAddress in addresses) {
@@ -965,6 +952,23 @@ namespace IronRuby.StandardLibrary.Sockets {
             }
 
             return addresses[0];
+        }
+
+        private static bool IsResolutionFailure(SocketException/*!*/ e) {
+            return e.SocketErrorCode is SocketError.HostNotFound or SocketError.NoData or SocketError.TryAgain or SocketError.NoRecovery;
+        }
+
+        /// <summary>
+        /// The resolver's own exception, with the message CRuby gives. It keeps its SocketErrorCode, which
+        /// is what Src/StdLib/ironruby/socket.rb turns into a Socket::ResolutionError and its error_code.
+        /// </summary>
+        private static Exception/*!*/ ResolutionFailure(SocketException/*!*/ e, string/*!*/ call) {
+            return RubyExceptionData.InitializeException(e, MutableString.Create(call + e.Message, RubyEncoding.UTF8));
+        }
+
+        /// <summary>CRuby's detail for a failed socket call: <c>connect(2) for "localhost" port 80</c>.</summary>
+        internal static string/*!*/ DescribeEndPoint(string/*!*/ call, MutableString host, int port) {
+            return call + " for " + (host != null ? "\"" + host.ConvertToString() + "\"" : "nil") + " port " + port;
         }
 
         /// <summary>
@@ -980,7 +984,13 @@ namespace IronRuby.StandardLibrary.Sockets {
             if (IPAddress.TryParse(hostNameOrAddress, out address)) {
                 return new[] { address };
             }
-            IPAddress[] addresses = Dns.GetHostAddresses(hostNameOrAddress);
+            IPAddress[] addresses;
+            try {
+                addresses = Dns.GetHostAddresses(hostNameOrAddress);
+            } catch (SocketException e) when (IsResolutionFailure(e)) {
+                // CRuby names the call that failed: "getaddrinfo(3): Name or service not known".
+                throw ResolutionFailure(e, "getaddrinfo(3): ");
+            }
             var ordered = new List<IPAddress>(addresses.Length);
             foreach (var hostAddress in addresses) {
                 if (hostAddress.AddressFamily == AddressFamily.InterNetwork) {
@@ -1004,7 +1014,12 @@ namespace IronRuby.StandardLibrary.Sockets {
             if (IPAddress.TryParse(hostNameOrAddress, out address)) {
                 return address;
             }
-            var addresses = Dns.GetHostAddresses(hostNameOrAddress);
+            IPAddress[] addresses;
+            try {
+                addresses = Dns.GetHostAddresses(hostNameOrAddress);
+            } catch (SocketException e) when (IsResolutionFailure(e)) {
+                throw ResolutionFailure(e, "getaddrinfo: ");
+            }
             foreach (var hostAddress in addresses) {
                 if (hostAddress.AddressFamily == family) {
                     return hostAddress;
@@ -1152,7 +1167,7 @@ namespace IronRuby.StandardLibrary.Sockets {
                     return new IPAddress(bytes).ToString();
                 }
             } else {
-                throw RubyExceptions.CreateRangeError("bignum too big to convert into `quad long'");
+                throw RubyExceptions.CreateRangeError("bignum too big to convert into 'unsigned long'");
             }
         }
 
@@ -1181,31 +1196,6 @@ namespace IronRuby.StandardLibrary.Sockets {
             }
         }
         
-        /// <summary>
-        /// Converts an Integer to a Fixnum.
-        /// Don't call any conversion methods--just handles Fixnum and Bignum
-        /// </summary>
-        /// <param name="value"></param>
-        /// <returns>true if value is an Integer, false otherwise</returns>
-        /// <exception cref="ArgumentOutOfRangeException">Throws a RangeError if value is a
-        /// BigInteger but can't be converted to a Fixnum</exception>
-        internal static bool IntegerAsFixnum(object value, out int result) {
-            if (value is int) {
-                result = (int)value;
-                return true;
-            }
-
-            if (value is BigInteger bignum) {
-                if (!bignum.AsInt32(out result)) {
-                    throw RubyExceptions.CreateRangeError("bignum too big to convert into `long'");
-                }
-                return true;
-            }
-
-            result = 0;
-            return false;
-        }
-
         internal static int ConvertToPortNum(ConversionStorage<MutableString>/*!*/ stringCast, ConversionStorage<int>/*!*/ fixnumCast, object port) {
             // conversion protocol: if it's a Fixnum, return it
             // otherwise, convert to string & then convert the result to a Fixnum
@@ -1228,7 +1218,7 @@ namespace IronRuby.StandardLibrary.Sockets {
                 return i;
             }
 
-            throw SocketErrorOps.Create(MutableString.FormatMessage("Invalid port number or service name: `{0}'.", serviceName));
+            throw SocketErrorOps.Create(MutableString.FormatMessage("Invalid port number or service name: '{0}'.", serviceName));
         }
 
         internal static ServiceName SearchForService(int port) {
@@ -1511,4 +1501,3 @@ namespace IronRuby.StandardLibrary.Sockets {
 #endregion
     }
 }
-#endif

@@ -15,7 +15,6 @@
 
 using System.Linq.Expressions;
 
-using System;
 using System.Reflection;
 using System.Threading;
 using Microsoft.Scripting.Interpreter;
@@ -47,7 +46,7 @@ namespace IronRuby.Runtime.Calls {
         /// </summary>
         public int LastVersion;
 
-        // stop growing: further classes get rules of their own
+        // Past this many the set starts over (see TryAdd).
         private const int MaxCount = 4096;
 
         /// <summary>
@@ -80,7 +79,13 @@ namespace IronRuby.Runtime.Calls {
         }
 
         /// <summary>
-        /// Adds a version the rule has been verified to hold for. Returns false if the set already holds it or is full.
+        /// Adds a version the rule has been verified to hold for. Returns false if the set already holds it.
+        ///
+        /// A full set starts over empty rather than turning further versions away. Versions are never reused, and every class
+        /// made at run time - each Struct.new, Data.define, Class.new - brings new ones, most of them dead soon after. A set that
+        /// stopped growing sent every class after the 4096th to a rule of its own, built and compiled for the one class (~0.3 ms
+        /// on each call made on a new class: Class.new { define_method ... } went from ~50 us to ~400 us after ~3500 classes).
+        /// A version dropped here that is still in use fails the test once and is added again.
         /// </summary>
         internal bool TryAdd(int version) {
             if (version == 0) {
@@ -93,7 +98,8 @@ namespace IronRuby.Runtime.Calls {
                 }
 
                 if (_count >= MaxCount) {
-                    return false;
+                    Volatile.Write(ref _slots, new int[8]);
+                    _count = 0;
                 }
 
                 int[] slots = _slots;
@@ -133,15 +139,24 @@ namespace IronRuby.Runtime.Calls {
         private static FieldInfo _LastVersionField;
 
         /// <summary>
-        /// #{versionExpression} == #{set}.LastVersion || (#{versionExpression}) in #{set}
+        /// #{versionExpression} == #{boundVersion} || #{versionExpression} == #{set}.LastVersion || (#{versionExpression}) in #{set}
+        ///
+        /// <paramref name="boundVersion"/> is the version the rule is being built for, which the set already holds. The site that
+        /// asked for the rule is the one most likely to run it hot, and for it the test is then what an unshared rule's is: a
+        /// compare with a constant, not a load of the set from the rule's closure. Without it a hot loop whose sites got shared
+        /// rules ran 5-10% slower than one whose sites got rules of their own (the precompiled startup library makes the former
+        /// common: its compiled sites register the typed delegate shapes before startup's last method definitions bump the classes).
         /// </summary>
-        internal Expression/*!*/ MakeTest(Expression/*!*/ versionExpression) {
+        internal Expression/*!*/ MakeTest(Expression/*!*/ versionExpression, int boundVersion) {
             var method = _IsValidMethod ?? (_IsValidMethod = CallInstruction.CacheFunc<RuleVersionSet, int, bool>(IsValid));
             var lastVersion = _LastVersionField ?? (_LastVersionField = typeof(RuleVersionSet).GetField("LastVersion"));
             var set = AstUtils.Constant(this);
             return Expression.OrElse(
-                Expression.Equal(versionExpression, Expression.Field(set, lastVersion)),
-                Expression.Call(method, set, versionExpression)
+                Expression.Equal(versionExpression, AstUtils.Constant(boundVersion)),
+                Expression.OrElse(
+                    Expression.Equal(versionExpression, Expression.Field(set, lastVersion)),
+                    Expression.Call(method, set, versionExpression)
+                )
             );
         }
     }

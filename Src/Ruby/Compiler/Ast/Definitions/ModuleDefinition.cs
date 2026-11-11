@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using Microsoft.Scripting;
@@ -92,7 +88,7 @@ namespace IronRuby.Compiler.Ast {
             return new ScopeBuilder(DefinedScope.AllocateClosureSlotsForLocals(0), null, DefinedScope);
         }
 
-        internal sealed override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal sealed override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             string debugString = (IsSingletonDeclaration) ? "SINGLETON" : ((this is ClassDefinition) ? "CLASS" : "MODULE") + " " + QualifiedName.Name;
 
             ScopeBuilder outerLocals = gen.CurrentScope;
@@ -117,7 +113,6 @@ namespace IronRuby.Compiler.Ast {
                 scope,
                 selfParameter, 
                 scopeVariable, 
-                IsSingletonDeclaration,
                 frameLabel
             );
             gen.GetEnclosingModuleFrame().OuterLocals = outerLocals;
@@ -130,7 +125,8 @@ namespace IronRuby.Compiler.Ast {
             var bodyResult = Ast.Variable(typeof(object), "#result");
             var moduleFrame = gen.GetEnclosingModuleFrame();
 
-            var bodyLambda = Ast.Lambda<Func<RubyScope, RubyModule, object>>(
+            string encodedName = RubyStackTraceBuilder.EncodeMethodName(frameLabel, gen.SourcePath, Location, gen.DebugMode);
+            var bodyLambda = Ast.Lambda<Func<RubyScope, RubyModule, object>>(new CompiledFrameExpression(
                 Ast.Block(new[] { bodyResult },
                     scope.CreateScope(
                         scopeVariable,
@@ -153,8 +149,8 @@ namespace IronRuby.Compiler.Ast {
                         )
                     ),
                     bodyResult
-                ),
-                RubyStackTraceBuilder.EncodeMethodName(frameLabel, gen.SourcePath, Location, gen.DebugMode),
+                ), encodedName, Location.Start.Line),
+                encodedName,
                 new[] { parentParameter, selfParameter }
             );
             

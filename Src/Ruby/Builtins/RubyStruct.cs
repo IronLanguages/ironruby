@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -25,7 +21,6 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Runtime.Serialization;
 using IronRuby.Compiler;
-using IronRuby.Compiler.Ast;
 using IronRuby.Compiler.Generation;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
@@ -88,7 +83,6 @@ namespace IronRuby.Builtins {
 
         #region Construction
 
-#if FEATURE_SERIALIZATION
         public RubyStruct(SerializationInfo/*!*/ info, StreamingContext context) 
             : base(info, context) {
             // TODO: deserialize _data
@@ -98,7 +92,6 @@ namespace IronRuby.Builtins {
             base.GetObjectData(info, context);
             // TODO: serialize _data
         }
-#endif
 
         // This class should not have a default constructor (or one that takes RubyClass or RubyContext)!
         // Struct class provides its own allocator (Struct#new), 
@@ -160,8 +153,8 @@ namespace IronRuby.Builtins {
 
                 // any symbol is a legal member name; the accessors are defined for all of them,
                 // even when the resulting name is not writable as a literal method call
-                cls.AddMethod(context, getter, new RubyCustomMethodInfo(CreateGetter(i), RubyMemberFlags.Public, cls));
-                cls.AddMethod(context, getter + '=', new RubyCustomMethodInfo(CreateSetter(i), RubyMemberFlags.Public, cls));
+                cls.AddMethod(context, getter, new RubyCustomMethodInfo(CreateGetter(i), RubyMemberFlags.Public, cls, 0));
+                cls.AddMethod(context, getter + '=', new RubyCustomMethodInfo(CreateSetter(i), RubyMemberFlags.Public, cls, 1));
             }
         }
 
@@ -219,14 +212,19 @@ namespace IronRuby.Builtins {
             if (TryGetIndex(name, out index)) {
                 return index;
             }
-            throw RubyExceptions.CreateNameError(String.Format("no member '{0}' in struct", name));
+            // with the name and the struct, as MRI's: did_you_mean suggests the members
+            throw RubyExceptions.WithNameAndReceiver(ImmediateClass.Context,
+                RubyExceptions.CreateNameError(String.Format("no member '{0}' in struct", name)), name, this);
         }
 
         // Structs whose #hash is being computed on this thread, outermost first.
         [ThreadStatic]
         private static List<RubyStruct> _hashing;
 
-        private sealed class RecursiveHashException : Exception {
+        // MRI throws here, which no rescue sees. It unwinds through user #hash methods, so as a StackUnwinder it is
+        // not caught by their rescue clauses either (a plain Exception subclass would be a StandardError to Ruby).
+        private sealed class RecursiveHashException : StackUnwinder {
+            public RecursiveHashException() : base(null) { }
         }
 
         public int GetHashCode(UnaryOpStorage/*!*/ hashStorage, ConversionStorage<int>/*!*/ fixnumCast) {
@@ -273,12 +271,17 @@ namespace IronRuby.Builtins {
             return self._data[index];
         }
 
+        /// <summary>
+        /// The member writer: the value is a positional argument, even a Hash passed as keywords (s.send(:a=, k: 1)), and kept,
+        /// it stops saying so (<see cref="RubyOps.ClearKeywordArguments"/>) - here rather than in the rule, which is interpreted
+        /// for its first calls.
+        /// </summary>
         [Emitted]
         public static object SetValue(RubyStruct/*!*/ self, int index, object value) {
             if (self.IsFrozen) {
                 throw RubyExceptions.CreateObjectFrozenErrorFor(self, "Struct");
             }
-            return self._data[index] = value;
+            return self._data[index] = RubyOps.ClearKeywordArguments(value);
         }
 
         #endregion
@@ -343,7 +346,7 @@ namespace IronRuby.Builtins {
             get {
                 var data = ImmediateClass.GetNonSingletonClass().TryGetInstanceData();
                 object value;
-                return data != null && data.TryGetInstanceVariable("@__keyword_init__", out value) && RubyOps.IsTrue(value);
+                return data != null && data.TryGetInstanceVariable(IronRuby.Runtime.RubyUtils.GetCoreStateInstanceVariableName("@__keyword_init__"), out value) && RubyOps.IsTrue(value);
             }
         }
     }

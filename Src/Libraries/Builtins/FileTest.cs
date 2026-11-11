@@ -12,19 +12,21 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_FILESYSTEM
 
 
 using System;
 using System.IO;
 using System.Runtime.CompilerServices;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {
-    // TODO: conversion: to_io, to_path, to_str
+    // The predicates MRI answers with rb_stat - the file-type and ownership tests, the size
+    // queries, identical? - take a stream as well as a path: an IO, or anything whose #to_io gives
+    // one, is fstat'd, so a pipe or a deleted-but-open file answers for what it holds open. The
+    // permission tests (readable?, writable?, executable? and their _real forms) and symlink? go
+    // through access(2) / lstat(2) on a path in MRI, and take only a path (#to_path or #to_str).
 
-    [RubyModule("FileTest", BuildConfig = "FEATURE_FILESYSTEM")]
+    [RubyModule("FileTest")]
     public static class FileTest {
         /// <summary>
         /// Every one of these predicates answers false (or nil) for a path that
@@ -49,16 +51,54 @@ namespace IronRuby.Builtins {
             return query(fsi);
         }
 
+        // Query and NullableQuery for the rb_stat predicates: a stream is fstat'd - a closed one is
+        // an IOError, as in MRI - and only what is not one is asked for its path.
+        private static bool Query(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path, Func<FileSystemInfo, bool>/*!*/ predicate) {
+
+            var io = ToIO(respondToStorage, toIoStorage, self.Context, path);
+            if (io != null) {
+                return predicate(RubyFileOps.RubyStatOps.Create(io));
+            }
+            return Query(self.Context, Protocols.CastToPath(toPath, path), true, predicate);
+        }
+
+        private static object NullableQuery(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path, Func<FileSystemInfo, object>/*!*/ query) {
+
+            var io = ToIO(respondToStorage, toIoStorage, self.Context, path);
+            if (io != null) {
+                return query(RubyFileOps.RubyStatOps.Create(io));
+            }
+            return NullableQuery(self.Context, Protocols.CastToPath(toPath, path), query);
+        }
+
+        /// <summary>
+        /// MRI's rb_stat: fstat(2) of a stream, stat(2) of anything else's path. Raises when the
+        /// path does not exist (File.size, File.mtime, ...).
+        /// </summary>
+        internal static FileSystemInfo/*!*/ Stat(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            ConversionStorage<MutableString>/*!*/ toPath, RubyContext/*!*/ context, object path) {
+
+            var io = ToIO(respondToStorage, toIoStorage, context, path);
+            if (io != null) {
+                return RubyFileOps.RubyStatOps.Create(io);
+            }
+            return RubyFileOps.RubyStatOps.Create(context, Protocols.CastToPath(toPath, path));
+        }
+
         [RubyMethod("blockdev?", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("blockdev?", RubyMethodAttributes.PrivateInstance)]
-        public static bool IsBlockDevice(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
-            return Query(self.Context, Protocols.CastToPath(toPath, path), true, RubyFileOps.RubyStatOps.IsBlockDevice);
+        public static bool IsBlockDevice(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
+            return Query(respondToStorage, toIoStorage, toPath, self, path, RubyFileOps.RubyStatOps.IsBlockDevice);
         }
 
         [RubyMethod("chardev?", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("chardev?", RubyMethodAttributes.PrivateInstance)]
-        public static bool IsCharDevice(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
-            return Query(self.Context, Protocols.CastToPath(toPath, path), true, RubyFileOps.RubyStatOps.IsCharDevice);
+        public static bool IsCharDevice(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
+            return Query(respondToStorage, toIoStorage, toPath, self, path, RubyFileOps.RubyStatOps.IsCharDevice);
         }
 
         /// <summary>
@@ -71,15 +111,16 @@ namespace IronRuby.Builtins {
             CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
             ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
 
-            var io = ToIO(respondToStorage, toIoStorage, path);
-            if (io != null) {
-                return RubyFileOps.RubyStatOps.IsDirectory(RubyFileOps.RubyStatOps.Create(io));
-            }
-            return Query(self.Context, Protocols.CastToPath(toPath, path), true, RubyFileOps.RubyStatOps.IsDirectory);
+            return Query(respondToStorage, toIoStorage, toPath, self, path, RubyFileOps.RubyStatOps.IsDirectory);
         }
 
+        /// <summary>
+        /// MRI's rb_check_convert_type(obj, T_FILE, "IO", :to_io): the IO itself, what #to_io gives,
+        /// or null when there is no #to_io or it answers nil - the argument is then a path. A #to_io
+        /// that gives anything else is a TypeError.
+        /// </summary>
         internal static RubyIO ToIO(RespondToStorage/*!*/ respondToStorage,
-            CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage, object obj) {
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage, RubyContext/*!*/ context, object obj) {
 
             var io = obj as RubyIO;
             if (io != null) {
@@ -89,7 +130,16 @@ namespace IronRuby.Builtins {
                 return null;
             }
             var site = toIoStorage.GetCallSite("to_io", 0);
-            return site.Target(site, obj) as RubyIO;
+            object converted = site.Target(site, obj);
+            if (converted == null) {
+                return null;
+            }
+            io = converted as RubyIO;
+            if (io == null) {
+                throw RubyExceptions.CreateTypeError("can't convert {0} to IO ({0}#to_io gives {1})",
+                    context.GetClassDisplayName(obj), context.GetClassDisplayName(converted));
+            }
+            return io;
         }
 
         [RubyMethod("executable?", RubyMethodAttributes.PublicSingleton)]
@@ -107,43 +157,60 @@ namespace IronRuby.Builtins {
         [RubyMethod("exist?", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("exist?", RubyMethodAttributes.PrivateInstance)]
         // #exists? was deprecated in 2.1 and removed in 3.9.
-        public static bool Exists(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
-            return Query(self.Context, Protocols.CastToPath(toPath, path), true, (fsi) => true);
+        public static bool Exists(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
+            return Query(respondToStorage, toIoStorage, toPath, self, path, (fsi) => true);
         }
 
         [RubyMethod("file?", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("file?", RubyMethodAttributes.PrivateInstance)]
-        public static bool IsFile(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
-            return Query(self.Context, Protocols.CastToPath(toPath, path), true, RubyFileOps.RubyStatOps.IsFile);
+        public static bool IsFile(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
+            return Query(respondToStorage, toIoStorage, toPath, self, path, RubyFileOps.RubyStatOps.IsFile);
         }
 
         [RubyMethod("grpowned?", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("grpowned?", RubyMethodAttributes.PrivateInstance)]
-        public static bool IsGroupOwned(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
-            return Query(self.Context, Protocols.CastToPath(toPath, path), true, RubyFileOps.RubyStatOps.IsGroupOwned);
+        public static bool IsGroupOwned(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
+            return Query(respondToStorage, toIoStorage, toPath, self, path, RubyFileOps.RubyStatOps.IsGroupOwned);
         }
 
         [RubyMethod("identical?", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("identical?", RubyMethodAttributes.PrivateInstance)]
-        public static bool AreIdentical(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path1, object path2) {
+        public static bool AreIdentical(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path1, object path2) {
             FileSystemInfo info1, info2;
-            int errno;
 
-            return RubyFileOps.RubyStatOps.TryCreate(self.Context, self.Context.DecodePath(Protocols.CastToPath(toPath, path1)), true, out info1, out errno)
-                && RubyFileOps.RubyStatOps.TryCreate(self.Context, self.Context.DecodePath(Protocols.CastToPath(toPath, path2)), true, out info2, out errno)
+            return TryStat(respondToStorage, toIoStorage, toPath, self.Context, path1, out info1)
+                && TryStat(respondToStorage, toIoStorage, toPath, self.Context, path2, out info2)
                 && RubyFileOps.RubyStatOps.AreIdentical(self.Context, info1, info2);
+        }
+
+        private static bool TryStat(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            ConversionStorage<MutableString>/*!*/ toPath, RubyContext/*!*/ context, object path, out FileSystemInfo info) {
+
+            var io = ToIO(respondToStorage, toIoStorage, context, path);
+            if (io != null) {
+                info = RubyFileOps.RubyStatOps.Create(io);
+                return true;
+            }
+            int errno;
+            return RubyFileOps.RubyStatOps.TryCreate(context, context.DecodePath(Protocols.CastToPath(toPath, path)), true, out info, out errno);
         }
 
         [RubyMethod("owned?", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("owned?", RubyMethodAttributes.PrivateInstance)]
-        public static bool IsUserOwned(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
-            return Query(self.Context, Protocols.CastToPath(toPath, path), true, RubyFileOps.RubyStatOps.IsUserOwned);
+        public static bool IsUserOwned(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
+            return Query(respondToStorage, toIoStorage, toPath, self, path, RubyFileOps.RubyStatOps.IsUserOwned);
         }
 
         [RubyMethod("pipe?", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("pipe?", RubyMethodAttributes.PrivateInstance)]
-        public static bool IsPipe(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
-            return Query(self.Context, Protocols.CastToPath(toPath, path), true, RubyFileOps.RubyStatOps.IsPipe);
+        public static bool IsPipe(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
+            return Query(respondToStorage, toIoStorage, toPath, self, path, RubyFileOps.RubyStatOps.IsPipe);
         }
 
         [RubyMethod("readable?", RubyMethodAttributes.PublicSingleton)]
@@ -160,38 +227,44 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("setgid?", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("setgid?", RubyMethodAttributes.PrivateInstance)]
-        public static bool IsSetGid(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
-            return Query(self.Context, Protocols.CastToPath(toPath, path), true, RubyFileOps.RubyStatOps.IsSetGid);
+        public static bool IsSetGid(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
+            return Query(respondToStorage, toIoStorage, toPath, self, path, RubyFileOps.RubyStatOps.IsSetGid);
         }
 
         [RubyMethod("setuid?", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("setuid?", RubyMethodAttributes.PrivateInstance)]
-        public static bool IsSetUid(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
-            return Query(self.Context, Protocols.CastToPath(toPath, path), true, RubyFileOps.RubyStatOps.IsSetUid);
+        public static bool IsSetUid(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
+            return Query(respondToStorage, toIoStorage, toPath, self, path, RubyFileOps.RubyStatOps.IsSetUid);
         }
 
         [RubyMethod("size", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("size", RubyMethodAttributes.PrivateInstance)]
-        public static object Size(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
-            return RubyFileOps.RubyStatOps.Size(RubyFileOps.RubyStatOps.Create(self.Context, Protocols.CastToPath(toPath, path)));
+        public static object Size(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
+            return RubyFileOps.RubyStatOps.Size(Stat(respondToStorage, toIoStorage, toPath, self.Context, path));
         }
 
         [RubyMethod("size?", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("size?", RubyMethodAttributes.PrivateInstance)]
-        public static object NullableSize(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
-            return NullableQuery(self.Context, Protocols.CastToPath(toPath, path), RubyFileOps.RubyStatOps.NullableSize);
+        public static object NullableSize(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
+            return NullableQuery(respondToStorage, toIoStorage, toPath, self, path, RubyFileOps.RubyStatOps.NullableSize);
         }
 
         [RubyMethod("socket?", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("socket?", RubyMethodAttributes.PrivateInstance)]
-        public static bool IsSocket(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
-            return Query(self.Context, Protocols.CastToPath(toPath, path), true, RubyFileOps.RubyStatOps.IsSocket);
+        public static bool IsSocket(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
+            return Query(respondToStorage, toIoStorage, toPath, self, path, RubyFileOps.RubyStatOps.IsSocket);
         }
 
         [RubyMethod("sticky?", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("sticky?", RubyMethodAttributes.PrivateInstance)]
-        public static object IsSticky(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
-            return Query(self.Context, Protocols.CastToPath(toPath, path), true,
+        public static object IsSticky(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
+            return Query(respondToStorage, toIoStorage, toPath, self, path,
                 (fsi) => RubyFileOps.RubyStatOps.IsSticky(fsi) as bool? ?? false);
         }
 
@@ -215,21 +288,29 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("world_readable?", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("world_readable?", RubyMethodAttributes.PrivateInstance)]
-        public static object IsWorldReadable(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
-            return NullableQuery(self.Context, Protocols.CastToPath(toPath, path), RubyFileOps.RubyStatOps.IsWorldReadable);
+        public static object IsWorldReadable(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
+            return NullableQuery(respondToStorage, toIoStorage, toPath, self, path, RubyFileOps.RubyStatOps.IsWorldReadable);
         }
 
         [RubyMethod("world_writable?", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("world_writable?", RubyMethodAttributes.PrivateInstance)]
-        public static object IsWorldWritable(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
-            return NullableQuery(self.Context, Protocols.CastToPath(toPath, path), RubyFileOps.RubyStatOps.IsWorldWritable);
+        public static object IsWorldWritable(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
+            return NullableQuery(respondToStorage, toIoStorage, toPath, self, path, RubyFileOps.RubyStatOps.IsWorldWritable);
         }
 
         [RubyMethod("empty?", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("empty?", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("zero?", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("zero?", RubyMethodAttributes.PrivateInstance)]
-        public static bool IsZeroLength(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
+        public static bool IsZeroLength(RespondToStorage/*!*/ respondToStorage, CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
+            var io = ToIO(respondToStorage, toIoStorage, self.Context, path);
+            if (io != null) {
+                return RubyFileOps.RubyStatOps.IsZeroLength(RubyFileOps.RubyStatOps.Create(io));
+            }
+
             var p = Protocols.CastToPath(toPath, path);
             string strPath = self.Context.DecodePath(p);
 
@@ -242,4 +323,3 @@ namespace IronRuby.Builtins {
         }
     }
 }
-#endif

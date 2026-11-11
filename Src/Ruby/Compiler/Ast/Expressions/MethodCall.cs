@@ -13,16 +13,10 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System.Diagnostics;
-using System.Dynamic;
 using Microsoft.Scripting;
-using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
 using IronRuby.Runtime.Calls;
@@ -65,10 +59,19 @@ namespace IronRuby.Compiler.Ast {
             _target = target;
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             var literal = _target as StringLiteral;
             if (literal != null && _methodName == "freeze" && (Arguments == null || Arguments.IsEmpty) && Block == null) {
                 return literal.TransformReadFrozen(gen);
+            }
+
+            var array = _target as ArrayConstructor;
+            if (array != null && (_methodName == "min" || _methodName == "max") && (Arguments == null || Arguments.IsEmpty) && Block == null) {
+                int splattedCount;
+                if (array.Arguments.Expressions.Length == 2 && array.Arguments.IndexOfSplatted(out splattedCount) < 0 &&
+                    !(IsStaticLiteral(array.Arguments.Expressions[0]) && IsStaticLiteral(array.Arguments.Expressions[1]))) {
+                    return TransformArrayLiteralExtreme(gen, array.Arguments.Expressions[0], array.Arguments.Expressions[1]);
+                }
             }
 
             MSA.Expression transformedTarget;
@@ -76,12 +79,38 @@ namespace IronRuby.Compiler.Ast {
             if (_target != null) {
                 transformedTarget = _target.TransformRead(gen);
                 // `self.foo` may call a private method, just like a receiverless call does
-                hasImplicitSelf = _target.NodeType == NodeTypes.SelfReference;
+                hasImplicitSelf = _target is SelfReference;
             } else {
                 transformedTarget = gen.CurrentSelfVariable;
                 hasImplicitSelf = true;
             }
             return TransformRead(this, gen, hasImplicitSelf, _methodName, transformedTarget, Arguments, Block, null, null);
+        }
+
+        // CRuby makes an array of numbers, symbols, nil, true and false once (duparray) and calls #min (#max)
+        // on it - a call a :c_call TracePoint sees - and answers only the other arrays without the call.
+        private static bool IsStaticLiteral(Expression/*!*/ expression) {
+            return expression is Literal || expression is SymbolLiteral;
+        }
+
+        // `[a, b].min' and `[a, b].max', the commonest way Ruby spells the smaller (larger) of two
+        // values: answered without building the array while Array#min (#max) is the library's own
+        // method (ArrayExtremeSite), made as written otherwise. The elements are evaluated first
+        // either way, as the array literal would.
+        private MSA.Expression/*!*/ TransformArrayLiteralExtreme(AstGenerator/*!*/ gen, Expression/*!*/ first, Expression/*!*/ second) {
+            var item1 = gen.CurrentScope.DefineHiddenVariable("#item1", typeof(object));
+            var item2 = gen.CurrentScope.DefineHiddenVariable("#item2", typeof(object));
+            var result = gen.CurrentScope.DefineHiddenVariable("#extreme", typeof(object));
+
+            var call = TransformRead(this, gen, false, _methodName, Methods.MakeArray2.OpCall(item1, item2), null, null, null, null);
+            var site = new ArrayExtremeSite(_methodName == "max");
+
+            return Ast.Block(
+                Ast.Assign(item1, AstUtils.Box(first.TransformRead(gen))),
+                Ast.Assign(item2, AstUtils.Box(second.TransformRead(gen))),
+                Ast.Assign(result, Methods.ArrayLiteralExtreme.OpCall(gen.CurrentScopeVariable, item1, item2, AstUtils.Constant(site))),
+                Ast.Condition(Methods.IsArrayExtremeNotHandled.OpCall(result), AstUtils.Box(call), result, typeof(object))
+            );
         }
 
         // arguments: complex arguments (expressions, maplets, splat, block) 
@@ -96,9 +125,9 @@ namespace IronRuby.Compiler.Ast {
             Assert.NotNull(gen, transformedTarget);
             Assert.NotEmpty(methodName);
 
-            // -X:JIT: `m(x, k: v)' may go straight into m's specialized body (Runtime/Jit/JitKeywordCall.cs)
-            if (hasImplicitSelf && block == null && singleArgument == null && assignmentRhsArgument == null && node is MethodCall) {
-                var direct = IronRuby.Runtime.Jit.JitKeywordCall.TryTransform(gen, methodName, transformedTarget, arguments);
+            // -X:JIT: `m(x, k: v)' and `r.m(x, k: v)' may go straight into m's specialized body (Runtime/Jit/JitKeywordCall.cs)
+            if (block == null && singleArgument == null && assignmentRhsArgument == null && node is MethodCall) {
+                var direct = IronRuby.Runtime.Jit.JitKeywordCall.TryTransform(gen, methodName, transformedTarget, arguments, hasImplicitSelf);
                 if (direct != null) {
                     return direct;
                 }
@@ -175,12 +204,6 @@ namespace IronRuby.Compiler.Ast {
             var call = node as MethodCall;
             siteBuilder.IsVariableCall = call != null && call.IsVariableCall;
             var dynamicSite = siteBuilder.MakeCallAction(methodName, hasImplicitSelf);
-#if FEATURE_CALL_SITE_TRACER
-            if (gen.Context.CallSiteCreated != null) {
-                gen.Context.CallSiteCreated(node, dynamicSite);
-            }
-#endif
-
             MSA.Expression result = gen.DebugMark(dynamicSite, methodName);
 
             if (block != null) {
@@ -205,7 +228,8 @@ namespace IronRuby.Compiler.Ast {
             Assert.NotNull(invoke);
             Debug.Assert((blockArgVariable == null) == (transformedBlock == null));
 
-            // see Ruby Language.doc/Control Flow Implementation/Method Call With a Block
+            // A call with a block: a retry in the block runs the call again, and a return in the block
+            // propagates out of the frame that made the call (BlockReturnResult)
             MSA.Expression resultVariable = gen.CurrentScope.DefineHiddenVariable("#method-result", typeof(object));
             MSA.ParameterExpression evalUnwinder;
 

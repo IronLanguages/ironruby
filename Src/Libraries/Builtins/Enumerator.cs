@@ -14,18 +14,14 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using IronRuby.Builtins;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
 using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {
-    using EachSite = Func<CallSite, object, Proc, object>;
 
     internal interface IEnumerator {
         object Each(RubyScope/*!*/ scope, BlockParam/*!*/ block);
@@ -36,7 +32,27 @@ namespace IronRuby.Builtins {
     /// A call to "each" on the instance of Enumerator is forwarded to a call to a method of a given name on the wrapped object.
     /// </summary>
     [RubyClass("Enumerator"), Includes(typeof(Enumerable))]
-    public class Enumerator {
+    public class Enumerator : IRubyInstanceDataOwner {
+        // Its external iteration (#next, #peek, #rewind in ruby4.rb) keeps its state in instance
+        // variables, so they live here rather than in the runtime's table of instance data.
+        private OwnedInstanceData _instanceData;
+
+        // An instance of a Ruby subclass (Enumerator::Lazy, or a user's) is an IRubyObject with instance
+        // data of its own, which every other path reads: that is the one to hand out then.
+        bool IRubyInstanceDataOwner.TryGetInstanceData(RubyContext/*!*/ context, out RubyInstanceData data) {
+            var rubyObject = this as IRubyObject;
+            if (rubyObject != null) {
+                data = rubyObject.TryGetInstanceData();
+                return true;
+            }
+            return _instanceData.TryGet(context, out data);
+        }
+
+        RubyInstanceData IRubyInstanceDataOwner.GetInstanceData(RubyContext/*!*/ context) {
+            var rubyObject = this as IRubyObject;
+            return (rubyObject != null) ? rubyObject.GetInstanceData() : _instanceData.GetOrCreate(context);
+        }
+
         internal sealed class Wrapper : IEnumerator {
             private readonly object _targetObject;
             private readonly string/*!*/ _targetName;
@@ -115,13 +131,30 @@ namespace IronRuby.Builtins {
         }
 
         [RubyConstructor]
+        [ReceivesKeywords]
         public static Enumerator/*!*/ Create(RubyClass/*!*/ self, object targetObject, [DefaultProtocol, Optional]string targetName,
             params object[]/*!*/ targetArguments) {
 
             return Reinitialize(new Enumerator(), targetObject, targetName, targetArguments);
         }
 
+        /// <summary>
+        /// #dup and #clone: the copy iterates the same target with the same arguments (the
+        /// instance variables a prelude-built enumerator keeps its generator in are copied by
+        /// the runtime). Without this a copy had no target and failed with "undefined method
+        /// `each' for nil".
+        /// </summary>
+        [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
+        public static Enumerator/*!*/ InitializeCopy(Enumerator/*!*/ self, [NotNull]Enumerator/*!*/ other) {
+            self._impl = other._impl;
+            self.SizeSource = other.SizeSource;
+            self.SizeOp = other.SizeOp;
+            self.SizeArg = other.SizeArg;
+            return self;
+        }
+
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        [ReceivesKeywords]
         public static Enumerator/*!*/ Reinitialize(Enumerator/*!*/ self, object targetObject, [DefaultProtocol, Optional]string targetName,
             params object[] targetArguments) {
 
@@ -143,7 +176,7 @@ namespace IronRuby.Builtins {
             return self;
         }
 
-        [RubyMethod("each_without_generator")]
+        [RubyMethod("__each_without_generator__")]
         public static object Each(RubyScope/*!*/ scope, BlockParam/*!*/ block, Enumerator/*!*/ self) {
             return self._impl.Each(scope, block);
         }
@@ -155,12 +188,13 @@ namespace IronRuby.Builtins {
         /// arguments, a generator, no block - is the prelude's __ir_each_impl__.
         /// </summary>
         [RubyMethod("each")]
+        [ReceivesKeywords]
         public static object EachFromCaller(CallSiteStorage<Func<CallSite, object, Proc, System.Collections.IList, object>>/*!*/ implStorage,
             RubyScope/*!*/ scope, BlockParam block, Enumerator/*!*/ self, params object[]/*!*/ args) {
 
             object generator;
             if (args.Length == 0 && block != null && self._impl != null &&
-                !(scope.RubyContext.TryGetInstanceVariable(self, "@generator", out generator) && generator != null)) {
+                !(scope.RubyContext.TryGetInstanceVariable(self, RubyUtils.GetCoreStateInstanceVariableName("@__generator__"), out generator) && generator != null)) {
                 return self._impl.Each(scope, block);
             }
 
@@ -236,7 +270,7 @@ namespace IronRuby.Builtins {
             }
 
             object generator;
-            if (context.TryGetInstanceVariable(self, "@generator", out generator) && generator != null) {
+            if (context.TryGetInstanceVariable(self, RubyUtils.GetCoreStateInstanceVariableName("@__generator__"), out generator) && generator != null) {
                 return null;
             }
 
@@ -248,6 +282,23 @@ namespace IronRuby.Builtins {
             }
 
             return new ArrayCursor(array, RubyUtils.CurrentRubyThread);
+        }
+
+        // External iteration needs the target/generator, not the public Enumerator that owns
+        // the fiber handle. Preserve custom #each receivers, where detaching could change Ruby
+        // behavior; those can still retain themselves through their suspended user frames.
+        [RubyMethod("__enum_iteration_source__", RubyMethodAttributes.PrivateInstance)]
+        public static Enumerator GetIterationSource(RubyContext context, Enumerator self) {
+            if (context.GetImmediateClassOf(self) != context.GetClass(typeof(Enumerator)) ||
+                !IsBuiltinMethod(context, self, "each", typeof(Enumerator), "EachFromCaller")) {
+                return self;
+            }
+            var source = new Enumerator(self._impl);
+            object generator;
+            if (context.TryGetInstanceVariable(self, RubyUtils.GetCoreStateInstanceVariableName("@__generator__"), out generator)) {
+                context.SetInstanceVariable(source, RubyUtils.GetCoreStateInstanceVariableName("@__generator__"), generator);
+            }
+            return source;
         }
 
         private static bool IsBuiltinMethod(RubyContext/*!*/ context, object target, string/*!*/ name, Type/*!*/ declaringType, string/*!*/ clrName) {
@@ -294,8 +345,5 @@ namespace IronRuby.Builtins {
         }
 
         #endregion
-
-        // TODO: 1.9:
-        // :each_with_index, :each_with_object, :with_index, :with_object, :next, :rewind
     }
 }

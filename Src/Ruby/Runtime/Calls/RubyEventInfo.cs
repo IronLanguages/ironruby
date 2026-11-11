@@ -13,16 +13,10 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
-using System.Collections.Generic;
 using System.Reflection;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using Microsoft.Scripting.Actions;
 using IronRuby.Compiler;
@@ -70,7 +64,17 @@ namespace IronRuby.Runtime.Calls {
         internal override void BuildCallNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ name) {
             // TODO: splat, rhs, ...
             if (args.Signature.ArgumentCount == 0) {
+                // obj.Event(&b) with b nil is obj.Event: it returns the event rather than subscribing nil to it
+                // (clr_member(I, :Event).call(*args, &blk) forwards a nil block that way). The rule tests which it was.
+                bool hasBlock = args.Signature.HasBlock && args.GetMetaBlock().Value != null;
                 if (args.Signature.HasBlock) {
+                    metaBuilder.AddRestriction(hasBlock ?
+                        (Expression)Ast.NotEqual(args.GetBlockExpression(), AstUtils.Constant(null)) :
+                        Ast.Equal(args.GetBlockExpression(), AstUtils.Constant(null))
+                    );
+                }
+
+                if (hasBlock) {
                     metaBuilder.Result = Methods.HookupEvent.OpCall(
                         AstUtils.Constant(this),
                         args.TargetExpression,

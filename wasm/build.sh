@@ -12,7 +12,18 @@ IR=$(dirname "$HERE")
 export DOTNET_ROOT=${DOTNET_ROOT:-/usr/local/dotnet}
 export PATH="$DOTNET_ROOT:$PATH"
 export MSBUILDDISABLENODEREUSE=1
+DLR_DIR_SET=${DLR_DIR:-}
 DLR_DIR=${DLR_DIR:-$(dirname "$IR")/dlr-wasm}
+DLR_SRC=$(dirname "$IR")/dlr
+# dlr-wasm is a copy of ../dlr plus the wasm patches: start it over when ../dlr has moved on
+# (new Build/dlr-patches committed there), and check ../dlr, since the wasm patches touch some
+# of the same files and make the build's own check (CheckDlrPatches) fail on the copy
+if [ -z "${DLR_DIR_SET:-}" ] && [ -d "$DLR_DIR/src/core" ] && [ -d "$DLR_SRC/.git" ] &&
+   [ "$(git -C "$DLR_DIR" rev-parse HEAD)" != "$(git -C "$DLR_SRC" rev-parse HEAD)" ]; then
+  echo "$DLR_SRC moved on: recreating $DLR_DIR"
+  rm -rf "$DLR_DIR"
+fi
+[ -d "$DLR_SRC/.git" ] && "$IR/Util/check-dlr-patches.sh" "$DLR_SRC/src/core"
 if [ ! -d "$DLR_DIR/src/core" ]; then
   git clone -q --no-hardlinks "$(dirname "$IR")/dlr" "$DLR_DIR"
   for p in "$IR"/Build/dlr-patches/*.patch; do
@@ -30,8 +41,10 @@ CONF=${CONF:-Release}
 # interpreter and AOT builds share obj/: never let one reuse the other's intermediates (a
 # trimmed CoreLib left in obj/.../linked by an AOT build breaks the untrimmed interpreter build)
 rm -rf "$HERE/IronRuby.Wasm/obj/$CONF/net10.0" "$HERE/IronRuby.Wasm/bin/$CONF/net10.0/publish"
+# wasm/global.json pins the .NET 10 SDK (its wasm-tools workload); dotnet finds it from the cwd
+cd "$HERE"
 nice -n 10 dotnet publish "$HERE/IronRuby.Wasm/IronRuby.Wasm.csproj" -c "$CONF" -m:3 \
-  -p:DlrSourceDir="$DLR_DIR/src/core" -p:IronRubyTargetFrameworks=net10.0 \
+  -p:DlrSourceDir="$DLR_DIR/src/core" -p:CheckDlrPatches=false -p:IronRubyTargetFrameworks=net10.0 \
   -p:RunAOTCompilation=$([ "${AOT:-1}" = 0 ] && echo false || echo true) -nologo -clp:ErrorsOnly
 
 DIST="$HERE/dist"

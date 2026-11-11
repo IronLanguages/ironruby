@@ -24,6 +24,9 @@ namespace IronRuby.Aot {
             // SavePath marks the AstGenerator as "saving to disk": it turns off OSR outlining and
             // coverage, both of which bake runtime objects into the tree.
             ruby.Options["SavePath"] = Path.GetTempPath();
+            // -X:JIT bakes inline caches holding the runtime into calls (JitKeywordCall); the
+            // saved code goes without them
+            ruby.Options["JIT"] = false;
             setup.LanguageSetups.Add(ruby);
             var runtime = IronRuby.Ruby.CreateRuntime(setup);
             engine = IronRuby.Ruby.GetEngine(runtime);
@@ -32,7 +35,7 @@ namespace IronRuby.Aot {
 
         public static Expression<Func<RubyScope, object, object>> ParseFile(RubyContext context, string path) {
             var unit = context.CreateFileUnit(Path.GetFullPath(path));
-            var options = new RubyCompilerOptions(context.RubyOptions) { FactoryKind = TopScopeFactoryKind.File };
+            var options = new RubyCompilerOptions() { FactoryKind = TopScopeFactoryKind.File };
             var lambda = context.ParseSourceCode<Func<RubyScope, object, object>>(unit, options, ErrorSink.Default);
             if (lambda == null) throw new InvalidOperationException("syntax error in " + path);
             return lambda;

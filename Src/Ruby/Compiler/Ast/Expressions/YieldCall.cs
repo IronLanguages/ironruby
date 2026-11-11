@@ -13,15 +13,9 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
-using System.Diagnostics;
 using Microsoft.Scripting;
-using IronRuby.Builtins;
 using IronRuby.Runtime;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
@@ -38,8 +32,9 @@ namespace IronRuby.Compiler.Ast {
             : base(args, null, location) {
         }
 
-        // see Ruby Language.doc/Runtime/Control Flow Implementation/Yield
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        // After the yield, a break in the block ends the frame that yielded, with the break's value: the
+        // Eval/Block/MethodYield helpers in RubyOps.FlowControl.cs say whether it does
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             MSA.Expression bfcVariable = gen.CurrentScope.DefineHiddenVariable("#yielded-bfc", typeof(BlockParam));
             MSA.Expression resultVariable = gen.CurrentScope.DefineHiddenVariable("#result", typeof(object));
             

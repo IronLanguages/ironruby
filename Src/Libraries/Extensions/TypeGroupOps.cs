@@ -13,26 +13,17 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
-using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
-using System.Dynamic;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Actions;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using IronRuby.Compiler.Generation;
 using System.Runtime.CompilerServices;
-using System.Collections.Generic;
 using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Builtins {
-    using Ast = Expression;
-    using AstUtils = Microsoft.Scripting.Ast.Utils;
 
     [RubyClass(Extends = typeof(TypeGroup), Restrictions = ModuleRestrictions.None)]
     [Includes(typeof(Enumerable))]
@@ -43,12 +34,12 @@ namespace IronRuby.Builtins {
             TypeTracker tracker = self.GetTypeForArity(typeArgs.Length);
 
             if (tracker == null) {
-                throw RubyExceptions.CreateArgumentError("Invalid number of type arguments for `{0}'", self.Name);
+                throw RubyExceptions.CreateArgumentError("Invalid number of type arguments for '{0}'", self.Name);
             }
 
             Type concreteType;
             if (typeArgs.Length > 0) {
-                concreteType = tracker.Type.MakeGenericType(Protocols.ToTypes(context, typeArgs));
+                concreteType = Protocols.MakeGenericType(context, tracker.Type, self.Name, typeArgs);
             } else {
                 concreteType = tracker.Type;
             }
@@ -61,7 +52,7 @@ namespace IronRuby.Builtins {
         public static RubyModule/*!*/ Of(RubyContext/*!*/ context, TypeGroup/*!*/ self, int genericArity) {
             TypeTracker tracker = self.GetTypeForArity(genericArity);
             if (tracker == null) {
-                throw RubyExceptions.CreateArgumentError("Type group `{0}' does not contain a type of generic arity {1}", self.Name, genericArity);
+                throw RubyExceptions.CreateArgumentError("Type group '{0}' does not contain a type of generic arity {1}", self.Name, genericArity);
             }
 
             return context.GetModule(tracker.Type);
@@ -154,6 +145,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: N
         [RubyMethod("new")]
+        [ReceivesKeywords]
         public static object/*!*/ New(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ storage, 
             TypeGroup/*!*/ self, params object[]/*!*/ args) {
             return New("new", storage, self, args);
@@ -161,6 +153,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: N&
         [RubyMethod("new")]
+        [ReceivesKeywords]
         public static object New(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ storage, BlockParam block, 
             TypeGroup/*!*/ self, params object[]/*!*/ args) {
             return New("new", storage, block, self, args);
@@ -174,6 +167,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: N
         [RubyMethod("clr_new")]
+        [ReceivesKeywords]
         public static object/*!*/ ClrNew(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ storage,
             TypeGroup/*!*/ self, params object[]/*!*/ args) {
             return New("clr_new", storage, self, args);
@@ -181,6 +175,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: N&
         [RubyMethod("clr_new")]
+        [ReceivesKeywords]
         public static object ClrNew(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ storage, BlockParam block,
             TypeGroup/*!*/ self, params object[]/*!*/ args) {
             return New("clr_new", storage, block, self, args);
@@ -191,5 +186,49 @@ namespace IronRuby.Builtins {
         public static RubyMethod/*!*/ GetClrConstructor(RubyContext/*!*/ context, TypeGroup/*!*/ self) {
             return ClassOps.GetClrConstructor(GetNonGenericClass(context, self));
         }
+
+        #region Forwarding to the non-generic type
+
+        // A constant like System::Threading::Tasks::Task names a group (Task and Task<T>), so the static members
+        // of the non-generic type have to be reached through the group. Whatever the group itself does not
+        // define is passed on to that type, when it has a public method of that name.
+
+        private static readonly RubyCallSignature ForwardSignature =
+            new RubyCallSignature(0, RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock);
+
+        private static RubyModule TryGetForwardTarget(RubyContext/*!*/ context, TypeGroup/*!*/ self, string/*!*/ name) {
+            TypeTracker type = self.GetTypeForArity(0);
+            if (type == null) {
+                return null;
+            }
+
+            RubyModule module = context.GetModule(type.Type);
+            return context.ResolveMethod(module, name, new VisibilityContext(RubyMethodAttributes.Public)).Found ? module : null;
+        }
+
+        [RubyMethod("method_missing", RubyMethodAttributes.PrivateInstance)]
+        [RubyStackTraceHidden]
+        [ReceivesKeywords]
+        public static object MethodMissing(RubyScope/*!*/ scope, BlockParam block, TypeGroup/*!*/ self,
+            [NotNull]RubySymbol/*!*/ name, params object[]/*!*/ args) {
+            var context = scope.RubyContext;
+
+            string methodName = name.ToString();
+            RubyModule target = TryGetForwardTarget(context, self, methodName);
+            if (target == null) {
+                return BasicObjectOps.MethodMissing(scope, self, name, args);
+            }
+
+            var site = context.GetOrCreateSendSite<Func<CallSite, object, Proc, RubyArray, object>>(methodName, ForwardSignature);
+            return site.Target(site, target, block != null ? block.Proc : null, RubyOps.MakeArrayN(args));
+        }
+
+        [RubyMethod("respond_to_missing?", RubyMethodAttributes.PrivateInstance)]
+        public static bool RespondToMissing(RubyContext/*!*/ context, TypeGroup/*!*/ self,
+            [DefaultProtocol, NotNull]string/*!*/ name, object includePrivate) {
+            return TryGetForwardTarget(context, self, name) != null;
+        }
+
+        #endregion
     }
 }

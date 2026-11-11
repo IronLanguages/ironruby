@@ -1,50 +1,105 @@
 name: CI
 
+# Which target frameworks are tested (the `tfms` job below decides):
+# - every pull request and every push: net11.0 only, the newest runtime, where new
+#   breakage shows first;
+# - a pull request from a release/* branch (the "Release X.Y.Z" PR), a run by hand
+#   (workflow_dispatch, `tfms` input, both by default) and the gate in release.yml
+#   (workflow_call on a v* tag, with tfms: both): net10.0 as well. The downloads are built
+#   on both: net10.0, the LTS, is the main one, and net11.0 archives ship beside it.
 on:
   push:
     branches: [master, modernize, 'ci/**']
   pull_request:
   workflow_dispatch:
+    inputs:
+      tfms:
+        description: Target frameworks to build and test
+        type: choice
+        options: [both, net10.0, net11.0]
+        default: both
+  workflow_call:
+    inputs:
+      tfms:
+        description: Target frameworks to build and test (both, net10.0 or net11.0)
+        type: string
+        default: net10.0
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # a run called from release.yml is a group of its own, apart from a push's run on the same ref
+  group: ci-${{ github.ref }}-${{ inputs.tfms || 'auto' }}
   cancel-in-progress: true
 
 env:
   DOTNET_NOLOGO: 1
   DOTNET_CLI_TELEMETRY_OPTOUT: 1
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+  # The prism revision Src/Prism/Generated was generated from (Src/Prism/README.md), the one
+  # the vendored Ruby half of prism in Src/StdLib belongs to; release.yml builds from the same
+  # one. Move both together with Src/Prism/Generated when following prism.
+  PRISM_REF: 30a255539e81842b2b7f12b4fd3c62a7b4d64165
+  # The DLR revision Build/dlr-patches applies to; release.yml builds from the same one, so a
+  # release can be rebuilt and an upstream change only arrives when this is moved on purpose.
+  # Move both together, after checking the patches still apply.
+  DLR_REF: 922753f8ccbf5186c15899116d5a407b6b1723fb
+  # ruby/spec and mspec for the spec job, pinned so a result moves only with IronRuby's own
+  # changes, not with whatever lands upstream on the day.
+  SPEC_REF: dda28d049100033a8b7050eacbb35957a2eb0c00
+  MSPEC_REF: b79c65ed28b00f0869ad82b0e3dceef0d943cd58
 
 jobs:
+  tfms:
+    name: target frameworks
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.pick.outputs.list }}
+    steps:
+      - id: pick
+        env:
+          REQUESTED: ${{ inputs.tfms }}
+          EVENT: ${{ github.event_name }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          case "$REQUESTED" in
+            both) list='["net10.0","net11.0"]' ;;
+            net10.0|net11.0) list="[\"$REQUESTED\"]" ;;
+            '')
+              if [ "$EVENT" = pull_request ] && [[ "$HEAD_REF" == release/* ]]; then
+                list='["net10.0","net11.0"]'
+              else
+                list='["net11.0"]'
+              fi ;;
+            *) echo "::error::unknown tfms input: $REQUESTED"; exit 1 ;;
+          esac
+          echo "testing $list"
+          echo "list=$list" >> "$GITHUB_OUTPUT"
+
+  # The repository holds no programs - no .exe, .dll, .so or other binary that runs - so all
+  # of it can be read; Util/check-no-executables.rb says why and how it tells them apart.
+  no-executables:
+    name: no programs in the repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check every tracked file
+        run: ruby Util/check-no-executables.rb
+
   build-and-test:
     name: ${{ matrix.os }} ${{ matrix.tfm }}
+    needs: tfms
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        tfm: [net8.0, net10.0]
-        include:
-          # IronRuby.Tests "> FAILED" line counts. They are the exact current
-          # numbers, not head-room: the job fails as soon as one more line
-          # appears. 0 since 2026-09-27 (measured on Linux, net8.0 and net10.0):
-          # any failure line fails the job.
-          - os: ubuntu-latest
-            tfm: net8.0
-            baseline: 0
-          - os: ubuntu-latest
-            tfm: net10.0
-            baseline: 0
-          - os: windows-latest
-            tfm: net8.0
-            baseline: 0
-          - os: windows-latest
-            tfm: net10.0
-            baseline: 0
+        tfm: ${{ fromJSON(needs.tfms.outputs.list) }}
     env:
       TFM: ${{ matrix.tfm }}
       IR_TFM: ${{ matrix.tfm }}
-      BASELINE: ${{ matrix.baseline }}
+      # The IronRuby.Tests "> FAILED" line count allowed: the exact current number, not
+      # head-room, so the job fails as soon as one more line appears. 0 since 2026-09-27
+      # (then net8.0 and net10.0; net10.0 and net11.0 since 2026-11-11) on Linux and Windows.
+      BASELINE: 0
     defaults:
       run:
         shell: bash
@@ -67,12 +122,17 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: IronLanguages/dlr
+          ref: ${{ env.DLR_REF }}
           path: dlr
 
+      # Pinned to the revision Src/Prism/Generated was generated from (Src/Prism/README.md), as
+      # release.yml pins it: a libprism from any other revision may serialize differently from
+      # what the C# loader and the vendored Prism::Serialize read.
       - name: Check out prism
         uses: actions/checkout@v7
         with:
           repository: ruby/prism
+          ref: ${{ env.PRISM_REF }}
           path: prism
 
       # IronRuby uses DLR APIs that are not upstream yet; the patches that add
@@ -84,13 +144,13 @@ jobs:
             git -C dlr apply "../$patch"
           done
 
-      # Both runtimes are installed on every matrix entry: the SDK builds either
-      # target framework, but running the net8.0 output needs the .NET 8 runtime.
+      # Both SDKs are installed on every matrix entry: the .NET 11 SDK builds either
+      # target framework, but running the net10.0 output needs the .NET 10 runtime.
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |
-            8.0.x
             10.0.x
+            11.0.x
 
       - uses: ruby/setup-ruby@v1
         with:
@@ -141,6 +201,31 @@ jobs:
           fi
           ls -l build
 
+      # cmark-gfm for markly (Src/Libraries/Markly), compiled from the markly gem's own
+      # sources, pinned by SHA-256. On Windows the MSYS2 gcc that links libprism
+      # links it too.
+      - name: Build libmarkly_cmark
+        working-directory: ironruby
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            command -v gcc >/dev/null || export PATH="/c/msys64/ucrt64/bin:/c/msys64/mingw64/bin:/c/msys64/usr/bin:$PATH"
+          fi
+          bash Util/build-markly.sh
+          ls -l Src/Libraries/Markly/native/build
+
+      # librbs: the rbs gem's parser behind rbs_extension (Src/Libraries/Rbs). The
+      # script downloads the gem pinned by SHA-256, checks the committed bridge
+      # against its config.yml, and compiles src/ with the shim - with the MSYS2
+      # gcc on Windows, as libprism is, which yields librbs.dll.
+      - name: Build librbs
+        working-directory: ironruby
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            command -v gcc >/dev/null || export PATH="/c/msys64/ucrt64/bin:/c/msys64/mingw64/bin:/c/msys64/usr/bin:$PATH"
+          fi
+          Util/build-librbs.sh
+          ls -l Src/Libraries/Rbs/native/build
+
       - name: Generate the C# prism loader
         working-directory: ironruby/Src/Prism
         run: ruby generate.rb
@@ -172,12 +257,46 @@ jobs:
           require "csv"
           require "rake"
           puts "rexml #{REXML::VERSION}, csv #{CSV::VERSION}, rake #{Rake::VERSION}"
+
+          # markly's extension: C# over the native cmark-gfm built above.
+          require "markly/markly"
+          parser = Markly::Parser.new(0)
+          parser.enable(:strikethrough)
+          html = parser.parse("*md* ~~x~~")._render_html(0, [:strikethrough]).strip
+          puts "markly: #{html}"
+          raise "markly rendered #{html.inspect}" unless html == "<p><em>md</em> <del>x</del></p>"
+          RUBY
+          # ironruby is the launcher, as jruby is JRuby's; RbConfig.ruby has to be a file,
+          # since libraries spawn it, and ir is the short name, which has to keep working.
+          cat > names.rb <<'RUBY'
+          abort "ruby_install_name: #{RbConfig::CONFIG["ruby_install_name"]}" unless RbConfig::CONFIG["ruby_install_name"] == "ironruby"
+          abort "no #{RbConfig.ruby}" unless File.file?(RbConfig.ruby)
+          puts "#{RbConfig.ruby} exists"
+          RUBY
+          # ironrubyw.exe, as rubyw.exe: the same interpreter as a Windows GUI program (PE
+          # subsystem 2), so it gets no console window. It still writes to a pipe it is given.
+          # (A heredoc's end has to start its line, so this one is not inside the if.)
+          cat > subsystem.rb <<'RUBY'
+          data = File.binread(ARGV[0], 4096)
+          subsystem = data[data[0x3c, 4].unpack1("V") + 24 + 68, 2].unpack1("v")
+          abort "#{ARGV[0]}: subsystem #{subsystem}" unless subsystem == 2
           RUBY
           if [ "$RUNNER_OS" = Windows ]; then
-            cmd //c ir.cmd smoke.rb
-            cmd //c ir.cmd Util/windows-desktop-check.rb
+            cmd //c ironruby.cmd smoke.rb
+            cmd //c ironruby.cmd names.rb
+            cmd //c ir.cmd -e "puts RUBY_ENGINE"
+            # irb loads reline, which on Windows looks up Win32 functions through Fiddle by
+            # their names without the A suffix; 4.0.2 died there, at a pipe as at a console.
+            printf 'puts 6 * 7\n' | cmd //c iirb.cmd | grep -x 42
+            cmd //c ironruby.cmd Util/windows-desktop-check.rb
+            rubyw="Src/Console/bin/Debug/$TFM/ironrubyw.exe"
+            ruby subsystem.rb "$rubyw"
+            "$rubyw" -e 'require "set"; puts "ironrubyw: #{RUBY_ENGINE}"' | grep -x "ironrubyw: ironruby"
           else
-            ./ir.sh smoke.rb
+            ./ironruby smoke.rb
+            ./ironruby names.rb
+            ./ir.sh -e 'puts RUBY_ENGINE'
+            printf 'puts 6 * 7\n' | ./iirb.sh | grep -x 42
           fi
 
       # IO#write_nonblock on a socket claims only what the kernel took (#14). On Linux the
@@ -193,6 +312,24 @@ jobs:
           else
             ./ir.sh Util/socket-write-nonblock-check.rb
           fi
+
+      # Src/Samples/Linq/101samples.rb, the port of Microsoft's 101 LINQ Samples, has to print
+      # exactly what 101samples.expected beside it says. Nothing ran it before, and it stopped
+      # parsing without anyone noticing. Its stderr counts too, so a warning fails the step.
+      # A change to the samples on purpose regenerates the file with
+      # `./ir.sh Src/Samples/Linq/101samples.rb > Src/Samples/Linq/101samples.expected 2>&1`.
+      - name: LINQ samples
+        timeout-minutes: 2
+        working-directory: ironruby
+        run: |
+          status=0
+          if [ "$RUNNER_OS" = Windows ]; then
+            cmd //c ir.cmd Src/Samples/Linq/101samples.rb > linq.txt 2>&1 || status=$?
+          else
+            ./ir.sh Src/Samples/Linq/101samples.rb > linq.txt 2>&1 || status=$?
+          fi
+          tr -d '\r' < linq.txt | diff -u Src/Samples/Linq/101samples.expected -
+          exit $status
 
       # Samples/Notepad, a Windows Forms application, driven by its own test with nobody
       # at the keyboard. A dialog that never closes would wait forever, hence the limit.
@@ -313,8 +450,6 @@ jobs:
           SWEEP="Src/Prism/bin/Debug/$TFM/IronRuby.Prism$EXE"
           "$SWEEP" --sweep Src/StdLib/ruby/4.0 | tee sweep40.txt
           grep -q '0 failed' sweep40.txt
-          "$SWEEP" --sweep Src/StdLib/ruby/1.9.1 | tee sweep19.txt
-          grep -q '0 failed' sweep19.txt
           "$SWEEP" --sweep Src/StdLib/ruby/gems | tee sweepgems.txt
           grep -q '0 failed' sweepgems.txt
 
@@ -325,7 +460,26 @@ jobs:
           EXE=""
           [ "$RUNNER_OS" = Windows ] && EXE=.exe
           cd "Src/IronRuby.Tests/bin/Debug/$TFM"
-          "./IronRuby.Tests$EXE" > results.txt 2>&1 || true
+          # /verbose names each test as it starts, so a run that hangs - and is stopped by
+          # the timeout rather than by the job's own limit an hour later - says where.
+          # MSYS2_ARG_CONV_EXCL: Git Bash on Windows would otherwise rewrite "/verbose" into a
+          # path, which the driver reads as a test name - and then runs no test at all.
+          MSYS2_ARG_CONV_EXCL='*' timeout 1500 "./IronRuby.Tests$EXE" /verbose > results.txt 2>&1 || true
+          # A run that ran (almost) nothing must not pass: a filter that matched no test does.
+          ran=$(grep -c '^Executing ' results.txt || true)
+          echo "tests run: $ran"
+          if [ "$ran" -lt 500 ]; then
+            echo "::error::only $ran tests ran"
+            tail -n 40 results.txt
+            exit 1
+          fi
+          # A run that died - an access violation in native code ends the process - leaves no
+          # "> FAILED" line to count; one that finished ends in PASSED or in its Repro line.
+          if ! grep -qE 'PASSED.?$|^Repro: ' results.txt; then
+            echo "::error::the test run did not finish"
+            tail -n 40 results.txt
+            exit 1
+          fi
           failures=$(grep -c '^> FAILED' results.txt || true)
           echo "failure lines: $failures (baseline $BASELINE)"
           echo "::group::failing tests"
@@ -344,17 +498,19 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: ironruby-tests-${{ matrix.os }}-${{ matrix.tfm }}
+          # Not ironruby-*: release.yml publishes the artifacts it downloads by that name.
+          name: tests-${{ matrix.os }}-${{ matrix.tfm }}
           path: ironruby/Src/IronRuby.Tests/bin/Debug/${{ matrix.tfm }}/results.txt
           if-no-files-found: ignore
 
   ruby-spec:
     name: ruby/spec ${{ matrix.tfm }}
+    needs: tfms
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        tfm: [net8.0, net10.0]
+        tfm: ${{ fromJSON(needs.tfms.outputs.list) }}
     env:
       TFM: ${{ matrix.tfm }}
       IR_TFM: ${{ matrix.tfm }}
@@ -365,18 +521,22 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: IronLanguages/dlr
+          ref: ${{ env.DLR_REF }}
           path: dlr
       - uses: actions/checkout@v7
         with:
           repository: ruby/prism
+          ref: ${{ env.PRISM_REF }}
           path: prism
       - uses: actions/checkout@v7
         with:
           repository: ruby/spec
+          ref: ${{ env.SPEC_REF }}
           path: ironruby/spec
       - uses: actions/checkout@v7
         with:
           repository: ruby/mspec
+          ref: ${{ env.MSPEC_REF }}
           path: ironruby/mspec
 
       - name: Patch the DLR
@@ -390,8 +550,8 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |
-            8.0.x
             10.0.x
+            11.0.x
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: '3.3'

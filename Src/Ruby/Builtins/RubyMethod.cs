@@ -13,15 +13,10 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Diagnostics;
-using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
 using IronRuby.Runtime;
@@ -29,7 +24,6 @@ using IronRuby.Runtime.Calls;
 using IronRuby.Compiler;
 using Microsoft.Scripting.Utils;
 using Microsoft.Scripting.Generation;
-using Microsoft.Scripting.Runtime;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Builtins {
@@ -152,6 +146,7 @@ namespace IronRuby.Builtins {
 
                 _procDispatcher.SetMethod(block);
                 _procDispatcher.ParameterSignature = _info.GetParameterSignature();
+                _procDispatcher.WrapsMethod = true;
             }
 
             // A method binds its arguments strictly and `return` from it returns from the

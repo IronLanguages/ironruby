@@ -13,14 +13,9 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
-using System.Dynamic;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
 
@@ -58,7 +53,7 @@ namespace IronRuby.Compiler.Ast {
             _right = right;
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             string setterName = _memberName + "=";
 
             MSA.Expression transformedLeftTarget = _leftTarget.TransformRead(gen);
@@ -66,7 +61,7 @@ namespace IronRuby.Compiler.Ast {
 
             MSA.Expression leftTemp = gen.CurrentScope.DefineHiddenVariable(String.Empty, transformedLeftTarget.Type);
 
-            bool leftIsSelf = _leftTarget.NodeType == NodeTypes.SelfReference;
+            bool leftIsSelf = _leftTarget is SelfReference;
 
             // lhs &&= rhs  -->  left.member && (left.member = rhs)
             // lhs ||= rhs  -->  left.member || (left.member = rhs)

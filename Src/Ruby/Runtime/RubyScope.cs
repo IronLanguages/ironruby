@@ -17,7 +17,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
-using System.Text.RegularExpressions;
 using IronRuby.Builtins;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Interpreter;
@@ -138,9 +137,6 @@ namespace IronRuby.Runtime {
             // stamped with RubyContext.RefinementVersion so that a `using' anywhere forces a recompute.
             public RefinementActivation Refinements;
             public int RefinementsVersion;
-
-            // see RubyMethodScope.DefinitionRefinements
-            public StrongBox<RefinementActivation> MethodDefinitionRefinements;
         }
 
         private RareState _rare;
@@ -267,11 +263,20 @@ namespace IronRuby.Runtime {
 
         internal RubyClass/*!*/ SelfImmediateClass {
             get {
-                if (_selfImmediateClass == null) {
-                    // thread-safe, since all threads will calculate the same result:
-                    _selfImmediateClass = RubyContext.GetImmediateClassOf(_selfObject);
+                RubyClass result = _selfImmediateClass;
+                if (result == null) {
+                    // thread-safe, since all threads will calculate the same result.
+                    // Only a singleton class is kept: an object gets one at most once, and from then on it
+                    // is the object's class for good. Until then self can gain one while this scope runs - a
+                    // def in an instance_eval block makes it lazily, as do define_singleton_method and
+                    // class << self - and a protected singleton method called on an explicit receiver must
+                    // then be checked against it, not against the class self had when the scope began.
+                    result = RubyContext.GetImmediateClassOf(_selfObject);
+                    if (result.IsSingletonClass) {
+                        _selfImmediateClass = result;
+                    }
                 }
-                return _selfImmediateClass; 
+                return result;
             }
         }
 
@@ -316,10 +321,6 @@ namespace IronRuby.Runtime {
             get { return false; }
         }
 
-        protected virtual bool IsFlowControlScope {
-            get { return false; }
-        }
-
         #region Local Variables
 
         internal void SetLocals(MutableTuple locals, string/*!*/[]/*!*/ variableNames) {
@@ -352,6 +353,22 @@ namespace IronRuby.Runtime {
 
         // `it' and _1.._9 live in the block's variable table, but eval and Binding do not see them
         // as locals: `eval("it = 1")' makes a new variable rather than overwriting the parameter.
+        // A scope of more than MutableTuple.MaxSize locals keeps them in a tuple of tuples
+        // (ScopeBuilder.NewTuple), where slot i of the outer one is not local i.
+        private object GetLocalValue(int index) {
+            int size = _variableNames.Length;
+            return (size > MutableTuple.MaxSize) ? _locals.GetNestedValue(size, index) : _locals.GetValue(index);
+        }
+
+        private void SetLocalValue(int index, object value) {
+            int size = _variableNames.Length;
+            if (size > MutableTuple.MaxSize) {
+                _locals.SetNestedValue(size, index, value);
+            } else {
+                _locals.SetValue(index, value);
+            }
+        }
+
         private bool IsImplicitParameter(string/*!*/ name) {
             var names = OwnImplicitParameterNames;
             return names != null && Array.IndexOf(names, name) >= 0;
@@ -363,7 +380,7 @@ namespace IronRuby.Runtime {
 
             int index;
             if (StaticLocalMapping != null && StaticLocalMapping.TryGetValue(name, out index)) {
-                return _locals.GetValue(index);
+                return GetLocalValue(index);
             }
             return null;
         }
@@ -374,7 +391,7 @@ namespace IronRuby.Runtime {
             int index;
             if (StaticLocalMapping != null && StaticLocalMapping.TryGetValue(name, out index) && !IsImplicitParameter(name)) {
                 Debug.Assert(_locals != null);
-                value = _locals.GetValue(index);
+                value = GetLocalValue(index);
                 return true;
             }
 
@@ -394,7 +411,7 @@ namespace IronRuby.Runtime {
             int index;
             if (StaticLocalMapping != null && StaticLocalMapping.TryGetValue(name, out index) && !IsImplicitParameter(name)) {
                 Debug.Assert(_locals != null);
-                _locals.SetValue(index, value);
+                SetLocalValue(index, value);
                 return true;
             }
 
@@ -418,7 +435,7 @@ namespace IronRuby.Runtime {
             if (LocalsInitialized) {
                 for (int i = 0; i < _variableNames.Length; i++) {
                     Debug.Assert(_locals != null);
-                    yield return new KeyValuePair<string, object>(_variableNames[i], _locals.GetValue(i));
+                    yield return new KeyValuePair<string, object>(_variableNames[i], GetLocalValue(i));
                 }
             }
 
@@ -459,6 +476,24 @@ namespace IronRuby.Runtime {
             get { return null; }
         }
 
+        /// <summary>
+        /// Kernel#local_variables: the names of the locals visible here, as symbols, without the
+        /// compiler's own (`?rest?', `?kw?' and the like keep anonymous and forwarded parameters
+        /// and the arguments a zsuper passes on).
+        /// </summary>
+        public RubyArray/*!*/ GetLocalVariableSymbols() {
+            var names = GetVisibleLocalNames();
+            // an isolated proc (Ractor.new's block, a shareable proc) sees none of the locals around it
+            var isolated = GetIsolatedLocalNames();
+            if (isolated != null) {
+                names.RemoveAll(isolated.Contains);
+            }
+            // `?rest?', `?kw?' and the like are the compiler's: where anonymous and forwarded
+            // parameters, and the argument list a zsuper passes on, are kept
+            names.RemoveAll(name => name.Length > 0 && name[0] == '?');
+            return new RubyArray(names.Count).AddRange(RubyContext.StringifyIdentifiers(names));
+        }
+
         public List<string/*!*/>/*!*/ GetVisibleLocalNames() {
             var result = new List<string>();
             // a block parameter shadowing an outer local is the same name twice on the way up,
@@ -484,6 +519,45 @@ namespace IronRuby.Runtime {
                     return result;
                 }
 
+                scope = scope.Parent;
+            }
+        }
+
+        /// <summary>
+        /// Those of <see cref="GetVisibleLocalNames"/> that belong to the scopes around an isolated
+        /// proc this scope is in (Ractor.new's block, a shareable proc), which code the proc evals
+        /// may not use; null if the scope is in no isolated proc.
+        /// </summary>
+        public HashSet<string> GetIsolatedLocalNames() {
+            HashSet<string> inside = null, outside = null;
+            bool isolated = false;
+            RubyScope scope = this;
+            while (true) {
+                if (isolated) {
+                    foreach (string name in scope.GetDeclaredLocalSymbols()) {
+                        if (!inside.Contains(name)) {
+                            (outside ??= new HashSet<string>()).Add(name);
+                        }
+                    }
+                }
+                if (!scope.InheritsLocalVariables) {
+                    return outside;
+                }
+                if (!isolated) {
+                    var block = scope as RubyBlockScope;
+                    if (block != null && block.BlockFlowControl.Proc != null && block.BlockFlowControl.Proc.IsIsolated) {
+                        isolated = true;
+                        inside = new HashSet<string>();
+                        for (RubyScope s = this; ; s = s.Parent) {
+                            foreach (string name in s.GetDeclaredLocalSymbols()) {
+                                inside.Add(name);
+                            }
+                            if (s == scope) {
+                                break;
+                            }
+                        }
+                    }
+                }
                 scope = scope.Parent;
             }
         }
@@ -606,12 +680,64 @@ namespace IronRuby.Runtime {
         /// cheap) call-site guard.
         /// </summary>
         public RefinementActivation/*!*/ GetActiveRefinements() {
-            var context = RubyContext;
-            if (!context.HasRefinements) {
+            if (!RubyContext.HasRefinements) {
                 return RefinementActivation.Empty;
             }
+            return GetLexicalRefinements();
+        }
 
-            int version = context.RefinementVersion;
+        /// <summary>
+        /// <see cref="GetActiveRefinements"/> for a caller that knows something has been refined in this
+        /// runtime, which stays true: the guard of a refined call's rule (RubyOps.GetLexicalRefinements),
+        /// which runs on every call.
+        /// </summary>
+        internal RefinementActivation/*!*/ GetLexicalRefinements() {
+            // A scope without rare state has no `using' of its own and no memo, so it answers what the
+            // scope below the block, method or other body it is part of answers: the walk is a loop
+            // that reads a field or two per scope.  The first scope that has rare state - the top level
+            // or class body a `using' ran in, mostly - answers from its memo, or takes the general step,
+            // which recurses from there.  A block's Proc has an override only while a refine block runs
+            // it, and RubyUtils.EvaluateRefinementBlock counts those, so while none runs a block scope is
+            // one more step down.
+            bool refineBlockRunning = RubyOps.RefineBlocksRunning != 0;
+            RubyScope scope = this;
+            do {
+                var rare = scope._rare;
+                if (rare != null) {
+                    var memo = rare.Refinements;
+                    if (memo != null && rare.RefinementsVersion == scope._top.RubyContext.RefinementVersion) {
+                        return memo;
+                    }
+                    return scope.ComputeActiveRefinements();
+                }
+
+                var methodScope = scope as RubyMethodScope;
+                if (methodScope != null) {
+                    var recorded = methodScope.DefinitionRefinements;
+                    if (recorded == null) {
+                        return RefinementActivation.Empty;
+                    }
+                    var definition = recorded.Value;
+                    if (definition != null) {
+                        return definition;
+                    }
+                } else if (refineBlockRunning) {
+                    var blockScope = scope as RubyBlockScope;
+                    if (blockScope != null) {
+                        var blockOverride = blockScope.BlockFlowControl.Proc.RefinementOverride;
+                        if (blockOverride != null) {
+                            return blockOverride;
+                        }
+                    }
+                }
+                scope = scope._parent;
+            } while (scope != null);
+
+            return RefinementActivation.Empty;
+        }
+
+        private RefinementActivation/*!*/ ComputeActiveRefinements() {
+            int version = RubyContext.RefinementVersion;
             var cached = _rare;
             if (cached != null && cached.Refinements != null && cached.RefinementsVersion == version) {
                 return cached.Refinements;
@@ -629,21 +755,24 @@ namespace IronRuby.Runtime {
                 // into it.  The declaring scope is shared by every method defined in it, so the
                 // definition-time state comes from the compiled body instead - see
                 // RubyMethodBody.SetDefinitionRefinements.  A body compiled with no record was
-                // defined before anything was refined at all.
+                // defined where nothing was `using'd (or before anything was refined at all).
                 var recorded = methodScope.DefinitionRefinements;
                 if (recorded == null) {
-                    outer = RefinementActivation.Empty;
-                } else {
-                    outer = recorded.Value ?? ((_parent != null) ? _parent.GetActiveRefinements() : RefinementActivation.Empty);
+                    return RefinementActivation.Empty;
                 }
+                outer = recorded.Value ?? ((_parent != null) ? _parent.GetLexicalRefinements() : RefinementActivation.Empty);
             } else {
-                outer = (_parent != null) ? _parent.GetActiveRefinements() : RefinementActivation.Empty;
+                outer = (_parent != null) ? _parent.GetLexicalRefinements() : RefinementActivation.Empty;
             }
             RefinementActivation result = (UsedModules != null) ? RefinementActivation.Create(outer, UsedModules, UsedModuleSnapshots) : outer;
 
-            var rare = Rare;
-            rare.Refinements = result;
-            rare.RefinementsVersion = version;
+            // Only a scope that has its rare state anyway keeps the answer.  The others - the scope of
+            // nearly every method and block call - get it from their parent chain each time, which is
+            // what memoizing would cost them to begin with, without allocating per call.
+            if (cached != null) {
+                cached.Refinements = result;
+                cached.RefinementsVersion = version;
+            }
             return result;
         }
 
@@ -774,6 +903,8 @@ namespace IronRuby.Runtime {
                         targetScope = scope;
                         return info.Id;
 
+                    // a class or module body - inside `eval' in a method, too - is no place for super (#136)
+                    case ScopeKind.Module:
                     case ScopeKind.TopLevel:
                         declaringModule = null;
                         methodName = null;
@@ -801,15 +932,45 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// Where `private', `public', `protected' and `module_function' without arguments set the default for
+        /// the methods defined after them: the class or module body, top level, file or module_eval block
+        /// lexically around the caller - MRI's cref, whatever the receiver of the call. A method body, a block
+        /// and a define_method block share that of the code they are written in, so `def self.m; private; end;
+        /// m' in a class body makes what follows in the body private; a `def' inside a method body still reads
+        /// the method scope's own default (<see cref="GetMethodAttributesDefinitionScope"/>), which stays
+        /// public, as MRI's is (#133). It went into the method scope, so the leak went the other way.
+        /// </summary>
+        public RubyScope/*!*/ GetVisibilityScope() {
+            RubyScope scope = this;
+            while (true) {
+                switch (scope.Kind) {
+                    case ScopeKind.Module:
+                    case ScopeKind.BlockModule:
+                    case ScopeKind.TopLevel:
+                    case ScopeKind.FileInitializer:
+                        return scope;
+                }
+
+                scope = scope.Parent;
+            }
+        }
+
         public RubyModule/*!*/ GetMethodDefinitionOwner() {
-            // MRI 1.9: 
-            // - define_method doesn't influence the definition owner (unlike MRI 1.8)
-            // - skips module_eval blocks above method scope 
-            // MRI 1.8: 
-            // - skips module_eval and define_method blocks above method scope.
-            // IronRuby: 
+            bool atTopLevel;
+            return GetMethodDefinitionOwner(out atTopLevel);
+        }
+
+        /// <summary>
+        /// <paramref name="atTopLevel"/> tells whether the owner is the top level's, which is not the same as the owner being
+        /// main's singleton class: `main.instance_eval { def m; end }' defines there too, as a singleton method of main.
+        /// </summary>
+        internal RubyModule/*!*/ GetMethodDefinitionOwner(out bool atTopLevel) {
+            // - define_method doesn't influence the definition owner
+            // - module_eval blocks define into the module they evaluate in
             // - Fallback to the top-level singleton class when hosted.
 
+            atTopLevel = false;
             RubyScope scope = this;
             while (true) {
                 Debug.Assert(scope != null);
@@ -817,6 +978,7 @@ namespace IronRuby.Runtime {
                 switch (scope.Kind) {
                     case ScopeKind.TopLevel:
                         Debug.Assert(scope == Top);
+                        atTopLevel = true;
                         return Top.MethodLookupModule ?? Top.TopModuleOrObject;
 
                     case ScopeKind.Module:
@@ -824,22 +986,17 @@ namespace IronRuby.Runtime {
                         return scope.Module;
 
                     case ScopeKind.Method:
-                        // A `def` nested in a method body defines into the same place the
+                    case ScopeKind.BlockMethod:
+                        // A `def` nested in a method body (or a define_method block) defines into the same place the
                         // enclosing definition went, so keep walking the lexical chain - which
                         // may well end in a class_eval-like block scope (`Class.new { def m; def
                         // n; end; end }` defines n on the new class, not on Object).
                         break;
 
-                    case ScopeKind.BlockMethod:
-                        if (RubyContext.RubyOptions.Compatibility == RubyCompatibility.Ruby19) {
-                            break;
-                        }
-                        return ((RubyBlockScope)scope).BlockFlowControl.Proc.Method.DeclaringModule;
-
                     case ScopeKind.BlockModule:
                         BlockParam blockParam = ((RubyBlockScope)scope).BlockFlowControl;
-                        Debug.Assert(blockParam.MethodLookupModule != null);
-                        return blockParam.MethodLookupModule;
+                        Debug.Assert(blockParam.IsModuleEval);
+                        return blockParam.GetMethodLookupModule(scope.SelfObject);
                 }
 
                 scope = scope.Parent;
@@ -855,8 +1012,9 @@ namespace IronRuby.Runtime {
 
         // thread-safe:
         // As above, and on success also reports the module the constant was found in - null unless
-        // the runtime has seen Module#deprecate_constant, since finding it can cost an extra
-        // ancestor walk and only the deprecation warning needs it.
+        // the runtime has seen Module#deprecate_constant or started a Ractor, since finding it can
+        // cost an extra ancestor walk and only the deprecation warning and the Ractor isolation
+        // error need it.
         internal RubyModule TryResolveConstantNoLock(RubyGlobalScope autoloadScope, string/*!*/ name, out ConstantStorage result,
             out RubyModule owner) {
 
@@ -892,7 +1050,7 @@ namespace IronRuby.Runtime {
             // check the inner most module and it's base classes/mixins:
             if (innerMostModule != null) {
                 if (innerMostModule.TryResolveConstantNoLock(autoloadScope, name, out result)) {
-                    if (context.HasDeprecatedConstants) {
+                    if (context.HasDeprecatedConstants || context.RactorsStarted) {
                         owner = innerMostModule.GetConstantOwnerNoLock(name);
                     }
                     return null;
@@ -910,7 +1068,7 @@ namespace IronRuby.Runtime {
             }
 
             if (context.ObjectClass.TryResolveConstantNoLock(autoloadScope, name, out result)) {
-                if (context.HasDeprecatedConstants) {
+                if (context.HasDeprecatedConstants || context.RactorsStarted) {
                     owner = context.ObjectClass.GetConstantOwnerNoLock(name);
                 }
                 return null;
@@ -940,7 +1098,6 @@ namespace IronRuby.Runtime {
 
         internal sealed class DebugView {
             private readonly RubyScope/*!*/ _scope;
-            [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Performance", "CA1823:AvoidUnusedPrivateFields")]
             private readonly string _selfClassName;
             
             public DebugView(RubyScope/*!*/ scope) {
@@ -1066,8 +1223,8 @@ namespace IronRuby.Runtime {
         internal MutableString GetCurrentMatchLastGroup() {
             var match = _currentMatch;
             if (match != null) {
-                // TODO: cache the last successful group index?
-                for (int i = match.GroupCount - 1; i >= 0; i--) {
+                // the last capture group that matched; a pattern without groups has none ($+ is nil)
+                for (int i = match.GroupCount - 1; i >= 1; i--) {
                     MutableString result = match.GetGroupValue(i);
                     if (result != null) {
                         return result;
@@ -1078,30 +1235,22 @@ namespace IronRuby.Runtime {
             return null;
         }
 
-#if TODO_DebugView
-         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Performance", "CA1823:AvoidUnusedPrivateFields")]
-            private readonly string/*!*/ _matchClassName;
-            [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Performance", "CA1823:AvoidUnusedPrivateFields")]
-            private readonly string/*!*/ _lastInputLine;
-var closureScope = scope as RubyClosureScope;
-                if (closureScope != null) {
-                    _matchClassName = _scope.RubyContext.GetImmediateClassOf(closureScope.CurrentMatch).GetDisplayName(true).ConvertToString();
-                    _lastInputLine = _scope.RubyContext.GetImmediateClassOf(closureScope.LastInputLine).GetDisplayName(true).ConvertToString();
-                }
-                
+    }
 
-            [DebuggerBrowsable(DebuggerBrowsableState.Collapsed)]
-            [DebuggerDisplay("{A2 != null ? A2.ToString() : \"nil\",nq}", Name = "$~", Type = "{_matchClassName,nq}")]
-            public Match A2 {
-                get { return (_scope._currentMatch != null) ? _scope._currentMatch.Match : null; }
-            }
+    /// <summary>
+    /// What a light-frame method's scope is made of that is the same on every call of one compilation:
+    /// its locals' names, its parameter count and signature flags, and the name it was defined under.
+    /// </summary>
+    public sealed class MethodFrameShape {
+        internal readonly string/*!*/[]/*!*/ VariableNames;
+        internal readonly int VisibleParameterCountAndSignatureFlags;
+        internal readonly string/*!*/ DefinitionName;
 
-            [DebuggerBrowsable(DebuggerBrowsableState.Collapsed)]
-            [DebuggerDisplay("{A2 != null ? A2.ToString() : \"nil\",nq}", Name = "$~", Type = "{_matchClassName,nq}")]
-            public Match A2 {
-                get { return (_scope._currentMatch != null) ? _scope._currentMatch.Match : null; }
-            }
-#endif
+        internal MethodFrameShape(string[] variableNames, int visibleParameterCountAndSignatureFlags, string/*!*/ definitionName) {
+            VariableNames = variableNames ?? ArrayUtils.EmptyStrings;
+            VisibleParameterCountAndSignatureFlags = visibleParameterCountAndSignatureFlags;
+            DefinitionName = definitionName;
+        }
     }
 
     public sealed class RubyMethodScope : RubyClosureScope {
@@ -1160,14 +1309,59 @@ var closureScope = scope as RubyClosureScope;
             get { return _blockParameter; }
         }
 
+        // see DefinitionRefinements
+        private StrongBox<RefinementActivation> _definitionRefinements;
+
         /// <summary>
         /// The refinements active where the method was defined, stored by the compiled body right after
-        /// it creates this scope; null for a body compiled before anything was refined.  Public because
-        /// the method body assigns it directly.
+        /// it creates this scope; null for a body compiled with nothing `using'd where it was defined.
+        /// Public because the method body assigns it directly - on every call, so it is a field of its own.
         /// </summary>
         public StrongBox<RefinementActivation> DefinitionRefinements {
-            get { var r = RareOrNull; return (r != null) ? r.MethodDefinitionRefinements : null; }
-            set { Rare.MethodDefinitionRefinements = value; }
+            get { return _definitionRefinements; }
+            set { _definitionRefinements = value; }
+        }
+
+        /// <summary>
+        /// What the record holds, null if there is no record or it holds nothing (an imported refinement method's,
+        /// which follows its declaring scope). Read by the rule of a refined call made here (RubyCallAction.Resolve).
+        /// </summary>
+        public RefinementActivation DefinitionRefinementsValue {
+            get {
+                var record = _definitionRefinements;
+                return (record != null) ? record.Value : null;
+            }
+        }
+
+        /// <summary>
+        /// The scope of a call of a light-frame method (see RubyOps.EnterLightMethod), made only if something asks
+        /// for it - a TracePoint hook, or an exception filter. The call's flow-control frame already exists: the
+        /// literal block, converted when the call began, or the shared inactive frame when there is none. A
+        /// scope made for it delegates to the first and stands for itself otherwise, so a break or return aimed
+        /// at the call still finds an active frame.
+        /// </summary>
+        internal RubyMethodScope(MethodFrameShape/*!*/ shape, RubyScope/*!*/ parent, RubyModule/*!*/ declaringModule, MutableTuple locals,
+            object selfObject, Proc blockParameter, InterpretedFrame interpretedFrame, RuntimeFlowControl/*!*/ rfc, string calleeName) {
+            Assert.NotNull(shape, parent, declaringModule, rfc);
+
+            // RuntimeFlowControl:
+            _activeFlowControlScope = rfc.IsActiveMethod ? rfc : this;
+
+            // RubyScope:
+            _parent = parent;
+            _top = parent.Top;
+            _selfObject = selfObject;
+            _methodAttributes = RubyMethodAttributes.PublicInstance;
+            _locals = locals;
+            _variableNames = shape.VariableNames;
+            _visibleParameterCountAndSignatureFlags = shape.VisibleParameterCountAndSignatureFlags;
+            InterpretedFrame = interpretedFrame;
+
+            // RubyMethodScope:
+            _declaringModule = declaringModule;
+            _definitionName = shape.DefinitionName;
+            _blockParameter = blockParameter;
+            _calleeName = calleeName;
         }
 
         internal RubyMethodScope(MutableTuple locals, string/*!*/[]/*!*/ variableNames, int visibleParameterCountAndSignatureFlags,
@@ -1347,7 +1541,7 @@ var closureScope = scope as RubyClosureScope;
                     return ScopeKind.BlockMethod;
                 }
 
-                if (_blockFlowControl.MethodLookupModule == null) {
+                if (!_blockFlowControl.IsModuleEval) {
                     return ScopeKind.Block; 
                 }
 
@@ -1520,7 +1714,7 @@ var closureScope = scope as RubyClosureScope;
         #region Factories
 
         internal static RubyTopLevelScope/*!*/ CreateTopLevelScope(Scope/*!*/ globalScope, RubyContext/*!*/ context, bool isMain) {
-            RubyGlobalScope rubyGlobalScope = context.InitializeGlobalScope(globalScope, false, false);
+            RubyGlobalScope rubyGlobalScope = context.InitializeGlobalScope(globalScope, false);
 
             RubyTopLevelScope scope = new RubyTopLevelScope(rubyGlobalScope, null, null, rubyGlobalScope.MainObject);
             scope.IsMain = isMain;
@@ -1530,12 +1724,19 @@ var closureScope = scope as RubyClosureScope;
                 context.ObjectClass.SetConstant("TOPLEVEL_BINDING", new Binding(scope) { SourcePath = "<main>", SourceLine = 0 });
                 if (context.RubyOptions.RequirePaths != null) {
                     bool first = true;
+                    // a warm-start worker loaded these into this very scope ahead of time
+                    int loaded = context.TakeWarmLoadedRequirePaths();
                     foreach (var path in context.RubyOptions.RequirePaths) {
+                        if (loaded > 0) {
+                            loaded--;
+                            first = false;
+                            continue;
+                        }
                         // the first is the core prelude (gem_prelude.rb or ruby4.rb)
                         if (first && (path == "gem_prelude.rb" || path == "ruby4.rb")) {
                             context.Loader.LoadCorePrelude(globalScope, rubyGlobalScope.MainObject, path);
                         } else {
-                            context.Loader.LoadFile(globalScope, rubyGlobalScope.MainObject, MutableString.Create(path, RubyEncoding.UTF8), LoadFlags.Require);
+                            RequireLibrary(context, globalScope, rubyGlobalScope.MainObject, MutableString.Create(path, RubyEncoding.UTF8));
                         }
                         first = false;
                     }
@@ -1547,8 +1748,24 @@ var closureScope = scope as RubyClosureScope;
             return scope;
         }
 
+        /// <summary>
+        /// -r library: MRI calls #require on main, so once the prelude has loaded RubyGems its #require
+        /// activates gems - ruby -r csv finds the bundled csv gem. Without RubyGems it is the builtin.
+        /// </summary>
+        private static void RequireLibrary(RubyContext/*!*/ context, Scope/*!*/ globalScope, object main, MutableString/*!*/ path) {
+            var method = context.ResolveMethod(main, "require", VisibilityContext.AllVisible).Info;
+            if (method == null || method is RubyLibraryMethodInfo) {
+                context.Loader.LoadFile(globalScope, main, path, LoadFlags.Require);
+            } else {
+                var site = CallSite<Func<CallSite, object, object, object>>.Create(
+                    RubyCallAction.Make(context, "require", RubyCallSignature.WithImplicitSelf(1))
+                );
+                site.Target(site, main, path);
+            }
+        }
+
         internal static RubyTopLevelScope/*!*/ CreateHostedTopLevelScope(Scope/*!*/ globalScope, RubyContext/*!*/ context, bool bindGlobals) {
-            RubyGlobalScope rubyGlobalScope = context.InitializeGlobalScope(globalScope, true, bindGlobals);
+            RubyGlobalScope rubyGlobalScope = context.InitializeGlobalScope(globalScope, bindGlobals);
 
             // Reuse existing top-level scope if available:
             RubyTopLevelScope scope = rubyGlobalScope.TopLocalScope;
@@ -1557,6 +1774,9 @@ var closureScope = scope as RubyClosureScope;
                     rubyGlobalScope, null, bindGlobals ? rubyGlobalScope.MainSingleton : null, rubyGlobalScope.MainObject
                 );
 
+                if (bindGlobals) {
+                    rubyGlobalScope.MainSingleton.IsHostedTopLevelMethodOwner = true;
+                }
                 scope.SetDebugName(bindGlobals ? "top-level-bound" : "top-level");
                 rubyGlobalScope.SetTopLocalScope(scope);
             } else {
@@ -1582,7 +1802,7 @@ var closureScope = scope as RubyClosureScope;
         }
 
         internal static RubyTopLevelScope/*!*/ CreateWrappedTopLevelScope(Scope/*!*/ globalScope, RubyContext/*!*/ context) {
-            RubyGlobalScope rubyGlobalScope = context.InitializeGlobalScope(globalScope, false, false);
+            RubyGlobalScope rubyGlobalScope = context.InitializeGlobalScope(globalScope, false);
 
             // load(path, true) wraps the file in a fresh anonymous module; load(path, mod) wraps it
             // in that very module, so its constants and methods are reachable through it afterwards.

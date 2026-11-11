@@ -36,7 +36,7 @@ namespace IronRuby.Builtins {
         int WriteNonBlocking(byte[]/*!*/ buffer, int offset, int count);
     }
 
-    public sealed class DescriptorStream : Stream, IDescriptorStream, INonBlockingWriteStream {
+    public sealed class DescriptorStream : Stream, IDescriptorStream, INonBlockingWriteStream, INonBlockingReadStream, ISingleWriteStream {
         [StructLayout(LayoutKind.Sequential)]
         private struct PollFd {
             public int fd;
@@ -63,8 +63,6 @@ namespace IronRuby.Builtins {
         private static extern int sys_open(string path, int flags);
 
         private const int O_RDONLY = 0;
-        private const int O_DIRECTORY = 0x10000;
-        private const int O_CLOEXEC = 0x80000;
 
         /// <summary>
         /// open(2) of a directory for reading - which FileStream refuses and MRI's File.open
@@ -76,13 +74,13 @@ namespace IronRuby.Builtins {
             }
             int fd;
             try {
-                fd = sys_open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+                fd = sys_open(path, O_RDONLY | IOModeNative.Directory | IOModeNative.CloseOnExec);
             } catch (DllNotFoundException) {
                 return null;
             } catch (EntryPointNotFoundException) {
                 return null;
             }
-            return (fd < 0) ? null : new DescriptorStream(fd, true, false, true);
+            return (fd < 0) ? null : new DescriptorStream(fd, true, false, true) { _directoryPath = path };
         }
 
         private const short POLLIN = 0x001;
@@ -90,12 +88,12 @@ namespace IronRuby.Builtins {
         private const short POLLERR = 0x008;
         private const short POLLHUP = 0x010;
         private const int EINTR = 4;
-        private const int EAGAIN = 11;   // == EWOULDBLOCK on Linux
+        private const int EIO = 5;
+        private static readonly int EAGAIN = RubyErrno.GetNumber("EAGAIN");   // == EWOULDBLOCK on Unix
         public const int EPIPE = 32;
         private const int EISDIR = 21;
         private const int F_GETFL = 3;
         private const int F_SETFL = 4;
-        private const int O_NONBLOCK = 0x800;
 
         private readonly System.Threading.ManualResetEvent _closing = new System.Threading.ManualResetEvent(false);
         private int _descriptor;
@@ -104,11 +102,55 @@ namespace IronRuby.Builtins {
         private readonly bool _writable;
         private readonly bool _ownsDescriptor;
 
+        [DllImport("libc", EntryPoint = "isatty")]
+        private static extern int sys_isatty(int fd);
+
         public DescriptorStream(int descriptor, bool readable, bool writable, bool ownsDescriptor) {
             _descriptor = descriptor;
             _readable = readable;
             _writable = writable;
             _ownsDescriptor = ownsDescriptor;
+        }
+
+        // The stream that owns the descriptor, when it is not this one: disposed with it.
+        private Stream _owner;
+
+        // The directory TryOpenDirectory opened, which a failed read names, as MRI does.
+        private string _directoryPath;
+
+        /// <summary>
+        /// A terminal opened as a file (File.open("/dev/tty")) on Unix, read and written through its
+        /// descriptor as MRI does: a FileStream's reads park the thread in read(2), where VTIME-timed
+        /// reads, Thread#raise and a close from another thread cannot get at it. The FileStream keeps
+        /// the handle and is disposed with this stream. Null for anything that is not a terminal.
+        /// </summary>
+        public static Stream TryWrapTerminal(FileStream/*!*/ file) {
+            if (System.IO.Path.DirectorySeparatorChar != '/' || file.CanSeek) {
+                return null;
+            }
+            int descriptor;
+            try {
+                descriptor = (int)file.SafeFileHandle.DangerousGetHandle();
+            } catch (Exception) {
+                return null;
+            }
+            if (sys_isatty(descriptor) != 1) {
+                return null;
+            }
+            return new DescriptorStream(descriptor, file.CanRead, file.CanWrite, false) { _owner = file };
+        }
+
+        /// <summary>
+        /// The descriptor stream <paramref name="stream"/> reads and writes through: itself, or the one
+        /// behind standard input's console stream on a Unix terminal. Null if there is none.
+        /// </summary>
+        public static DescriptorStream Of(Stream stream) {
+            var descriptor = stream as DescriptorStream;
+            if (descriptor != null) {
+                return descriptor;
+            }
+            var console = stream as ConsoleStream;
+            return (console != null) ? console.RawInput : null;
         }
 
         public int Descriptor {
@@ -136,11 +178,49 @@ namespace IronRuby.Builtins {
             throw new NotSupportedException();
         }
 
+        // Not cached: IO#reopen dup2s another file onto the same descriptor, and a stale
+        // answer would send a reopened terminal's timed read into an endless poll.
+        private bool IsTerminal {
+            get { return sys_isatty(_descriptor) == 1; }
+        }
+
+        [DllImport("libc", EntryPoint = "tcgetattr")]
+        private static extern int sys_tcgetattr(int fd, byte[] termios);
+
+        /// <summary>
+        /// A terminal in non-canonical mode with VMIN 0 - IO#getch(min: 0, time: t), or
+        /// IO#raw(min: 0) - makes read(2) itself return empty-handed once VTIME runs out (at
+        /// once when it is 0), and that empty read is the answer: getch returns nil. poll(2)
+        /// knows nothing of VTIME, so waiting for it first would wait for ever.  Linux's
+        /// struct termios only (c_lflag at 12, c_cc at 17); elsewhere this answers false.
+        /// </summary>
+        /// <returns>VTIME in milliseconds for such a read, -1 for any other.</returns>
+        private int TimedTerminalReadTimeout() {
+            if (!IsTerminal || !RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) {
+                return -1;
+            }
+            const int ICANON = 0x0002;
+            const int VTIME = 5;
+            const int VMIN = 6;
+            byte[] termios = new byte[60];
+            if (sys_tcgetattr(_descriptor, termios) != 0) {
+                return -1;
+            }
+            if ((BitConverter.ToUInt32(termios, 12) & ICANON) != 0 || termios[17 + VMIN] != 0) {
+                return -1;
+            }
+            return termios[17 + VTIME] * 100;
+        }
+
         public override void Flush() {
             // write(2) has already handed everything to the kernel, but stdio-style flush still
             // reports a reader that disappeared after the last buffered write. poll exposes that
             // state without writing an extra byte.
-            if (_writable && !_closed) {
+            //
+            // Not on a terminal: a pty master reports POLLHUP as soon as the child on the slave
+            // side has gone, which can be a moment after it read the very bytes just written
+            // (cat reading its ^D) - that is no failed write, and MRI raises nothing.
+            if (_writable && !_closed && !IsTerminal) {
                 var fds = new PollFd[1];
                 fds[0].fd = _descriptor;
                 fds[0].events = POLLOUT;
@@ -173,8 +253,18 @@ namespace IronRuby.Builtins {
                     throw new IOException("poll failed");
                 }
                 if (ready == 0) {
-                    WaitFor(POLLIN);
-                    continue;
+                    int timeout = TimedTerminalReadTimeout();
+                    if (timeout < 0) {
+                        WaitFor(POLLIN);
+                        continue;
+                    }
+                    // VMIN 0: the read that VTIME would end. It is waited out here, in slices like
+                    // WaitFor's, rather than inside read(2): a thread parked there for up to VTIME
+                    // (25.5 s) could not be raised into, killed or closed underneath, and on a
+                    // descriptor #read_nonblock left non-blocking read(2) does not wait at all.
+                    if (!WaitFor(POLLIN, timeout)) {
+                        return 0;
+                    }
                 }
 
                 // The close may have come in while this thread was in poll; the descriptor is
@@ -194,7 +284,11 @@ namespace IronRuby.Builtins {
                     }
                     if (error == EISDIR) {
                         // a directory opened by TryOpenDirectory
-                        throw RubyExceptions.CreateEISDIR("read");
+                        throw RubyExceptions.CreateEISDIR(_directoryPath ?? "read");
+                    }
+                    if (error == EIO) {
+                        // a pty master whose slave side is all closed - see InputOutputError
+                        throw new InputOutputError();
                     }
                     throw new IOException("read failed", error);
                 }
@@ -251,21 +345,39 @@ namespace IronRuby.Builtins {
         /// and Thread#raise are noticed within one slice.
         /// </summary>
         private void WaitFor(short events) {
+            WaitFor(events, -1);
+        }
+
+        /// <summary>
+        /// <see cref="WaitFor(short)"/> for at most <paramref name="timeoutMilliseconds"/> (-1: no limit).
+        /// False when the time ran out first.
+        /// </summary>
+        private bool WaitFor(short events, int timeoutMilliseconds) {
+            long deadline = (timeoutMilliseconds >= 0) ? Environment.TickCount64 + timeoutMilliseconds : Int64.MaxValue;
             bool wasBlocked = RubyUtils.EnterNativeWait();
             try {
                 while (!_closed) {
+                    long remaining = deadline - Environment.TickCount64;
+                    if (remaining <= 0 && timeoutMilliseconds >= 0) {
+                        // one last look: a timeout of 0 still answers what is there now
+                        var last = new PollFd[1];
+                        last[0].fd = _descriptor;
+                        last[0].events = events;
+                        return sys_poll(last, 1, 0) > 0;
+                    }
                     var fds = new PollFd[1];
                     fds[0].fd = _descriptor;
                     fds[0].events = events;
-                    int ready = sys_poll(fds, 1, WaitSliceMilliseconds);
+                    int ready = sys_poll(fds, 1, (int)Math.Min(WaitSliceMilliseconds, Math.Max(remaining, 0)));
                     if (ready > 0) {
-                        return;
+                        return true;
                     }
                     if (ready < 0 && Marshal.GetLastWin32Error() != EINTR) {
                         throw new IOException("poll failed");
                     }
                     RubyUtils.CheckAsyncException();
                 }
+                return true;
             } finally {
                 RubyUtils.ExitNativeWait(wasBlocked);
             }
@@ -277,8 +389,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         private void SetNonBlocking() {
             int flags = sys_fcntl(_descriptor, F_GETFL, 0);
-            if (flags >= 0 && (flags & O_NONBLOCK) == 0) {
-                sys_fcntl(_descriptor, F_SETFL, flags | O_NONBLOCK);
+            if (flags >= 0 && (flags & IOModeNative.NonBlocking) == 0) {
+                sys_fcntl(_descriptor, F_SETFL, flags | IOModeNative.NonBlocking);
             }
         }
 
@@ -319,7 +431,10 @@ namespace IronRuby.Builtins {
                 if (error == EAGAIN) {
                     return -1;
                 }
-                throw new IOException("read failed");
+                if (error == EIO) {
+                    throw new InputOutputError();
+                }
+                throw new IOException("read failed", error);
             }
         }
 
@@ -370,6 +485,12 @@ namespace IronRuby.Builtins {
             if (_ownsDescriptor && descriptor >= 0) {
                 _descriptor = -1;
                 sys_close(descriptor);
+            }
+            var owner = _owner;
+            if (owner != null) {
+                _owner = null;
+                _descriptor = -1;
+                owner.Dispose();
             }
             base.Dispose(disposing);
         }

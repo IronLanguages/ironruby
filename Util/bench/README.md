@@ -14,8 +14,10 @@ runtime unoptimized for the .NET JIT. `ir.sh` honours `IR_CONFIG=Release`.
 
 Type-specializes a hot method body: unboxed int/long/double locals and CLR arithmetic, no
 RubyMethodScope, direct self-calls for recursion. Guards on one global method-table
-version (covers redefinition, override, singleton, prepend, include, alias); refinements
-disable it; overflow out of Int64 and division by zero deopt to the generic body, so a body
+version (covers redefinition, override, singleton, prepend, include, alias, and a method
+coming or going in a refinement); the operators and self-calls a body binds are resolved
+under the refinements active where it was defined, so a refinement elsewhere costs it
+nothing; overflow out of Int64 and division by zero deopt to the generic body, so a body
 that can deopt and has a side effect is never specialized.
 
 An Integer is carried as a CLR `int` or `long` following the runtime's own rule - Int32 if
@@ -45,6 +47,39 @@ Note: outlining a loop *without* specializing it is worth nothing - IronRuby's c
 tier is no faster than its interpreter here, because the cost is the dynamic call site on
 every operator, not interpretation.
 
+## Core iterators: the loop the iterator and its block make together
+
+`n.times { }`, `a.upto(b) { }`, `a.downto(b) { }` and Array's `each`, `map`, `select`, `any?`,
+`all?` and `none?` loop in C# and yield to the block, so there is no `while` for -X:OSR to
+replace, and each iteration pays a block invocation and a dynamic call site per operator.
+TruffleRuby inlines the block into the iterator's loop; here, once one block literal has been
+yielded to ~2000 times by one of these iterators, the iterator hands the rest of its iterations
+to the `while` the two make together (`while #i < #n; i = #i; <block body>; #i += 1; end`;
+`map` stores the block's value into a result Array, `select` the element it keeps, `any?`
+breaks out), specialized by the same compiler and under the same guards and deopts as any
+other OSR loop (Src/Ruby/Runtime/Osr/BlockLoopSite.cs).
+The iterator stays the running method, and a deopt hands the loop back at an iteration
+boundary, from which it yields as before. A block with `break`/`next`/`redo`/`return`, a
+nested block (including one given to a call in its body, `n.times { a.each { } }`), or a local
+of its own that it may read before assigning it is never outlined. Nor is a loop of fewer than
+16 iterations (`BlockLoopSite.MinRun`): its iterator does not look at the site at all, so a hot
+short loop - `nbody`'s `each` over 5 bodies - runs the code it ran before.
+Util/block-loop-matrix.rb is the differential matrix.
+
+Release, best of 6, CRuby 3.3 on the same machine for reference:
+
+| benchmark     | before | after | CRuby |
+| ---           | ---:   | ---:  | ---:  |
+| `times_loop`  | 0.179  | 0.029 | 0.089 |
+| `upto_loop`   | 0.182  | 0.031 | 0.077 |
+| `each_loop`   | 0.164  | 0.053 | 0.081 |
+| `map_loop`    | 0.123  | 0.075 | 0.066 |
+| `select_loop` | 0.148  | 0.077 | 0.065 |
+| `any_loop`    | 0.104  | 0.052 | 0.054 |
+
+`yield_loop`, `yield_0` and `yield_3` are unchanged: there a Ruby method yields, and the block
+is not inlined into it.
+
 ## Both are on by default
 
 The full sweep (core library language command_line security) gives identical results with
@@ -60,9 +95,109 @@ before, 0.57x after.
 
 ## Known limits
 
-- `times`/`each`/`upto` loops are blocks, not `while` loops, so -X:OSR does not see them.
+- Every iterator other than the ones above (Range#each, Hash#each, each_with_index, a Ruby
+  method's `yield`, ...) still invokes its block once per element: a block given to one of those
+  is never outlined, whatever its body. A `while` inside such a block is still replaced by -X:OSR
+  as any other.
 - A *method* that deopts is not re-specialized the way a loop is: its entry stays installed
   and every later call whose argument types no longer match falls through to the generic
   body. Only -X:OSR rebuilds.
 - `raise_rescue` (~150x) and `fiber_switch` (~237x) are unrelated to both: exception
   backtrace construction, and a real CLR thread per Fiber.
+
+## Fiber switches and parked-thread GC cost
+
+`fiber.rb` measures resume/yield round trips, create-and-complete time, and forced
+full collections while fibers remain suspended. Run each GC population in its own
+process. The benchmark resumes all parked fibers afterward, including on error.
+
+```sh
+IR_CONFIG=Release IR_TFM=net10.0 ./ir.sh Util/bench/fiber.rb switch 100000
+IR_CONFIG=Release IR_TFM=net10.0 ./ir.sh Util/bench/fiber.rb gc 0
+IR_CONFIG=Release IR_TFM=net10.0 ./ir.sh Util/bench/fiber.rb gc 1000
+IR_CONFIG=Release IR_TFM=net10.0 ./ir.sh Util/bench/fiber.rb gc 10000
+```
+
+Use the framework you built. The switch benchmark warms both paths before timing.
+The GC mode takes 20 samples after three warmup collections; the optional third
+argument changes that sample count. These are wall-clock durations of `GC.start`,
+including its Ruby call overhead, rather than runtime GC pause-event measurements.
+They do not measure young-generation collection costs or scheduler throughput.
+
+Initial switch-only measurements on Linux x64, Release, .NET 10.0.14, October 2026,
+before adding handle reclamation. Handle tracking adds switch bookkeeping and
+per-fiber registrations; these initial figures do not measure the final reclaimer:
+
+| Operation | Original Ruby switch | C# FiberCore switch |
+| --- | ---: | ---: |
+| Resume/yield round trip | 3.95 us | 3.75 us |
+| Create and complete | 14.24 us | 13.65 us |
+
+Values are medians of five alternating fresh-process runs, 100,000 operations
+per run. The original Ruby prelude ran against the same assemblies using the
+retained mailbox primitives. This isolates the switch change, but does not replace
+a comparison on other runtimes and machines.
+
+| Parked fibers | Original upper-middle collection sample |
+| ---: | ---: |
+| 0 | 9.33 ms |
+| 1,000 | 29.81 ms |
+| 10,000 | 170.80 ms |
+
+These historical GC figures use the upper-middle value of 20 samples, as the
+initial benchmark did. The corrected benchmark averages the middle pair for even
+sample counts and uses the middle value for odd counts.
+
+The C# core combines suspension, posting, owner restoration, and the resumed state
+update. It replaces tagged Ruby message arrays with typed messages and packs yield
+arguments in C#. Ruby still validates transitions, starts workers, and handles
+exception and kill semantics. Messages still allocate and live suspended fibers
+still occupy CLR threads.
+
+## Abandoned fiber reclamation
+
+The Ruby `Fiber` is now a handle over private execution state. Worker frames and
+mailboxes retain that state; the C# core keeps a weak reference to the handle.
+The current handle is strong while user code runs. Resume, raise, and kill waits
+also pin the resumer's handle until control returns, so collection cannot break
+an active resume chain. Yield and transfer waits remain collectible. Collection
+of a discarded handle wakes the parked worker with a private control-flow
+exception. Ruby `rescue` cannot catch it and
+Ruby `ensure` bodies, TracePoint hooks, signal handlers, and Ruby finalizer
+callbacks do not execute during reclamation. CLR cleanup finally blocks still
+execute. If CLR code catches the signal, the next Ruby entry throws it again;
+exceptions replacing it during CLR cleanup also bypass Ruby rescue. The worker
+then returns to the bounded idle pool or exits.
+
+Captured scopes release completed interpreter frames so factory return values
+cannot accidentally keep their handles alive through stale temporary operands.
+Native Enumerator iteration uses a detached source carrying the same target or
+generator. Custom `each` receivers retain their original identity and can still
+retain their fiber through their suspended frames.
+
+Program-owned references are still roots. A handle stored in a captured local,
+fiber-local storage, or an object reachable from its own stack can keep that stack
+alive, including an unused local retained by a captured scope. Such fibers need
+explicit completion or `kill`, or those references must be cleared. This change
+does not provide CLR stack collection, virtual threads, or smaller live fibers.
+
+Run the regression matrix with:
+
+```sh
+IR_CONFIG=Release IR_TFM=net10.0 ./ir.sh Util/fiber-reclaim-matrix.rb
+IR_CONFIG=Release IR_TFM=net10.0 ./ir.sh -X:NoAdaptiveCompilation Util/fiber-reclaim-matrix.rb
+```
+
+The matrix checks handle collection, dropped generator Enumerators, factory
+scope retention, nested ensure/rescue suppression, worker reuse, reachable and
+running handle identity, ordinary kill/raise and tracing, copied handles, custom
+Enumerator receiver identity, captured locals, and repeated waves of discarded
+workers. It also checks nested resume/raise/kill waits, released resumer pins,
+and collectible transfer waits, and waits for an idle reclaimed worker to retire.
+Each collection check has a deadline and checks worker termination rather than
+assuming that one GC is enough.
+
+`Fiber_ReclamationClrBoundary1` in the C# test suite exercises a CLR catch that
+swallows the signal and a CLR finally that replaces it with another exception.
+Both must finish native cleanup without entering another Ruby callback, rescue,
+or ensure body. This check passes with adaptive and fully compiled execution.

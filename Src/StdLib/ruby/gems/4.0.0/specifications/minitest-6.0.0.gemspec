@@ -23,11 +23,11 @@ Gem::Specification.new do |s|
   s.rubygems_version = "3.7.2".freeze
   s.summary = "minitest provides a complete suite of testing facilities supporting TDD, BDD, and benchmarking".freeze
 
-  s.installed_by_version = "4.0.16".freeze
+  s.installed_by_version = "4.0.20".freeze
 
   s.specification_version = 4
 
-  s.add_runtime_dependency(%q<prism>.freeze, ["~> 1.5".freeze])
+  s.add_runtime_dependency(%q<prism>.freeze, [">= 1.5".freeze])
   s.add_development_dependency(%q<rdoc>.freeze, [">= 4.0".freeze, "< 7".freeze])
   s.add_development_dependency(%q<simplecov>.freeze, ["~> 0.21".freeze])
   s.add_development_dependency(%q<hoe>.freeze, ["~> 4.3".freeze])

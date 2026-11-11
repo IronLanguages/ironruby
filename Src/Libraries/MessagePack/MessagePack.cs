@@ -22,7 +22,6 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
@@ -1804,6 +1803,8 @@ namespace IronRuby.StandardLibrary.MessagePack {
                     return CallProc(proc, arg);
                 } catch (Exception e) {
                     raised = true;
+                    // thrown again once the unpacker unwinds, which starts its CLR trace over:
+                    RubyExceptionData.GetInstance(e).CaptureExceptionTrace(Context);
                     _raised = e;
                     return null;
                 }

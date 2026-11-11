@@ -13,7 +13,6 @@
  *
  * ***************************************************************************/
 
-using Microsoft.Scripting;
 
 namespace IronRuby.Runtime {
     internal sealed class ReadOnlyGlobalVariableInfo : GlobalVariable {

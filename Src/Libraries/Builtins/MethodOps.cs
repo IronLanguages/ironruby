@@ -13,7 +13,6 @@
  *
  * ***************************************************************************/
 
-using System;
 using Microsoft.Scripting.Runtime;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
@@ -52,7 +51,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("arity")]
         public static int GetArity(RubyMethod/*!*/ self) {
             // nothing is known about a method only method_missing implements
-            return self.IsMethodMissing ? -1 : self.Info.GetArity();
+            return self.IsMethodMissing ? -1 : MethodReflection.GetArity(self.Info, self.Name);
         }
 
         [RubyMethod("name")]
@@ -137,9 +136,11 @@ namespace IronRuby.Builtins {
         }
 
         internal static RubyMemberInfo/*!*/ BindGenericParameters(RubyContext/*!*/ context, RubyMemberInfo/*!*/ info, string/*!*/ name, object[]/*!*/ typeArgs) {
-            RubyMemberInfo result = info.TryBindGenericParameters(Protocols.ToTypes(context, typeArgs));
+            System.Type[] types = Protocols.ToTypes(context, typeArgs);
+            RubyMemberInfo result = info.TryBindGenericParameters(types);
             if (result == null) {
-                throw RubyExceptions.CreateArgumentError("wrong number of generic arguments for `{0}'", name);
+                throw (info as RubyMethodGroupBase)?.GetGenericConstraintError(name, types, typeArgs) ??
+                    RubyExceptions.CreateArgumentError("wrong number of generic arguments for '{0}'", name);
             }
             return result;
         }
@@ -147,7 +148,7 @@ namespace IronRuby.Builtins {
         internal static RubyMemberInfo/*!*/ SelectOverload(RubyContext/*!*/ context, RubyMemberInfo/*!*/ info, string/*!*/ name, object[]/*!*/ typeArgs) {
             RubyMemberInfo result = info.TrySelectOverload(Protocols.ToTypes(context, typeArgs));
             if (result == null) {
-                throw RubyExceptions.CreateArgumentError("no overload of `{0}' matches given parameter types", name);
+                throw RubyExceptions.CreateArgumentError("no overload of '{0}' matches given parameter types", name);
             }
             return result;
         }
@@ -182,7 +183,7 @@ namespace IronRuby.Builtins {
             if (self.IsMethodMissing) {
                 return new RubyArray(1) { new RubyArray(1) { context.CreateAsciiSymbol("rest") } };
             }
-            return self.Info.GetRubyParameterArray();
+            return MethodReflection.GetParameters(context, self.Info, self.Name);
         }
     }
 }

@@ -13,15 +13,10 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
-using System.Collections.Generic;
 using System.Diagnostics;
 
 namespace IronRuby.Compiler.Ast {
@@ -50,7 +45,7 @@ namespace IronRuby.Compiler.Ast {
             _statements = statements;
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             return gen.TransformStatementsToExpression(_statements);
         }
 

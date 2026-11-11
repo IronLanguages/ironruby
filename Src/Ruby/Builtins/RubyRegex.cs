@@ -15,7 +15,6 @@
 
 using System;
 using System.Diagnostics;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -25,8 +24,7 @@ using System.Collections.Generic;
 
 namespace IronRuby.Builtins {
     public partial class RubyRegex : IEquatable<RubyRegex>, IDuplicable, IRubyObjectState {
-        // 1.9: correctly encoded, switched to characters 
-        // 1.8: k-coded binary data, if _options specify encoding, or raw binary data otherwise.
+        // The source, frozen; in the encoding an encoding option (/e /s /u /n) names, if there is one.
         private MutableString/*!*/ _pattern;
         // HasNonAsciiEscape(_pattern) - the pattern is frozen, so it is worked out once: -1 not yet,
         // 0 none, 1 a byte escape, 2 a \u escape. Encoding and IsFixedEncoding ask on every match.
@@ -44,7 +42,6 @@ namespace IronRuby.Builtins {
         // must treat a pair as the one character it is (see RegexpTransformer). A subject without
         // pairs - nearly all of them - never pays for that and matches with _cachedRegex.
         private Regex _cachedAstralRegex;
-        private RubyRegexOptions _cachedAstralKCode;
         private TimeSpan _cachedAstralTimeout;
 
         // The same CLR regex forced to start where the search starts, for the scanning operations
@@ -57,9 +54,6 @@ namespace IronRuby.Builtins {
         // A regex that keeps being used is rebuilt with RegexOptions.Compiled (see TierUp).
         private int _cachedRegexUses;
         private int _cachedAnchoredUses;
-
-        // Ruby 1.8: match operations use KCODE encoding so we need to remember the one for which we have cached CLR Regex.
-        private RubyRegexOptions _cachedKCode;
 
         /// <summary>
         /// How long a match with this pattern may run before it is abandoned, as
@@ -106,8 +100,8 @@ namespace IronRuby.Builtins {
         }
 
         private const int FrozenFlag = 1;
-        private const int TaintedFlag = 2;
-        private const int UntrustedFlag = 4;
+        // made by FromLiteralPattern
+        private const int LiteralPatternFlag = 2;
 
         // A regexp literal is frozen by MRI, so the state has to live on the object itself rather
         // than in the context's instance data, which the literal-construction path has no access to.
@@ -117,16 +111,6 @@ namespace IronRuby.Builtins {
 
         public bool IsFrozen {
             get { return (_flags & FrozenFlag) != 0; }
-        }
-
-        public bool IsTainted {
-            get { return (_flags & TaintedFlag) != 0; }
-            set { _flags = (_flags & ~TaintedFlag) | (value ? TaintedFlag : 0); }
-        }
-
-        public bool IsUntrusted {
-            get { return (_flags & UntrustedFlag) != 0; }
-            set { _flags = (_flags & ~UntrustedFlag) | (value ? UntrustedFlag : 0); }
         }
 
         public void Freeze() {
@@ -172,12 +156,12 @@ namespace IronRuby.Builtins {
 
             RubyEncoding encoding = RubyEncoding.GetRegexEncoding(options);
             if (encoding != null) {
-                _pattern = MutableString.CreateBinary(pattern.ToByteArray(), encoding ?? RubyEncoding.Binary).Freeze();
+                _pattern = MutableString.CreateBinary(pattern.ToByteArray(), encoding).Freeze();
             } else {
                 _pattern = pattern.PrepareForCharacterRead().Clone().Freeze();
             }
-            
-            TransformPattern(encoding, options & RubyRegexOptions.EncodingMask);
+
+            TransformPattern(false);
         }
 
         /// <summary>
@@ -207,161 +191,386 @@ namespace IronRuby.Builtins {
         /// compatibility MutableString.RequireCompatibleEncoding applies.
         /// </summary>
         private void RequireMatchableEncoding(MutableString/*!*/ input) {
+            if ((_flags & LiteralPatternFlag) != 0) {
+                // a String pattern (#sub, #gsub, #scan): MRI's rb_enc_check, receiver first
+                input.RequireCompatibleEncoding(_pattern);
+                return;
+            }
+
             if (input.ContainsInvalidCharacters()) {
                 throw RubyExceptions.CreateArgumentError("invalid byte sequence in {0}", input.Encoding.Name);
             }
 
-            if (!IsFixedEncoding) {
+            var patternEncoding = Encoding;
+            if (input.Encoding == patternEncoding) {
                 return;
             }
-
-            var patternEncoding = Encoding;
-            if (input.Encoding != patternEncoding && (!patternEncoding.IsAsciiIdentity || !input.IsAscii())) {
+            // A string in an ASCII incompatible encoding (UTF-16, UTF-32) matches no regexp of
+            // another encoding, ASCII only as both may be.
+            if (!input.Encoding.IsAsciiIdentity ||
+                IsFixedEncoding && (!patternEncoding.IsAsciiIdentity || !input.IsAscii())) {
                 throw new EncodingCompatibilityError(
-                    "incompatible encoding regexp match (" + patternEncoding.Name + " regexp with " + input.Encoding.Name + " string)"
+                    "incompatible encoding regexp match (" + patternEncoding.InspectName + " regexp with " + input.Encoding.InspectName + " string)"
                 );
             }
         }
 
-        private Regex/*!*/ Transform(ref RubyEncoding encoding, MutableString/*!*/ input, int start, out string strInput) {
-            bool astral;
-            return Transform(ref encoding, input, start, out strInput, out astral);
-        }
-
         /// <summary>
-        /// <paramref name="astral"/> tells whether the subject the regex runs on holds a surrogate
-        /// pair: CLR offsets then are not character offsets, and an empty match has to step over
-        /// a whole pair.
-        /// </summary>
-        private Regex/*!*/ Transform(ref RubyEncoding encoding, MutableString/*!*/ input, int start, out string strInput, out bool astral) {
-            return Transform(ref encoding, input, start, out strInput, out astral, true);
-        }
-
-        /// <summary>
+        /// The CLR regex to run and the text to run it on: the input's own characters. Once
+        /// RequireMatchableEncoding has let the input through it is either in the regexp's
+        /// encoding or ASCII only, so those are the characters the regexp means and the CLR
+        /// offsets are Ruby's character offsets (but for surrogate pairs, see below), /e /s /u
+        /// and /n included.
+        ///
+        /// <paramref name="astral"/> tells whether the text holds a surrogate pair: CLR offsets
+        /// then are not character offsets, and an empty match has to step over a whole pair.
         /// <paramref name="countUse"/> is false when the caller is not going to match with the
         /// regex it gets back (MatchWindow, which derives an anchored one from it), so that only
         /// the regex that actually runs works its way up to being compiled.
         /// </summary>
-        private Regex/*!*/ Transform(ref RubyEncoding encoding, MutableString/*!*/ input, int start, out string strInput, out bool astral, bool countUse) {
+        private Regex/*!*/ Transform(MutableString/*!*/ input, out string strInput, out bool astral, bool countUse) {
             ContractUtils.RequiresNotNull(input, "input");
 
             RequireMatchableEncoding(input);
+            input.PrepareForCharacterRead();
+            strInput = input.ConvertToString();
+            // O(1): matching has just validated the input, which works the flags out
+            astral = input.HasSurrogatePairs();
 
-            // TODO:
-
-            // K-coding of the current operation (the current KCODE gets preference over the KCODE regex option):
-            RubyRegexOptions kc = _options & RubyRegexOptions.EncodingMask;
-            if (kc != 0) {
-                encoding = _pattern.Encoding;
-            } else {
-                kc = RubyRegexOptions.NONE;
-            }
-
-            // Convert input to a string. Force k-coding if necessary.
-            if (kc != 0) {
-                // Handling multi-byte K-coded characters is not entirely correct here.
-                // Three cases to be considered:
-                // 1) Multi-byte character is explicitly contained in the pattern: /�*/
-                // 2) Subsequent escapes form a complete character: /\342\202\254*/ or /\xe2\x82\xac*/
-                // 3) Subsequent escapes form an incomplete character: /[\x7f-\xff]{1,3}/
-                //
-                // In the first two cases we want to "group" the byte triplet so that regex operators like *, +, ? and {n,m} operate on 
-                // the entire character, not just the last byte. We could unescape the bytes and replace them with complete Unicode characters.
-                // Then we could encode the input using the same K-coding and we would get a match. 
-                // However, case 3) requires the opposite: to match the bytes we need to encode the input using binary encoding. 
-                // Using this encoding makes *+? operators operate on the last byte (encoded as UTF16 character).
-                // 
-                // The right solution would require the regex engine to handle multi-byte escaped characters, which it doesn't.
-                //
-                // TODO:
-                // A correct workaround would be to wrap the byte sequence that forms a character into a non-capturing group, 
-                // for example transform /\342\202\254*/ to /(?:\342\202\254)*/ and use binary encoding on both input and pattern.
-                // For now, we just detect if there are any non-ascii character escapes. If so we use a binary encoding accomodating case 3), 
-                // but breaking cases 1 and 2. Otherwise we encode using k-coding to make case 1 match.
-                if (HasEscapedNonAsciiBytes(_pattern)) {
-                    encoding = RubyEncoding.Binary;
-                    kc = 0;
-                }
-                
-                if (start == 0 && encoding == RubyEncoding.Binary && input.Encoding == RubyEncoding.Binary) {
-                    // Binary in, binary out: one byte is one character either way, so forcing the
-                    // coding produces exactly the string the subject already knows how to be - and
-                    // MutableString keeps that one, where ForceEncoding builds a fresh copy on
-                    // every match. Only binary: a wider k-coding decodes the bytes differently
-                    // from the subject's own encoding, and the offsets would not line up.
-                    input.PrepareForCharacterRead();
-                    strInput = input.ConvertToString();
-                } else {
-                    strInput = ForceEncoding(input, encoding.Encoding, start);
-                }
-                astral = strInput != null && !encoding.IsSingleByteCharacterSet && strInput.AsSpan().IndexOfAnyInRange('\uD800', '\uDBFF') >= 0;
-            } else {
-                _pattern.RequireCompatibleEncoding(input);
-                input.PrepareForCharacterRead();
-                strInput = input.ConvertToString();
-                // O(1): matching has just validated the input, which works the flags out
-                astral = input.HasSurrogatePairs();
-            }
-
-            return astral ? TransformAstralPattern(encoding, kc) : TransformPattern(encoding, kc, countUse);
+            return astral ? TransformAstralPattern() : TransformPattern(countUse);
         }
 
-        private Regex/*!*/ TransformAstralPattern(RubyEncoding encoding, RubyRegexOptions kc) {
+        private Regex/*!*/ TransformAstralPattern() {
             TimeSpan timeout = EffectiveTimeout;
-            if (_cachedAstralRegex != null && kc == _cachedAstralKCode && timeout == _cachedAstralTimeout) {
+            if (_cachedAstralRegex != null && timeout == _cachedAstralTimeout) {
                 return _cachedAstralRegex;
             }
 
             // the plain translation first: it validates the pattern and sets _hasGAnchor
-            Regex plain = TransformPattern(encoding, kc);
+            Regex plain = TransformPattern(false);
             Regex result;
             try {
                 bool hasGAnchor;
-                result = new Regex(RegexpTransformer.Transform(GetClrPatternSource(encoding, kc), _options, out hasGAnchor, true), plain.Options, timeout);
+                result = new Regex(RegexpTransformer.Transform(GetClrPatternSource(), _options, out hasGAnchor, true), plain.Options, timeout);
             } catch (Exception) {
                 result = plain;
             }
 
             _cachedAstralTimeout = timeout;
-            _cachedAstralKCode = kc;
             _cachedAstralRegex = result;
             return result;
         }
 
-        private string/*!*/ GetClrPatternSource(RubyEncoding encoding, RubyRegexOptions kc) {
-            return (kc != 0 || encoding == RubyEncoding.Binary) ? _pattern.ToString(encoding.Encoding) : _pattern.ConvertToString();
+        /// <summary>
+        /// The pattern as the characters the translation reads. In an encoding other than BINARY
+        /// and US-ASCII (where a byte escape means that byte) a run of \xHH or octal escapes spells
+        /// characters of the pattern's encoding: /\xa4\xa2/e is "あ", one character that a
+        /// quantifier after it repeats as a whole. So the run is decoded here, and refused as
+        /// Onigmo refuses it when it does not decode.
+        /// </summary>
+        private string/*!*/ GetClrPatternSource() {
+            string source = _pattern.ConvertToString();
+            RubyEncoding encoding = _pattern.Encoding;
+            if (encoding == RubyEncoding.Binary || encoding == RubyEncoding.Ascii || !encoding.IsAsciiIdentity || source.IndexOf('\\') < 0) {
+                return source;
+            }
+            return DecodeByteEscapes(source, encoding);
         }
 
-        private Regex/*!*/ TransformPattern(RubyEncoding encoding, RubyRegexOptions kc) {
-            return TransformPattern(encoding, kc, false);
+        /// <remarks>
+        /// Comments are passed over undecoded, as Onigmo never reads an escape in them: a (?#...)
+        /// group, and in extended mode (/x, or (?x) for the rest of a group) a # up to the end of
+        /// the line outside a character class.
+        /// </remarks>
+        private string/*!*/ DecodeByteEscapes(string/*!*/ source, RubyEncoding/*!*/ encoding) {
+            StringBuilder result = null;
+            var run = new List<byte>();
+            int copied = 0;
+            int i = 0;
+            bool extended = (_options & RubyRegexOptions.Extended) != 0;
+            var groups = new Stack<bool>();
+            int classDepth = 0;
+            while (i < source.Length) {
+                if (source[i] != '\\') {
+                    i = SkipNonEscape(source, i, ref extended, groups, ref classDepth);
+                    continue;
+                }
+
+                int runStart = i;
+                run.Clear();
+                int value, next;
+                while ((value = ReadByteEscape(source, i, out next)) >= 0) {
+                    run.Add((byte)value);
+                    i = next;
+                }
+
+                if (run.Count == 0) {
+                    // some other escape, \\ included: skip it whole
+                    i += 2;
+                    continue;
+                }
+                if (!run.Exists(b => b >= 0x80)) {
+                    continue;
+                }
+
+                byte[] bytes = run.ToArray();
+                string decoded;
+                try {
+                    decoded = encoding.StrictEncoding.GetString(bytes);
+                } catch (DecoderFallbackException) {
+                    throw new RegexpError((IsTruncatedCharacter(bytes, encoding)
+                        ? "too short escaped multibyte character: " : "invalid multibyte escape: ") + Inspect().ToString());
+                }
+
+                result ??= new StringBuilder(source.Length);
+                result.Append(source, copied, runStart - copied);
+                foreach (char c in decoded) {
+                    if (c < 0x80) {
+                        // an ASCII byte of the run means itself, never a metacharacter
+                        result.Append("\\x").Append(((int)c).ToString("x2", System.Globalization.CultureInfo.InvariantCulture));
+                    } else {
+                        result.Append(c);
+                    }
+                }
+                copied = i;
+            }
+
+            if (result == null) {
+                return source;
+            }
+            return result.Append(source, copied, source.Length - copied).ToString();
         }
 
-        private Regex/*!*/ TransformPattern(RubyEncoding encoding, RubyRegexOptions kc, bool countUse) {
-            // We can reuse cached CLR regex if it was created for the same k-coding and the
-            // same timeout:
+        /// <summary>
+        /// Steps over the character at <paramref name="i"/>, which is not a backslash, or over
+        /// the whole comment that starts there, keeping track of character classes, groups and
+        /// whether extended mode is on. Returns where to carry on.
+        /// </summary>
+        private static int SkipNonEscape(string/*!*/ source, int i, ref bool extended, Stack<bool>/*!*/ groups, ref int classDepth) {
+            char c = source[i];
+            if (classDepth > 0) {
+                if (c == '[') {
+                    classDepth++;
+                } else if (c == ']') {
+                    classDepth--;
+                }
+                return i + 1;
+            }
+
+            switch (c) {
+                case '[':
+                    classDepth = 1;
+                    return i + 1;
+
+                case '#':
+                    if (!extended) {
+                        return i + 1;
+                    }
+                    int eol = source.IndexOf('\n', i);
+                    return eol < 0 ? source.Length : eol + 1;
+
+                case ')':
+                    if (groups.Count > 0) {
+                        extended = groups.Pop();
+                    }
+                    return i + 1;
+
+                case '(':
+                    if (i + 2 < source.Length && source[i + 1] == '?' && source[i + 2] == '#') {
+                        // (?#...) ends at the first ) that is not escaped
+                        int j = i + 3;
+                        while (j < source.Length && source[j] != ')') {
+                            j += source[j] == '\\' ? 2 : 1;
+                        }
+                        return Math.Min(j + 1, source.Length);
+                    }
+
+                    // (?imx-imx) sets the options for the rest of the group, (?imx-imx:...) inside it
+                    if (i + 1 < source.Length && source[i + 1] == '?') {
+                        int j = i + 2;
+                        bool on = true, flagExtended = extended;
+                        while (j < source.Length && "imxadu-".IndexOf(source[j]) >= 0) {
+                            if (source[j] == '-') {
+                                on = false;
+                            } else if (source[j] == 'x') {
+                                flagExtended = on;
+                            }
+                            j++;
+                        }
+                        if (j > i + 2 && j < source.Length && source[j] == ')') {
+                            extended = flagExtended;
+                            return j + 1;
+                        }
+                        if (j > i + 2 && j < source.Length && source[j] == ':') {
+                            groups.Push(extended);
+                            extended = flagExtended;
+                            return j + 1;
+                        }
+                    }
+                    groups.Push(extended);
+                    return i + 1;
+
+                default:
+                    return i + 1;
+            }
+        }
+
+        /// <summary>
+        /// The byte a \xH, \xHH, \0, \0N, \0NN or \NNN escape at <paramref name="i"/> stands for,
+        /// or -1 when there is no such escape there (\N and \NN are back references).
+        /// </summary>
+        private static int ReadByteEscape(string/*!*/ source, int i, out int next) {
+            next = i;
+            if (i + 1 >= source.Length || source[i] != '\\') {
+                return -1;
+            }
+            char c = source[i + 1];
+            int value = 0, digits = 0;
+            if (c == 'x') {
+                for (int j = i + 2; j < source.Length && digits < 2; j++, digits++) {
+                    int d = Tokenizer.ToDigit(source[j]);
+                    if (d >= 16) {
+                        break;
+                    }
+                    value = value * 16 + d;
+                }
+                next = i + 2 + digits;
+                return digits > 0 ? value : -1;
+            }
+            for (int j = i + 1; j < source.Length && digits < 3; j++, digits++) {
+                int d = Tokenizer.ToDigit(source[j]);
+                if (d >= 8) {
+                    break;
+                }
+                value = value * 8 + d;
+            }
+            if (digits > 0 && (c == '0' || digits == 3) && value <= 0xff) {
+                next = i + 1 + digits;
+                return value;
+            }
+            return -1;
+        }
+
+        /// <summary>
+        /// Whether bytes that do not decode only fail for ending in the middle of a character.
+        /// </summary>
+        private static bool IsTruncatedCharacter(byte[]/*!*/ bytes, RubyEncoding/*!*/ encoding) {
+            try {
+                encoding.StrictEncoding.GetDecoder().GetCharCount(bytes, 0, bytes.Length, false);
+                return true;
+            } catch (DecoderFallbackException) {
+                return false;
+            }
+        }
+
+        private Regex/*!*/ TransformPattern(bool countUse) {
+            // The cached CLR regex is good for as long as the timeout it was made with:
             TimeSpan timeout = EffectiveTimeout;
             Regex cached = _cachedRegex;
-            if (cached != null && kc == _cachedKCode && timeout == _cachedTimeout) {
+            if (cached != null && timeout == _cachedTimeout) {
                 if (countUse && (cached.Options & RegexOptions.Compiled) == 0 && ++_cachedRegexUses >= CompileThreshold) {
+                    Regex interpreted = cached;
                     _cachedRegex = cached = TierUp(cached);
+                    if (cached != interpreted) {
+                        SharedRegex.Promote(GetClrPatternSource(), _options, interpreted, cached);
+                    }
                 }
                 return cached;
             }
 
-            string pattern = GetClrPatternSource(encoding, kc);
+            string pattern = GetClrPatternSource();
 
             Regex result;
-            try {
-                result = new Regex(RegexpTransformer.Transform(pattern, _options, out _hasGAnchor), ToClrOptions(_options), timeout);
-            } catch (Exception e) {
-                throw new RegexpError(e.Message);
+            SharedRegex shared = SharedRegex.Find(pattern, _options, timeout);
+            if (shared != null) {
+                result = shared.Regex;
+                _hasGAnchor = shared.HasGAnchor;
+            } else {
+                try {
+                    result = new Regex(RegexpTransformer.Transform(pattern, _options, out _hasGAnchor), ToClrOptions(_options), timeout);
+                } catch (Exception e) {
+                    throw new RegexpError(e.Message);
+                }
+                SharedRegex.Add(pattern, _options, timeout, result, _hasGAnchor);
             }
 
             _cachedTimeout = timeout;
-            _cachedKCode = kc;
             _cachedRegexUses = 0;
             _cachedRegex = result;
             return result;
+        }
+
+        /// <summary>
+        /// The CLR regexes of the patterns made last, by pattern, shared by every Regexp with the
+        /// same pattern, options and timeout. Translating a pattern and having .NET parse the
+        /// result is most of what Regexp.new costs, and an interpolated literal (/#{x}/) makes a
+        /// new Regexp - usually of a pattern it has made before - every time it runs.
+        ///
+        /// A CLR Regex is immutable and safe to share between threads. Each Regexp still counts
+        /// its own uses towards being compiled (TierUp); once one has been, the compiled regex
+        /// replaces the interpreted one here, so the Regexps made after it start out compiled.
+        /// Failures are not cached: a bad pattern is translated, and raises, every time.
+        /// </summary>
+        private sealed class SharedRegex {
+            private readonly RubyRegexOptions _options;
+            private readonly TimeSpan _timeout;
+            // Another entry for the same pattern under other options or another timeout.
+            private SharedRegex _next;
+            internal Regex Regex;
+            internal readonly bool HasGAnchor;
+
+            // Not the static Regex cache (its key is a struct type - see Glob's matcher cache - and
+            // it holds the CLR pattern, not ours).
+            private static readonly Dictionary<string, SharedRegex>/*!*/ _entries = new Dictionary<string, SharedRegex>();
+            private const int CacheSize = 256;
+
+            private SharedRegex(RubyRegexOptions options, TimeSpan timeout, Regex/*!*/ regex, bool hasGAnchor) {
+                _options = options;
+                _timeout = timeout;
+                Regex = regex;
+                HasGAnchor = hasGAnchor;
+            }
+
+            internal static SharedRegex Find(string/*!*/ pattern, RubyRegexOptions options, TimeSpan timeout) {
+                lock (_entries) {
+                    SharedRegex entry;
+                    if (_entries.TryGetValue(pattern, out entry)) {
+                        for (; entry != null; entry = entry._next) {
+                            if (entry._options == options && entry._timeout == timeout) {
+                                return entry;
+                            }
+                        }
+                    }
+                }
+                return null;
+            }
+
+            internal static void Add(string/*!*/ pattern, RubyRegexOptions options, TimeSpan timeout, Regex/*!*/ regex, bool hasGAnchor) {
+                var entry = new SharedRegex(options, timeout, regex, hasGAnchor);
+                lock (_entries) {
+                    if (_entries.Count >= CacheSize) {
+                        _entries.Clear();
+                    }
+                    SharedRegex existing;
+                    entry._next = _entries.TryGetValue(pattern, out existing) ? existing : null;
+                    _entries[pattern] = entry;
+                }
+            }
+
+            /// <summary>Puts the compiled form of <paramref name="interpreted"/> in its place.</summary>
+            internal static void Promote(string/*!*/ pattern, RubyRegexOptions options, Regex/*!*/ interpreted, Regex/*!*/ compiled) {
+                lock (_entries) {
+                    SharedRegex entry;
+                    if (_entries.TryGetValue(pattern, out entry)) {
+                        for (; entry != null; entry = entry._next) {
+                            if (entry._options == options && entry.Regex == interpreted) {
+                                entry.Regex = compiled;
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         /// <summary>
@@ -383,60 +592,6 @@ namespace IronRuby.Builtins {
             } catch (Exception) {
                 return regex;
             }
-        }
-
-        /// <summary>
-        /// Searches the pattern for hexadecimal and octal character escapes that represent a non-ASCII character.
-        /// </summary>
-        private static bool HasEscapedNonAsciiBytes(MutableString/*!*/ pattern) {
-            int i = 0;
-            int length = pattern.GetByteCount();
-            while (i < length - 2) {
-                int c = pattern.GetByte(i++);
-                if (c == '\\') {
-                    c = pattern.GetByte(i++);
-                    if (c == 'x') {
-                        // hexa escape:
-                        int d1 = Tokenizer.ToDigit(PeekByte(pattern, length, i++));
-                        if (d1 < 16) {
-                            int d2 = Tokenizer.ToDigit(PeekByte(pattern, length, i++));
-                            if (d2 < 16) {
-                                return (d1 * 16 + d2 >= 0x80);
-                            }
-                        }
-                    } else if (c >= '2' && c <= '7') {
-                        // a backreference (\1..\9) or an octal escape:
-                        int d = Tokenizer.ToDigit(PeekByte(pattern, length, i++));
-                        if (d < 8) {
-                            int value = Tokenizer.ToDigit(c) * 8 + d;
-                            d = Tokenizer.ToDigit(PeekByte(pattern, length, i++));
-                            if (d < 8) {
-                                value = value * 8 + d;
-                            }
-                            return value >= 0x80;
-                        }
-                    }
-                }
-            }
-
-            return false;
-        }
-
-        private static int PeekByte(MutableString/*!*/ str, int length, int i) {
-            return (i < length) ? str.GetByte(i) : -1;
-        }
-
-        private static string/*!*/ ForceEncoding(MutableString/*!*/ input, Encoding/*!*/ encoding, int start) {
-            int byteCount = input.GetByteCount();
-
-            if (start < 0) {
-                start += byteCount;
-            }
-            if (start < 0) {
-                return null;
-            }
-
-            return (start <= byteCount) ? input.ToString(encoding, start, byteCount - start) : null;
         }
 
         #endregion
@@ -758,11 +913,7 @@ namespace IronRuby.Builtins {
 
 #if DEBUG
             if (RubyOptions.CompileRegexps) {
-#if SILVERLIGHT || WIN8 // RegexOptions.Compiled
-                throw new NotSupportedException("RegexOptions.Compiled is not supported on Silverlight");
-#else
                 result |= RegexOptions.Compiled;
-#endif
             }
 #endif
             if ((options & RubyRegexOptions.IgnoreCase) != 0) {
@@ -785,19 +936,16 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// Ruby's pos argument - Regexp#match(str, pos), String#index(re, pos), #match? - is a
         /// character index, negative from the end, while Match and LastMatch take the index
-        /// space the regex runs in: CLR chars, or bytes under a k-coding. Answers false when the
+        /// space the regex runs in: the CLR chars of the string. Answers false when the
         /// position is outside the string.
         /// </summary>
         private bool ToSearchStart(MutableString/*!*/ input, ref int start, bool clamp) {
-            if ((_options & RubyRegexOptions.EncodingMask) == 0 || input.HasByteCharacters) {
-                // the regex runs on the string's own characters (or on bytes that are characters)
-                if (start == 0 || input.KnowsCharIndexIsClrIndex) {
-                    return true;
-                }
-                input.PrepareForCharacterRead();
-                if (!input.HasSurrogatePairs()) {
-                    return true;
-                }
+            if (start == 0 || input.KnowsCharIndexIsClrIndex) {
+                return true;
+            }
+            input.PrepareForCharacterRead();
+            if (!input.HasSurrogatePairs()) {
+                return true;
             }
 
             int length = input.GetCharacterCount();
@@ -814,12 +962,7 @@ namespace IronRuby.Builtins {
                 start = length;
             }
 
-            if ((_options & RubyRegexOptions.EncodingMask) == 0 || input.HasByteCharacters) {
-                start = input.ToClrIndex(start);
-            } else {
-                input.PrepareForCharacterRead();
-                start = input.GetSlice(0, input.ToClrIndex(start)).GetByteCount();
-            }
+            start = input.ToClrIndex(start);
             return true;
         }
 
@@ -862,10 +1005,9 @@ namespace IronRuby.Builtins {
 
         public MatchData Match(MutableString/*!*/ input) {
             string str;
-            RubyEncoding kcode = null;
             bool astral;
-            Regex regex = Transform(ref kcode, input, 0, out str, out astral);
-            return MatchData.Create(astral ? MatchOutsidePairs(regex, str, 0) : regex.Match(str), input, true, str, kcode, 0, this, astral);
+            Regex regex = Transform(input, out str, out astral, true);
+            return MatchData.Create(astral ? MatchOutsidePairs(regex, str, 0) : regex.Match(str), input, true, str, this, astral);
         }
 
         /// <summary>
@@ -903,31 +1045,21 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// Start is a number of bytes if kcode is given, otherwise it's a number of characters.
+        /// Start is a CLR index into the input's characters.
         /// </summary>
         public MatchData Match(MutableString/*!*/ input, int start, bool freezeInput) {
             string str;
-            RubyEncoding kcode = null;
             bool astral;
-            Regex regex = Transform(ref kcode, input, start, out str, out astral);
+            Regex regex = Transform(input, out str, out astral, true);
 
-            Match match;
-            if (kcode != null) {
-                if (str == null) {
-                    return null;
-                }
-                match = astral ? MatchOutsidePairs(regex, str, 0) : regex.Match(str, 0);
-            } else {
-                if (start < 0) {
-                    start += str.Length;
-                }
-                if (start < 0 || start > str.Length) {
-                    return null;
-                }
-                match = astral ? MatchOutsidePairs(regex, str, start) : regex.Match(str, start);
+            if (start < 0) {
+                start += str.Length;
             }
-
-            return MatchData.Create(match, input, freezeInput, str, kcode, (kcode != null) ? ((start < 0) ? start + input.GetByteCount() : start) : 0, this, astral);
+            if (start < 0 || start > str.Length) {
+                return null;
+            }
+            Match match = astral ? MatchOutsidePairs(regex, str, start) : regex.Match(str, start);
+            return MatchData.Create(match, input, freezeInput, str, this, astral);
         }
 
         /// <summary>
@@ -944,31 +1076,16 @@ namespace IronRuby.Builtins {
         /// the same answer, but it reads the whole rest of the subject to produce it.
         ///
         /// Offsets in the returned MatchData are relative to the whole input, as with #Match.
-        /// Start is a number of bytes if kcode is given, otherwise a number of characters.
+        /// Start is a CLR index into the input's characters.
         /// </summary>
         public MatchData MatchWindow(MutableString/*!*/ input, int start, bool anchored, bool freezeInput) {
             // Convert the whole input, not the part from "start" on: the conversion is the
             // expensive half of a match on a long subject, and converting only the tail means
             // paying for the tail again at every position the scanner stops at.
             string str;
-            RubyEncoding kcode = null;
             bool astral;
-            Regex regex = Transform(ref kcode, input, 0, out str, out astral, !anchored);
+            Regex regex = Transform(input, out str, out astral, !anchored);
 
-            // Under a k-coding the offsets are bytes, and "start" only indexes the converted
-            // string directly when that coding spells every character in one byte - which the
-            // usual one here, /n, does. Anything wider still has to be cut at "start".
-            int offset = 0;
-            if (kcode != null && !kcode.IsSingleByteCharacterSet) {
-                kcode = null;
-                regex = Transform(ref kcode, input, start, out str, out astral, !anchored);
-                offset = (start < 0) ? start + input.GetByteCount() : start;
-                start = 0;
-            }
-
-            if (str == null) {
-                return null;
-            }
             if (start < 0) {
                 start += str.Length;
             }
@@ -981,7 +1098,7 @@ namespace IronRuby.Builtins {
             }
 
             Match match = astral ? MatchOutsidePairs(regex, str, start, str.Length - start) : regex.Match(str, start, str.Length - start);
-            return MatchData.Create(match, input, freezeInput, str, kcode, offset, this, astral);
+            return MatchData.Create(match, input, freezeInput, str, this, astral);
         }
 
         /// <summary>
@@ -997,7 +1114,6 @@ namespace IronRuby.Builtins {
             internal Regex _regex;
             internal MutableString _input;
             internal string _text;
-            internal RubyEncoding _kcode;
             internal int _start;
             internal MatchData _data;
 
@@ -1011,16 +1127,16 @@ namespace IronRuby.Builtins {
                 }
                 Match match = _regex.Match(_text, _start, _text.Length - _start);
                 Debug.Assert(match.Success);
-                return MatchData.Create(match, _input, false, _text, _kcode, 0, _owner, false);
+                return MatchData.Create(match, _input, false, _text, _owner, false);
             }
         }
 
         /// <summary>
         /// MatchWindow without a frozen copy of the input, answering the byte offsets of the whole
         /// match and a <see cref="PendingMatch"/> for its groups. Where one CLR character stands
-        /// for one byte of the input - a binary or single-byte k-coding, or a subject whose
-        /// characters are all single bytes - the match is found without building any match
-        /// objects at all; anything else goes through MatchWindow.
+        /// for one byte of the input - a subject whose characters are all single bytes - the
+        /// match is found without building any match objects at all; anything else goes
+        /// through MatchWindow.
         /// </summary>
         public bool MatchWindowBounds(MutableString/*!*/ input, int start, bool anchored,
             out int matchStart, out int matchEnd, out PendingMatch pending) {
@@ -1029,12 +1145,10 @@ namespace IronRuby.Builtins {
             pending = default(PendingMatch);
 
             string str;
-            RubyEncoding kcode = null;
             bool astral;
-            Regex regex = Transform(ref kcode, input, 0, out str, out astral, !anchored);
+            Regex regex = Transform(input, out str, out astral, !anchored);
 
-            bool bytesAreChars = (kcode != null) ? kcode.IsSingleByteCharacterSet : input.DetectSingleByteCharacters();
-            if (astral || !bytesAreChars) {
+            if (astral || !input.DetectSingleByteCharacters()) {
                 MatchData data = MatchWindow(input, start, anchored, false);
                 if (data == null || !data.TryGetGroupByteOffsets(0, out matchStart, out matchEnd)) {
                     return false;
@@ -1044,9 +1158,6 @@ namespace IronRuby.Builtins {
                 return true;
             }
 
-            if (str == null) {
-                return false;
-            }
             if (start < 0) {
                 start += str.Length;
             }
@@ -1063,18 +1174,13 @@ namespace IronRuby.Builtins {
             foreach (ValueMatch match in regex.EnumerateMatches(str.AsSpan(start))) {
                 int clrStart = start + match.Index;
                 // MatchData's offsets: the CLR offset is the byte offset, capped at the subject
-                matchStart = Math.Min(clrStart, str.Length);
-                matchEnd = Math.Min(clrStart + match.Length, str.Length);
-                if (kcode == null) {
-                    int byteCount = input.GetByteCount();
-                    matchStart = Math.Min(matchStart, byteCount);
-                    matchEnd = Math.Min(matchEnd, byteCount);
-                }
+                int byteCount = Math.Min(str.Length, input.GetByteCount());
+                matchStart = Math.Min(clrStart, byteCount);
+                matchEnd = Math.Min(clrStart + match.Length, byteCount);
                 pending._owner = this;
                 pending._regex = regex;
                 pending._input = input;
                 pending._text = str;
-                pending._kcode = kcode;
                 pending._start = start;
                 return true;
             }
@@ -1126,33 +1232,18 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// Finds the last match whose index is less than or equal to "start".
         /// Captures are ordered in the same way as with forward match. This is different from .NET reverse matching.
-        /// Start is a number of bytes if kcode is given, otherwise it's a number of characters.
+        /// Start is a CLR index into the input's characters.
         /// </summary>
         public MatchData LastMatch(MutableString/*!*/ input, int start) {
             string str;
-            RubyEncoding kcode = null;
             bool astral;
-            Regex regex = Transform(ref kcode, input, 0, out str, out astral);
-            Debug.Assert(str != null);
+            Regex regex = Transform(input, out str, out astral, true);
 
-            if (kcode != null) {
-                int byteCount;
-                byte[] bytes = input.GetByteArray(out byteCount);
-
-                if (start < 0) {
-                    start += byteCount;
-                }
-
-                // GetCharCount returns the number of whole characters:
-                start = (start >= byteCount) ? str.Length : kcode.Encoding.GetCharCount(bytes, 0, start + 1) - 1;
-            } else {
-                if (start < 0) {
-                    start += str.Length;
-                }
-
-                if (start > str.Length) {
-                    start = str.Length;
-                }
+            if (start < 0) {
+                start += str.Length;
+            }
+            if (start > str.Length) {
+                start = str.Length;
             }
 
             if (astral && IsInsidePair(str, start)) {
@@ -1172,7 +1263,7 @@ namespace IronRuby.Builtins {
                     return null;
                 }
             }
-            return MatchData.Create(match, input, true, str, kcode, 0, this, astral);
+            return MatchData.Create(match, input, true, str, this, astral);
         }
 
         /// <summary>
@@ -1238,9 +1329,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         public IList<MatchData>/*!*/ Matches(MutableString/*!*/ input, bool inputMayMutate) {
             string str;
-            RubyEncoding kcode = null;
             bool astral;
-            Regex regex = Transform(ref kcode, input, 0, out str, out astral);
+            Regex regex = Transform(input, out str, out astral, true);
             IList<Match> matches;
             if (astral) {
                 matches = MatchesOverPairs(regex, str);
@@ -1263,11 +1353,11 @@ namespace IronRuby.Builtins {
             var result = new MatchData[matches.Count];
             if (result.Length > 0 && inputMayMutate) {
                 // clone and freeze the string once so that it can be shared by all the MatchData objects
-                input = input.Clone().Freeze();
+                input = input.CreateFrozenSnapshot();
             }
 
             for (int i = 0; i < result.Length; i++) {
-                result[i] = MatchData.Create(matches[i], input, false, str, kcode, 0, this, astral);
+                result[i] = MatchData.Create(matches[i], input, false, str, this, astral);
             }
 
             return result;
@@ -1300,18 +1390,6 @@ namespace IronRuby.Builtins {
             return Matches(input, true);
         }
 
-        public MutableString[]/*!*/ Split(MutableString/*!*/ input) {
-            string str;
-            RubyEncoding kcode = null;
-            return MutableString.MakeArray(Transform(ref kcode, input, 0, out str).Split(str), kcode ?? input.Encoding);
-        }
-        
-        public MutableString[]/*!*/ Split(MutableString/*!*/ input, int count) {
-            string str;
-            RubyEncoding kcode = null;
-            return MutableString.MakeArray(Transform(ref kcode, input, 0, out str).Split(str, count), kcode ?? input.Encoding);
-        }
-
         public static MatchData SetCurrentMatchData(RubyScope/*!*/ scope, RubyRegex/*!*/ regex, MutableString str) {
             if (str != null) {
                 // MRI's rb_reg_search checks the regexp (rb_reg_check), a nil subject does not
@@ -1329,7 +1407,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         public void WarnHistoricalBinaryMatch(RubyContext/*!*/ context, MutableString/*!*/ str) {
             if ((_options & RubyRegexOptions.EncodingMask) == RubyRegexOptions.FIXED && !IsFixedEncoding &&
-                str.Encoding != RubyEncoding.Binary && !str.IsAscii()) {
+                str.Encoding != RubyEncoding.Binary && str.Encoding.IsAsciiIdentity && !str.IsAscii()) {
                 context.ReportWarning(String.Format("historical binary regexp match /.../n against {0} string", str.Encoding.Name));
             }
         }
@@ -1545,6 +1623,43 @@ namespace IronRuby.Builtins {
             return str.EscapeRegularExpression();
         }
 
+        /// <summary>
+        /// MRI refuses a pattern whose bytes are not valid in its own encoding before compiling it:
+        /// Regexp.new, and #sub, #gsub, their bang forms and #scan given a String (string.c's
+        /// get_pat_quoted), all raise "RegexpError: invalid multibyte character: /\xFF/".
+        /// </summary>
+        public static void RequireValidPattern(MutableString/*!*/ pattern) {
+            if (pattern.Encoding != RubyEncoding.Binary && pattern.ContainsInvalidCharacters()) {
+                throw new RegexpError("invalid multibyte character: /" + EscapeNonAsciiBytes(pattern) + "/");
+            }
+        }
+
+        // For an error message about bytes that do not decode: ASCII as is, the rest as \xHH.
+        private static string/*!*/ EscapeNonAsciiBytes(MutableString/*!*/ str) {
+            var result = new StringBuilder();
+            foreach (byte b in str.ToByteArray()) {
+                if (b < 0x80) {
+                    result.Append((char)b);
+                } else {
+                    result.Append("\\x").Append(b.ToString("X2", System.Globalization.CultureInfo.InvariantCulture));
+                }
+            }
+            return result.ToString();
+        }
+
+        /// <summary>
+        /// A String used as a pattern by #sub, #gsub, #sub!, #gsub! and #scan: matched literally, and
+        /// refused first if it is not valid in its encoding, as MRI does. MRI searches for such a
+        /// pattern byte by byte, so unlike a Regexp it finds it in a string that holds bytes
+        /// invalid in its encoding: "\xFFabc".sub("a", "b") is "\xFFbbc".
+        /// </summary>
+        public static RubyRegex/*!*/ FromLiteralPattern(MutableString/*!*/ pattern) {
+            RequireValidPattern(pattern);
+            var result = new RubyRegex(Escape(pattern), RubyRegexOptions.NONE);
+            result._flags |= LiteralPatternFlag;
+            return result;
+        }
+
         private static int SkipNonSpecial(string/*!*/ pattern, int i, out char escaped) {
             while (i < pattern.Length) {
                 char c = pattern[i];
@@ -1584,6 +1699,10 @@ namespace IronRuby.Builtins {
 
                     case '\f':
                         escaped = 'f';
+                        return i;
+
+                    case '\v':
+                        escaped = 'v';
                         return i;
                 }
                 i++;

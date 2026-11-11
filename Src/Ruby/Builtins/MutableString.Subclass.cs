@@ -13,13 +13,8 @@
  *
  * ***************************************************************************/
 
-using System;
-using System.Collections.Generic;
-using System.Text;
-using Microsoft.Scripting.Runtime;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Utils;
-using IronRuby.Compiler.Generation;
 
 namespace IronRuby.Builtins {
     // Represents any Ruby subclass of String. The actual class object is remembered.

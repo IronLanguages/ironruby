@@ -13,17 +13,11 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Diagnostics;
 using System.Reflection;
-using Microsoft.Scripting;
-using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
@@ -95,10 +89,12 @@ namespace IronRuby.Runtime {
         private readonly Proc/*!*/ _proc;
         // The small state is packed into bytes, which keeps a BlockParam at 48 bytes: one is allocated for every
         // call of a library method with a block, and for every yield and Proc#call.
-        // bit 0: BlockCallerKind.Call; bit 1: the library method call taking this BlockParam is a proc converter.
-        private readonly byte _callerFlags;
+        // bit 0: BlockCallerKind.Call; bit 1: the library method call taking this BlockParam is a proc converter;
+        // bit 2: instance_eval/instance_exec - definitions go to self's singleton class, made when one needs it.
+        private byte _callerFlags;
         private const int CallFlag = 1;
         private const int LibProcConverterFlag = 2;
+        private const int LazySingletonFlag = 4;
 
         // filled by module_eval: if not null than method definition uses the module
         private RubyModule _methodLookupModule;
@@ -168,6 +164,37 @@ namespace IronRuby.Runtime {
         internal BlockReturnReason ReturnReason { get { return (BlockReturnReason)(_flow & 3); } set { _flow = (byte)((_flow & ~3) | (int)value); } }
         internal RuntimeFlowControl TargetFrame { get { return _targetFrame; } }
         internal RubyModule MethodLookupModule { get { return _methodLookupModule; } set { _methodLookupModule = value; } }
+
+        /// <summary>
+        /// The block runs as a module body would (module_eval, instance_eval, instance_exec): a `def', `alias' or
+        /// `undef' in it goes to <see cref="GetMethodLookupModule"/>.
+        /// </summary>
+        internal bool IsModuleEval {
+            get { return _methodLookupModule != null || (_callerFlags & LazySingletonFlag) != 0; }
+        }
+
+        /// <summary>
+        /// instance_eval/instance_exec of an object that has no singleton class yet: as in MRI (a singleton cref), the
+        /// class is made only when the block defines something into it. Making it up front gave every receiver - each
+        /// relation an ActiveRecord scope is evaluated on, each controller a callback runs on - a class of its own,
+        /// which every call site the object then reached had to bind afresh, and which #clone copied.
+        /// </summary>
+        internal void SetLazySingletonMethodLookup() {
+            _methodLookupModule = null;
+            _callerFlags |= LazySingletonFlag;
+        }
+
+        /// <summary>
+        /// The module a definition in the block goes to; <paramref name="self"/> is the block's self, whose singleton
+        /// class it is when the block was instance_eval'd.
+        /// </summary>
+        internal RubyModule GetMethodLookupModule(object self) {
+            var module = _methodLookupModule;
+            if (module == null && (_callerFlags & LazySingletonFlag) != 0) {
+                _methodLookupModule = module = RubyContext.GetOrCreateSingletonClass(self);
+            }
+            return module;
+        }
         // Is the library method call taking this BlockParam a proc converter?
         // Used only for BlockParams that are passed to library method calls.
         internal bool IsLibProcConverter { get { return (_callerFlags & LibProcConverterFlag) != 0; } }
@@ -309,8 +336,19 @@ namespace IronRuby.Runtime {
             return BlockJumped(blockResult = RubyOps.Yield1(arg1, null, Self, this));
         }
 
+        // An int argument - the counter of times, upto, step, each_index, a Fixnum range - goes
+        // through the DLR's cache of boxed small integers rather than a fresh box per iteration:
+        // (0...320).each { |x| } would otherwise allocate 320 boxes each time it runs.
+        public bool Yield(int arg1, out object blockResult) {
+            return BlockJumped(blockResult = RubyOps.Yield1(ScriptingRuntimeHelpers.Int32ToObject(arg1), null, Self, this));
+        }
+
         public bool Yield(object arg1, object arg2, out object blockResult) {
             return BlockJumped(blockResult = RubyOps.Yield2(arg1, arg2, null, Self, this));
+        }
+
+        public bool Yield(object arg1, int arg2, out object blockResult) {
+            return BlockJumped(blockResult = RubyOps.Yield2(arg1, ScriptingRuntimeHelpers.Int32ToObject(arg2), null, Self, this));
         }
 
         public bool Yield(object arg1, object arg2, object arg3, out object blockResult) {

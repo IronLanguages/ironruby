@@ -14,12 +14,11 @@
  * ***************************************************************************/
 
 using System;
+using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
 using System.Reflection;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Actions;
-using Microsoft.Scripting.Generation;
 using Microsoft.Scripting.Utils;
 using IronRuby.Compiler.Generation;
 using IronRuby.Runtime;
@@ -29,7 +28,6 @@ using IronRuby.Runtime.Conversions;
 namespace IronRuby.Builtins {
     using UnaryOp = Func<CallSite, object, object>;
     using BinaryOp = Func<CallSite, object, object, object>;
-    using BinaryOpSite = CallSite<Func<CallSite, object, object, object>>;
 
     /// <summary>
     /// A Range represents an interval�a set of values with a start and an end.
@@ -73,9 +71,21 @@ namespace IronRuby.Builtins {
 
         // Reinitialization. Not called when a factory/non-default ctor is called.
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-        public static Range/*!*/ Reinitialize(BinaryOpStorage/*!*/ comparisonStorage, 
+        public static object Reinitialize(BinaryOpStorage/*!*/ comparisonStorage, 
             RubyContext/*!*/ context, Range/*!*/ self, object begin, object end, [Optional]bool excludeEnd) {
             self.Initialize(comparisonStorage, context, begin, end, excludeEnd);
+            return null;
+        }
+
+        // Range.allocate.send(:initialize_copy, other) fills in an uninitialized range; on any
+        // other it is the FrozenError every Range mutation is.
+        [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
+        public static Range/*!*/ InitializeCopy(RubyContext/*!*/ context, Range/*!*/ self, object other) {
+            var range = other as Range;
+            if (range == null) {
+                throw RubyExceptions.CreateTypeError("initialize_copy should take same class object");
+            }
+            self.InitializeCopy(context, range);
             return self;
         }
 
@@ -86,15 +96,135 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// Returns the first object in self
         /// </summary>
-        [RubyMethod("begin"), RubyMethod("first")]
+        [RubyMethod("begin")]
         public static object Begin([NotNull]Range/*!*/ self) {
             return self.Begin;
+        }
+
+        // #first and #last without a count answer the endpoint; with one, ruby4.rb counts
+        // (__first_n__, __last_n__). They were a Ruby `def first(*args)', whose rest parameter
+        // put every call on the slow path: (1..100).first cost ~0.2 us.
+
+        [RubyMethod("first")]
+        public static object First([NotNull]Range/*!*/ self) {
+            if (self.Begin == null) {
+                throw RubyExceptions.CreateRangeError("cannot get the first element of beginless range");
+            }
+            return self.Begin;
+        }
+
+        [RubyMethod("first")]
+        public static object First(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ firstN, [NotNull]Range/*!*/ self, object count) {
+            // (1..100).first(3): the run __first_n__ counts out, for a plain Range (a subclass's #each decides there)
+            if (self.Begin is int begin && (self.End == null || self.End is int) && count is int n && n >= 0 &&
+                self.GetType() == typeof(Range)) {
+                long last = (long)begin + n - 1;
+                if (self.End != null) {
+                    long top = self.ExcludeEnd ? (long)(int)self.End - 1 : (int)self.End;
+                    last = Math.Min(last, top);
+                }
+                if (last <= Int32.MaxValue && last - begin < MaxFixnumRun) {
+                    return MakeFixnumRun(begin, last);
+                }
+            }
+            var site = firstN.GetCallSite("__first_n__", 1);
+            return site.Target(site, self, count);
+        }
+
+        [RubyMethod("last")]
+        public static object Last([NotNull]Range/*!*/ self) {
+            if (self.End == null) {
+                throw RubyExceptions.CreateRangeError("cannot get the last element of endless range");
+            }
+            return self.End;
+        }
+
+        [RubyMethod("last")]
+        public static object Last(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ lastN, [NotNull]Range/*!*/ self, object count) {
+            // (1..100).last(3) and (..5).last(2): the run __last_n__ counts back (MRI's rb_int_range_last), for a plain Range
+            if ((self.Begin == null || self.Begin is int) && self.End is int end && count is int n && n >= 0 &&
+                self.GetType() == typeof(Range)) {
+                long top = self.ExcludeEnd ? (long)end - 1 : end;
+                long first = top - n + 1;
+                if (self.Begin != null) {
+                    first = Math.Max(first, (int)self.Begin);
+                }
+                if (first >= Int32.MinValue && top - first < MaxFixnumRun) {
+                    return MakeFixnumRun(first, top);
+                }
+            }
+            var site = lastN.GetCallSite("__last_n__", 1);
+            return site.Target(site, self, count);
+        }
+
+        /// <summary>
+        /// Range#size, MRI's range_size: the number of Integers an Integer range covers, Infinity for an endless one, and
+        /// "can't iterate" for a beginning that cannot be walked. Like MRI it reads the endpoints themselves, not #begin
+        /// and #end. The forms with an Integer beginning and an Integer or no end, and a nil or Float beginning, are
+        /// answered here; the rest (a Numeric end that is not an Integer, a beginning with or without #succ) go to the
+        /// prelude's __size__. That whole method had been Ruby, which cost ~0.3 us on (1..10).size.
+        /// </summary>
+        [RubyMethod("size")]
+        public static object Size(CallSiteStorage<Func<CallSite, object, object>>/*!*/ slow, [NotNull]Range/*!*/ self) {
+            object begin = self.Begin, end = self.End;
+            if (begin is int first && end is int last) {
+                long count = (long)last - first + (self.ExcludeEnd ? 0 : 1);
+                return (count <= 0) ? ScriptingRuntimeHelpers.Int32ToObject(0) : Protocols.Normalize(count);
+            }
+            if (IsInteger(begin)) {
+                if (end == null) {
+                    return Double.PositiveInfinity;
+                }
+                if (IsInteger(end)) {
+                    BigInteger count = ToBigInteger(end) - ToBigInteger(begin) + (self.ExcludeEnd ? 0 : 1);
+                    return (count.Sign <= 0) ? ScriptingRuntimeHelpers.Int32ToObject(0) : Protocols.Normalize(count);
+                }
+            } else if (begin == null) {
+                throw RubyExceptions.CreateTypeError("can't iterate from NilClass");
+            } else if (begin is double) {
+                throw RubyExceptions.CreateTypeError("can't iterate from Float");
+            }
+            var site = slow.GetCallSite("__size__", 0);
+            return site.Target(site, self);
+        }
+
+        private static bool IsInteger(object value) {
+            return value is int || value is long || value is BigInteger;
+        }
+
+        private static BigInteger ToBigInteger(object integer) {
+            switch (integer) {
+                case int i: return i;
+                case long l: return l;
+                default: return (BigInteger)integer;
+            }
+        }
+
+        // longer runs are left to the prelude, whatever it makes of them
+        private const int MaxFixnumRun = 1 << 20;
+
+        // [from, from + 1, ..., to], empty if to < from; both within Fixnum range
+        private static RubyArray/*!*/ MakeFixnumRun(long from, long to) {
+            if (to < from) {
+                return new RubyArray();
+            }
+            var result = new RubyArray((int)(to - from + 1));
+            for (long i = from; i <= to; i++) {
+                result.Add(ScriptingRuntimeHelpers.Int32ToObject((int)i));
+            }
+            return result;
+        }
+
+        // MRI counts the arguments of #first, #last, #min and #max against a single count: "expected 1".
+        [RubyMethod("first"), RubyMethod("last"), RubyMethod("min"), RubyMethod("max")]
+        public static object CountArity([NotNull]Range/*!*/ self, object count, object extra, params object[]/*!*/ more) {
+            throw RubyExceptions.CreateArgumentError("wrong number of arguments (given {0}, expected 1)", 2 + more.Length);
         }
 
         /// <summary>
         /// Returns the object that defines the end of self
         /// </summary>
-        [RubyMethod("end"), RubyMethod("last")]
+        [RubyMethod("end")]
         public static object End([NotNull]Range/*!*/ self) {
             return self.End;
         }
@@ -185,6 +315,82 @@ namespace IronRuby.Builtins {
 
         #region ===, member?, include?
 
+        // #include? and #member? of an Integer range asked about an Integer, or of a Float range asked
+        // about a number: the comparison, as the prelude's (ruby4.rb, __include__) would make it. That
+        // one handles everything else - Strings walked by #succ, other objects by #each - and was ~0.4 us
+        // a call for (1..100).include?(50).
+        [RubyMethod("include?"), RubyMethod("member?")]
+        public static object Include(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow, [NotNull]Range/*!*/ self, object value) {
+            object b = self.Begin, e = self.End;
+            if (b is int && e is int && value is int) {
+                int v = (int)value;
+                return ScriptingRuntimeHelpers.BooleanToObject(v >= (int)b && (self.ExcludeEnd ? v < (int)e : v <= (int)e));
+            }
+            if ((b is double || b is int) && (e is double || e is int) && (value is double || value is int) && (b is double || e is double)) {
+                double lo = Convert.ToDouble(b), hi = Convert.ToDouble(e), v = Convert.ToDouble(value);
+                if (!Double.IsNaN(lo) && !Double.IsNaN(hi) && !Double.IsNaN(v)) {
+                    return ScriptingRuntimeHelpers.BooleanToObject(v >= lo && (self.ExcludeEnd ? v < hi : v <= hi));
+                }
+            }
+            // ('a'..'z').include?("m"): one-character ASCII endpoints walk "a".succ ... "z", so a
+            // one-character ASCII value is in it exactly when it lies between them (ruby4.rb's
+            // __string_include__ makes the same shortcut, after ~1 us of getting there).
+            var bs = b as MutableString;
+            var es = e as MutableString;
+            var vs = value as MutableString;
+            if (bs != null && es != null && vs != null && bs.GetByteCount() == 1 && es.GetByteCount() == 1 &&
+                bs.IsAscii() && es.IsAscii() && vs.IsAscii()) {
+                if (vs.GetByteCount() != 1) {
+                    return ScriptingRuntimeHelpers.False;
+                }
+                byte lo = bs.GetByte(0), hi = es.GetByte(0), v = vs.GetByte(0);
+                return ScriptingRuntimeHelpers.BooleanToObject(v >= lo && (v < hi || (!self.ExcludeEnd && v == hi)));
+            }
+            var site = slow.GetCallSite("__include__", 1);
+            return site.Target(site, self, value);
+        }
+
+        // #min and #max of an Integer range without a block or a count: an endpoint, as MRI's range_min
+        // and range_max answer it. Everything else is the prelude's (__min__, __max__).
+
+        [RubyMethod("max")]
+        public static object Max(CallSiteStorage<Func<CallSite, object, Proc, object>>/*!*/ slow, BlockParam block, [NotNull]Range/*!*/ self) {
+            if (block == null && self.Begin is int && self.End is int) {
+                int b = (int)self.Begin, e = (int)self.End;
+                if (self.ExcludeEnd ? b >= e : b > e) {
+                    return null;
+                }
+                return ScriptingRuntimeHelpers.Int32ToObject(self.ExcludeEnd ? e - 1 : e);
+            }
+            var site = slow.GetCallSite("__max__", new RubyCallSignature(0, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasBlock));
+            return site.Target(site, self, (block != null) ? block.Proc : null);
+        }
+
+        [RubyMethod("max")]
+        public static object Max(CallSiteStorage<Func<CallSite, object, Proc, object, object>>/*!*/ slow, BlockParam block, [NotNull]Range/*!*/ self, object count) {
+            var site = slow.GetCallSite("__max__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasBlock));
+            return site.Target(site, self, (block != null) ? block.Proc : null, count);
+        }
+
+        [RubyMethod("min")]
+        public static object Min(CallSiteStorage<Func<CallSite, object, Proc, object>>/*!*/ slow, BlockParam block, [NotNull]Range/*!*/ self) {
+            if (block == null && self.Begin is int && self.End is int) {
+                int b = (int)self.Begin, e = (int)self.End;
+                if (self.ExcludeEnd ? b >= e : b > e) {
+                    return null;
+                }
+                return self.Begin;
+            }
+            var site = slow.GetCallSite("__min__", new RubyCallSignature(0, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasBlock));
+            return site.Target(site, self, (block != null) ? block.Proc : null);
+        }
+
+        [RubyMethod("min")]
+        public static object Min(CallSiteStorage<Func<CallSite, object, Proc, object, object>>/*!*/ slow, BlockParam block, [NotNull]Range/*!*/ self, object count) {
+            var site = slow.GetCallSite("__min__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasBlock));
+            return site.Target(site, self, (block != null) ? block.Proc : null, count);
+        }
+
         /// <summary>
         /// Returns true if other is an element of self, false otherwise.
         /// Conveniently, === is the comparison operator used by case statements. 
@@ -197,7 +403,7 @@ namespace IronRuby.Builtins {
         /// end
         /// => "high"
         /// </example>
-        [RubyMethod("==="), RubyMethod("member?"), RubyMethod("include?"), RubyMethod("cover?")]
+        [RubyMethod("==="), RubyMethod("cover?")]
         public static bool CaseEquals(ComparisonStorage/*!*/ comparisonStorage, [NotNull]Range/*!*/ self, object value) {
             var compare = comparisonStorage.CompareSite;
 
@@ -410,27 +616,6 @@ namespace IronRuby.Builtins {
             }
         }
 
-        public class StepStorage : EachStorage {
-            private CallSite<Func<CallSite, object, int>> _fixnumCast;
-            private CallSite<BinaryOp> _lessThanEqualsSite; // <=
-            private CallSite<BinaryOp> _addSite;            // +
-
-            [Emitted]
-            public StepStorage(RubyContext/*!*/ context) : base(context) { }
-
-            public CallSite<Func<CallSite, object, int>>/*!*/ FixnumCastSite {
-                get { return RubyUtils.GetCallSite(ref _fixnumCast, ConvertToFixnumAction.Make(Context)); }
-            }
-
-            public CallSite<BinaryOp>/*!*/ LessThanEqualsSite {
-                get { return RubyUtils.GetCallSite(ref _lessThanEqualsSite, Context, "<=", 1); }
-            }
-
-            public CallSite<BinaryOp>/*!*/ AddSite {
-                get { return RubyUtils.GetCallSite(ref _addSite, Context, "+", 1); }
-            }
-        }
-
         [RubyMethod("each")]
         public static Enumerator/*!*/ GetEachEnumerator(EachStorage/*!*/ storage, Range/*!*/ self) {
             return new Enumerator(self, "each");
@@ -591,52 +776,88 @@ namespace IronRuby.Builtins {
                 (str) => context.CreateSymbol(str, false));
         }
 
+        // Range#step is the prelude's __ir_range_step__ (ruby4.rb, MRI 3.4's range_step), handed the arguments as an Array;
+        // only (a..b).step(n) { } over Fixnums with a positive Fixnum step loops here. Its entry had been a Ruby
+        // `def step(*args, &block)', whose rest parameter put every call on the slow path.
+
         [RubyMethod("step")]
-        public static Enumerator/*!*/ GetStepEnumerator(StepStorage/*!*/ storage, Range/*!*/ self, [Optional]object step) {
-            return new Enumerator((_, block) => Step(storage, block, self, step));
+        public static object Step(CallSiteStorage<Func<CallSite, object, Proc, object, object>>/*!*/ slow, BlockParam block,
+            [NotNull]Range/*!*/ self) {
+            if (block != null && self.Begin is int begin && self.End is int end) {
+                return StepFixnumRange(block, self, begin, end, 1);
+            }
+            object result;
+            if (block != null && TryStepFloatRange(block, self, ScriptingRuntimeHelpers.Int32ToObject(1), out result)) {
+                return result;
+            }
+            return StepSlow(slow, block, self, new RubyArray());
         }
 
-        /// <summary>
-        /// Iterates over self, passing each stepth element to the block.
-        /// If the range contains numbers or strings, natural ordering is used.
-        /// Otherwise step invokes succ to iterate through range elements.
-        /// </summary>
+        // A range whose ends are Fixnums or Floats with a Fixnum or Float step that is not 0, one of the three a
+        // Float: the prelude's ArithmeticSequence.__step_each__ (MRI's ruby_float_step), without the ~4 us of
+        // getting there.
+        private static bool TryStepFloatRange(BlockParam/*!*/ block, Range/*!*/ self, object step, out object result) {
+            result = null;
+            double beg, end, unit;
+            if (!(self.Begin is double || self.End is double || step is double) ||
+                !TryGetFixnumOrFloat(self.Begin, out beg) || !TryGetFixnumOrFloat(self.End, out end) ||
+                !TryGetFixnumOrFloat(step, out unit) || unit == 0) {
+                return false;
+            }
+            double n = KernelOps.FloatStepSize(beg, end, unit, self.ExcludeEnd);
+            object blockResult;
+            result = KernelOps.FloatStepLoop(block, beg, end, unit, n, out blockResult) ? blockResult : self;
+            return true;
+        }
+
+        private static bool TryGetFixnumOrFloat(object value, out double result) {
+            switch (value) {
+                case double d: result = d; return true;
+                case int i: result = i; return true;
+                default: result = 0; return false;
+            }
+        }
+
         [RubyMethod("step")]
-        public static object Step(StepStorage/*!*/ storage, [NotNull]BlockParam/*!*/ block, Range/*!*/ self, [Optional]object step) {
-            if (step == Missing.Value) {
-                step = ClrInteger.One;
+        public static object Step(CallSiteStorage<Func<CallSite, object, Proc, object, object>>/*!*/ slow, BlockParam block,
+            [NotNull]Range/*!*/ self, object step) {
+            if (block != null && self.Begin is int begin && self.End is int end && step is int unit && unit > 0) {
+                return StepFixnumRange(block, self, begin, end, unit);
             }
+            object result;
+            if (block != null && TryStepFloatRange(block, self, step, out result)) {
+                return result;
+            }
+            return StepSlow(slow, block, self, RubyArray.Create(step));
+        }
 
-            // We attempt to cast step to Fixnum here even though if we were iterating over Floats, for instance, we use step as is.
-            // This prevents cases such as (1.0..2.0).step(0x800000000000000) {|x| x } from working but that is what MRI does.
-            if (self.Begin is MutableString && step is double) {
-                // MRI only steps a String range by an Integer; a Float step is a TypeError there,
-                // and here it would silently truncate and then loop forever over an endless range.
-                throw RubyExceptions.CreateTypeError("no implicit conversion to integer from float");
-            }
+        // the prelude reports the argument count
+        [RubyMethod("step")]
+        public static object Step(CallSiteStorage<Func<CallSite, object, Proc, object, object>>/*!*/ slow, BlockParam block,
+            [NotNull]Range/*!*/ self, object step, object extra, params object[]/*!*/ more) {
+            var args = new RubyArray(2 + more.Length);
+            args.Add(step);
+            args.Add(extra);
+            args.AddRange(more);
+            return StepSlow(slow, block, self, args);
+        }
 
-            if (self.End == null && (self.Begin is int || self.Begin is MutableString)) {
-                var endlessStep = storage.FixnumCastSite;
-                return StepEndless(storage, block, self, self.Begin, endlessStep.Target(endlessStep, step));
-            } else if (self.Begin is int && self.End is int) {
-                // self.begin is Fixnum; directly call item = item + 1 instead of succ
-                var site = storage.FixnumCastSite;
-                int intStep = site.Target(site, step);
-                return StepFixnum(block, self, (int)self.Begin, (int)self.End, intStep);
-            } else if (self.Begin is MutableString) {
-                // self.begin is String; use item.succ and item <=> self.end but make sure you check the length of the strings
-                var site = storage.FixnumCastSite;
-                int intStep = site.Target(site, step);
-                return StepString(storage, block, self, (MutableString)self.Begin, (MutableString)self.End, intStep);
-            } else if (storage.Context.IsInstanceOf(self.Begin, storage.Context.GetClass(typeof(Numeric)))) {
-                // self.begin is Numeric; invoke item = item + 1 instead of succ and invoke < or <= for compare
-                return StepNumeric(storage, block, self, self.Begin, self.End, step);
-            } else {
-	            // self.begin is not Numeric or String; just invoke item.succ and item <=> self.end
-                var site = storage.FixnumCastSite;
-                int intStep = site.Target(site, step);
-                return StepObject(storage, block, self, self.Begin, self.End, intStep);
+        private static object StepSlow(CallSiteStorage<Func<CallSite, object, Proc, object, object>>/*!*/ slow, BlockParam block,
+            Range/*!*/ self, RubyArray/*!*/ args) {
+            var site = slow.GetCallSite("__ir_range_step__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasBlock));
+            return site.Target(site, self, (block != null) ? block.Proc : null, args);
+        }
+
+        // in a long: i + step must not wrap round past Int32.MaxValue
+        private static object StepFixnumRange(BlockParam/*!*/ block, Range/*!*/ self, int begin, int end, int step) {
+            long last = self.ExcludeEnd ? (long)end - 1 : end;
+            for (long i = begin; i <= last; i += step) {
+                object result;
+                if (block.Yield((int)i, out result)) {
+                    return result;
+                }
             }
+            return self;
         }
 
         /// <summary>
@@ -769,29 +990,6 @@ namespace IronRuby.Builtins {
                     return self;
                 }
             }
-            return self;
-        }
-
-        /// <summary>
-        /// Step through a Range of Numerics.
-        /// </summary>
-        private static object StepNumeric(StepStorage/*!*/ storage, BlockParam/*!*/ block, Range/*!*/ self, object begin, object end, object step) {
-            Assert.NotNull(storage, block, self);
-            CheckStep(storage, step);
-
-            object item = begin;
-            object result;
-
-            var site = self.ExcludeEnd ? storage.LessThanSite : storage.LessThanEqualsSite;
-            while (RubyOps.IsTrue(site.Target(site, item, end))) {
-                if (block.Yield(item, out result)) {
-                    return result;
-                }
-
-                var add = storage.AddSite;
-                item = add.Target(add, item, step);
-            }
-
             return self;
         }
 

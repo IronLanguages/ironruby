@@ -13,29 +13,18 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
-using Microsoft.Scripting;
-using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Interpreter;
-using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
-using System.Reflection;
 using IronRuby.Builtins;
-using System.Collections.ObjectModel;
 using System.Collections;
-using System.Diagnostics;
 using System.Threading;
+using System.Runtime.CompilerServices;
 
 namespace IronRuby.Runtime.Calls {
     using Ast = Expression;
-    using AstFactory = IronRuby.Compiler.Ast.AstFactory;
 
     using BlockCallTarget0 = Func<BlockParam, object, object>;
     using BlockCallTarget1 = Func<BlockParam, object, object, object>;
@@ -164,9 +153,65 @@ namespace IronRuby.Runtime.Calls {
         /// </summary>
         private bool _ruby2Keywords;
 
+        /// <summary>
+        /// -X:OSR: the block literal, when it can be outlined into the loop of an iterator that yields
+        /// to it (BlockLoopSite); null otherwise.
+        /// </summary>
+        internal IronRuby.Runtime.Osr.BlockLoopInfo LoopInfo;
+
         public bool Ruby2Keywords {
             get { return _ruby2Keywords; }
             set { _ruby2Keywords = value; }
+        }
+
+        /// <summary>
+        /// The local variables of enclosing scopes the block body (nested blocks included) reads or
+        /// assigns, in order of first use; null if there are none. Ractor.new refuses a block that
+        /// has any, and Ractor.make_shareable checks their values.
+        /// </summary>
+        public string[] OuterVariableNames { get; internal set; }
+
+        /// <summary>
+        /// Those of <see cref="OuterVariableNames"/> the block assigns to; null if none.
+        /// </summary>
+        public string[] AssignedOuterVariableNames { get; internal set; }
+
+        // for each of OuterVariableNames, how often its scope assigns it; final once the code is compiled
+        internal LocalAssignmentCount[] OuterVariableAssignments;
+        private string[] _reassignedOuterVariableNames;
+
+        /// <summary>
+        /// Those of <see cref="OuterVariableNames"/> their scope assigns more than once (a parameter
+        /// counts as one assignment): CRuby will not make a shareable proc read such a variable, as
+        /// it "may be reassigned". Null if none.
+        /// </summary>
+        public string[] ReassignedOuterVariableNames {
+            get {
+                if (_reassignedOuterVariableNames == null && OuterVariableAssignments != null) {
+                    var names = new System.Collections.Generic.List<string>();
+                    for (int i = 0; i < OuterVariableAssignments.Length; i++) {
+                        var assignments = OuterVariableAssignments[i];
+                        if (assignments != null && assignments.Count > 1) {
+                            names.Add(OuterVariableNames[i]);
+                        }
+                    }
+                    _reassignedOuterVariableNames = names.ToArray();
+                }
+                return (_reassignedOuterVariableNames != null && _reassignedOuterVariableNames.Length > 0) ? _reassignedOuterVariableNames : null;
+            }
+            internal set { _reassignedOuterVariableNames = value ?? Array.Empty<string>(); }
+        }
+
+        private bool _wrapsMethod;
+
+        /// <summary>
+        /// The dispatcher of a Method#to_proc proc. Its source location is the method's, which
+        /// Proc#source_location answers, but MRI's Proc#inspect leaves it out for such a proc:
+        /// "#&lt;Proc:0x... (lambda)&gt;". On the dispatcher, so every copy of the proc agrees.
+        /// </summary>
+        public bool WrapsMethod {
+            get { return _wrapsMethod; }
+            internal set { _wrapsMethod = value; }
         }
 
         /// <summary>
@@ -198,7 +243,26 @@ namespace IronRuby.Runtime.Calls {
             set {
                 _parameterSignature = value;
                 _checksKeywords = value != null && (value.TakesKeywords || value.RefusesKeywords);
+                _unmarksKeywords = value != null && !value.TakesKeywords && !value.RefusesKeywords;
             }
+        }
+
+        // the block declares no keywords (nor **nil): a Hash passed as keywords is a positional argument to it
+        private bool _unmarksKeywords;
+
+        /// <summary>
+        /// The argument a positional parameter of the block is about to be given. A block that declares no keywords takes a
+        /// Hash passed as keywords (yield(a: 1)) as a positional argument, which it may keep: it stops saying it is keyword
+        /// arguments, as for a method (<see cref="RubyOps.ClearKeywordArguments"/>). The dispatchers of blocks with at most
+        /// <see cref="MaxBlockArity"/> plain parameters do it here, in C#, rather than the block's prologue, where the test
+        /// would be interpreted on every call of the block while it is (see <see cref="UnmarksKeywordArguments"/>).
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        protected object Positional(object arg) {
+            if (_unmarksKeywords) {
+                RubyOps.ClearKeywordArguments(arg);
+            }
+            return arg;
         }
 
         // the signature declares keywords or **nil, so even a proc's arguments are checked on a yield
@@ -279,6 +343,16 @@ namespace IronRuby.Runtime.Calls {
 
         internal static BlockDispatcher/*!*/ Create(int parameterCount, BlockSignatureAttributes attributesAndArity, string sourcePath, int sourceLine) {
             return Create(parameterCount, 0, attributesAndArity, sourcePath, sourceLine);
+        }
+
+        /// <summary>
+        /// Whether the dispatcher <see cref="Create(int, int, BlockSignatureAttributes, string, int)"/> makes for a block of this
+        /// shape takes the keyword mark off the arguments it gives the block's positional parameters (<see cref="Positional"/>),
+        /// so that the block's prologue need not: BlockDispatcher0 to 4.
+        /// </summary>
+        internal static bool UnmarksKeywordArguments(int parameterCount, int postCount, BlockSignatureAttributes attributesAndArity) {
+            return postCount == 0 && parameterCount <= MaxBlockArity &&
+                (attributesAndArity & (BlockSignatureAttributes.HasUnsplatParameter | BlockSignatureAttributes.HasProcParameter)) == 0;
         }
 
         internal static BlockDispatcher/*!*/ Create(int parameterCount, int postCount, BlockSignatureAttributes attributesAndArity, string sourcePath, int sourceLine) {
@@ -392,179 +466,5 @@ namespace IronRuby.Runtime.Calls {
 
             return args;
         }
-
-#if OBSOLETE
-        private Expression/*!*/ AddWarning(Expression/*!*/ codeContextExpression, Expression/*!*/ expression) {
-            Assert.NotNull(codeContextExpression, expression);
-
-            // do not report warning if the only parameter is a nested left value:
-            if (FirstArgumentIsNestedLValue) {
-                return expression;
-            }
-
-            return Methods.MultipleValuesForBlockParameterWarning", codeContextExpression, expression);
-        }
-
-        private void SetCallRuleArguments(
-            Expression/*!*/ blockParameterExpression, // special arg #0
-            Expression/*!*/ selfParameterExpression,  // special arg #1
-            CallArguments/*!*/ args,                  // user args
-            Expression/*!*/ codeContextExpression,
-            MetaObjectBuilder/*!*/ rule, 
-            ArgsBuilder/*!*/ actualArgs) {
-
-            // mandatory args:
-            actualArgs.Add(blockParameterExpression);
-            actualArgs.Add(selfParameterExpression);
-
-            int parameterIndex = 0;
-
-            // mimics CompoundLeftValue.TransformWrite //
-
-            // L(1,-)?
-            bool leftOneNone = OptionalParamCount == 1 && !HasParamsArray;
-
-            // L(0,*)?
-            bool leftNoneSplat = OptionalParamCount == 0 && HasParamsArray;
-
-            // R(0,*)?
-            bool rightNoneSplat = !args.Signature.IsSimple && args.Length == 1 && args.GetArgumentKind(0) == ArgumentKind.List;
-
-            // R(1,-)?
-            bool rightOneNone = !args.Signature.IsSimple && args.Length == 1 && args.GetArgumentKind(0) == ArgumentKind.Simple
-                || args.Signature.IsSimple && args.Length == 1;
-
-            // R(1,*)?
-            bool rightOneSplat = !args.Signature.IsSimple && args.Length == 2 &&
-                args.GetArgumentKind(0) == ArgumentKind.Simple &&
-                args.GetArgumentKind(1) == ArgumentKind.List;
-
-            // R(0,-)?
-            bool rightNoneNone = args.Length == 0;
-
-            if (leftOneNone) {
-                Expression rvalue;
-
-                if (rightOneNone) {
-                    // simple assignment
-                    rvalue = args.Expressions[parameterIndex];
-                } else if (rightOneSplat && TestEmptyList(rule, args.Values[parameterIndex + 1], args.Expressions[parameterIndex + 1])) {
-                    // simple assignment if the splatted value is an empty array:
-                    rvalue = args.Expressions[parameterIndex];
-                } else if (rightNoneNone) {
-                    // nil assignment
-                    rvalue = AddWarning(codeContextExpression, AstUtils.Constant(null));
-                } else if (rightNoneSplat) {
-                    // Splat(RHS[*]):
-                    rvalue = MakeArgumentSplatWithWarning(rule, args.Values[parameterIndex], args.Expressions[parameterIndex], codeContextExpression);
-                } else {
-                    // more than one argument -> pack to an array + warning
-
-                    // MakeArray(RHS) + SplatAppend(RHS*):
-                    List<Expression> arguments = new List<Expression>();
-                    AddBlockArguments(rule, arguments, args, parameterIndex);
-                    rvalue = AddWarning(codeContextExpression, ArgsBuilder.MakeArgsArray(arguments));
-                }
-
-                actualArgs.Add(rvalue);
-
-            } else {
-
-                // R(0,*) || R(1,-) && !L(0,*) ==> CompoundLeftValue.TransformWrite does Unsplat, MakeArray otherwise.
-                // 
-                // However, we are not constructing a materalized resulting array (contrary to CompoundLeftValue.TransformWrite).
-                // The resulting array is comprised of slots on the stack (loaded to the formal parameters of the block #1, ..., #n).
-                // Therefore, we effectively need to take items of imaginary Unsplat's result and put them into the actualArgs as arguments.
-                //
-                // Unsplat of x makes an array containing x if x is not an array, otherwise it returns x.
-                // So, we just need to take elements of x and push them onto the stack.
-                //
-
-                List<Expression> arguments = new List<Expression>();
-
-                if (rightNoneSplat) {
-                    ArgsBuilder.SplatListToArguments(rule, arguments, args.Values[parameterIndex], args.Expressions[parameterIndex], false);
-                } else if (rightOneNone && !leftNoneSplat) {
-                    ArgsBuilder.SplatListToArguments(rule, arguments, args.Values[parameterIndex], args.Expressions[parameterIndex], true);
-                } else {
-                    AddBlockArguments(rule, arguments, args, parameterIndex);
-                }
-
-                actualArgs.AddRange(arguments);
-            }
-
-            actualArgs.AddForEachMissingArgument(delegate() { return AstUtils.Constant(null); });
-
-            if (HasParamsArray) {
-                actualArgs.AddParamsArray();
-            }
-        }
-
-        private bool TestEmptyList(MetaObjectBuilder/*!*/ rule, object arg, Expression/*!*/ parameter) {
-            int listLength;
-            ParameterExpression listVariable;
-            return ArgsBuilder.AddTestForListArg(rule, arg, parameter, out listLength, out listVariable) && listLength == 0;
-        }
-
-        private Expression/*!*/ MakeArgumentSplatWithWarning(MetaObjectBuilder/*!*/ rule, object arg, Expression/*!*/ parameter,
-            Expression/*!*/ codeContextExpression) {
-
-            int listLength;
-            ParameterExpression listVariable;
-            if (ArgsBuilder.AddTestForListArg(rule, arg, parameter, out listLength, out listVariable)) {
-                if (listLength == 0) {
-                    // return nil argument + Warning
-                    return AddWarning(codeContextExpression, AstUtils.Constant(null));
-                } else if (listLength == 1) {
-                    // return the only item of the array:
-                    return Ast.Call(
-                        listVariable,
-                        typeof(IList).GetMethod("get_Item"),
-                        AstUtils.Constant(0)
-                    );
-                } else {
-                    // return the array itself + Warning:
-                    return AddWarning(codeContextExpression, parameter);
-                }
-            } else {
-                // not an array, return the value:
-                return parameter;
-            }
-        }
-
-        private Expression/*!*/ MakeArgumentUnsplat(MetaObjectBuilder/*!*/ rule, object arg, Expression/*!*/ parameter) {
-            int listLength;
-            ParameterExpression listVariable;
-            if (ArgsBuilder.AddTestForListArg(rule, arg, parameter, out listLength, out listVariable)) {
-                // an array, return:
-                return parameter;
-            } else {
-                // not an array, wrap:
-                return AstFactory.OptimizedOpCall("MakeArray", parameter);
-            }
-        }
-
-        private void AddBlockArguments(MetaObjectBuilder/*!*/ rule, List<Expression>/*!*/ actualArgs, CallArguments/*!*/ args, int parameterIndex) {
-
-            while (parameterIndex < args.Length) {
-                switch (args.GetArgumentKind(parameterIndex)) {
-                    case ArgumentKind.Simple:
-                        actualArgs.Add(args.Expressions[parameterIndex]);
-                        break;
-
-                    case ArgumentKind.List:
-                        ArgsBuilder.SplatListToArguments(rule, actualArgs, args.Values[parameterIndex], args.Expressions[parameterIndex], false);
-                        break;
-
-                    case ArgumentKind.Instance:
-                    case ArgumentKind.Block:
-                    default:
-                        throw new NotImplementedException();
-                }
-
-                parameterIndex++;
-            }
-        }
-#endif
     }
 }

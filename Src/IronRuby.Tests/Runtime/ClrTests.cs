@@ -17,16 +17,13 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using IronRuby.Builtins;
 using Range = IronRuby.Builtins.Range;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Hosting;
 using System.Numerics;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using Microsoft.Scripting.Actions;
 using BigInt = System.Numerics.BigInteger;
@@ -146,17 +143,25 @@ NoMethodError
         }
 
         /// <summary>
-        /// Order of initialization of CLR methods.
+        /// Order of initialization of CLR methods: a Ruby method defined before the CLR one has been
+        /// looked up still hides it, removing the Ruby method shows the CLR method again (as removing
+        /// an overload barrier does in ClrOverloadInheritance4), and removing that hides it.
         /// </summary>
         public void ClrMethods2() {
             Context.ObjectClass.SetConstant("C", Context.GetClass(typeof(ClassWithMethods1)));
-            XTestOutput(@"
+            TestOutput(@"
 class C
-  def m; 2; end     # replace CLR method with Ruby method before we use the CLR one
-  remove_method :m  # remove Ruby method
-  new.m rescue p $! # we shouldn't call the CLR method 
+  def m; 2; end
+  p new.m
+  remove_method :m
+  p new.m
+  remove_method :m
+  new.m rescue p $!.class
 end
 ", @"
+2
+1
+NoMethodError
 ");
         }
 
@@ -195,8 +200,8 @@ a = Exception.new
 p a.method(:data) rescue p $!
 p a.method(:Data)
 ", @"
-#<NameError: undefined method `data' for class `Exception'>
-#<Method: Exception#Data>
+#<NameError: undefined method 'data' for class 'Exception'>
+#<Method: Exception#Data()>
 ");
         }
 
@@ -210,9 +215,9 @@ p m = a.clr_member(:index_of)
 p m.clr_members.size
 p m.overload(Object).clr_members
 ", @"
-#<Method: Array#count>
+#<Method: Array#count()>
 3
-#<Method: Array#index_of>
+#<Method: Array#index_of(_, *)>
 3
 [Int32 IndexOf(System.Object)]
 ");
@@ -244,19 +249,7 @@ p c[0, 1]
 "), @"
 11
 ");
-            // non-default indexers:
-            // TODO: We need to use VB or generate IL to test this.
-            // TODO: improve access
-            //   If a property accessor with parameters is called without arguments the result is a PropertyAccessor object with [], []= defined.
-            //   Then the calls could look like c.foo[1,2] = 3. 
-
-            //            AssertOutput(() => CompilerTest(@"
-            //c = CI.new
-            //c.method(:foo=).call(1, 0, c.method(:foo).call(1, 0) + 5)
-            //p c.method(:foo).call(1, 0)
-            //"), @"
-            //25
-            //");
+            // TODO: non-default (named) indexers: C# cannot declare them, testing them needs VB or generated IL.
         }
 
         #endregion
@@ -322,10 +315,10 @@ puts C.method(:StaticGenericM).of(Integer)[123]
 Foo(I): 1
 Foo(O): 2
 Bar(I): 22
-#<NoMethodError: CLR protected method `foo' called for *ProtectedA*>
+#<NoMethodError: CLR protected method 'foo' called for *ProtectedA*>
 Foo(O): 6
-#<NoMethodError: CLR protected method `bar' called for *ProtectedB*>
-#<NoMethodError: CLR protected method `StaticM' called for *ProtectedB*>
+#<NoMethodError: CLR protected method 'bar' called for *ProtectedB*>
+#<NoMethodError: CLR protected method 'StaticM' called for *ProtectedB*>
 StaticM
 StaticGenericM: 123
 ", OutputFlags.Match);
@@ -354,11 +347,11 @@ puts c.prop1
 puts c.prop2
 (b.prop2 = 10) rescue p $!
 puts b.prop2
-");
+", 1, 0);
             }, @"
 1
 2
-#<NoMethodError: CLR protected method `prop2=' called for *ProtectedB*>
+#<NoMethodError: CLR protected method 'prop2=' called for *ProtectedB*>
 0
 ", OutputFlags.Match);
         }
@@ -366,7 +359,6 @@ puts b.prop2
         [Options(PrivateBinding = true)]
         public void ClrVisibility2() {
             Debug.Assert(Engine.Runtime.Setup.PrivateBinding);
-            if (_driver.PartialTrust) return;
             Context.ObjectClass.SetConstant("A", Context.GetClass(typeof(ProtectedA)));
             Context.ObjectClass.SetConstant("B", Context.GetClass(typeof(ProtectedB)));
 
@@ -391,7 +383,7 @@ Foo(I): 3
 Bar(O): 7
 Baz(I): 1
 10
-");
+", 1);
         }
 
         public delegate void TestDelegate(string a);
@@ -471,7 +463,7 @@ x.CompareTo(y)
 ", @"
 method called: +
 method called: compare_to
-");
+", 1);
         }
 
         public class ClassWithGeneratedMembers1 : I1 {
@@ -584,7 +576,7 @@ M1()
 M1<MutableString>()
 M1<MutableString, Int32>()
 #<ArgumentError: generic arguments could not be infered for method 'M1'>
-#<ArgumentError: wrong number of generic arguments for `M1'>
+#<ArgumentError: wrong number of generic arguments for 'M1'>
 "
             );
 
@@ -597,9 +589,9 @@ puts GM.method(:property).of(Integer) rescue p $!
 puts GM.method(:event).of(Integer) rescue p $!
 ", @"
 M2(Fixnum)
-#<ArgumentError: wrong number of generic arguments for `field'>
-#<ArgumentError: wrong number of generic arguments for `property'>
-#<ArgumentError: wrong number of generic arguments for `event'>
+#<ArgumentError: wrong number of generic arguments for 'field'>
+#<ArgumentError: wrong number of generic arguments for 'property'>
+#<ArgumentError: wrong number of generic arguments for 'event'>
 "
             );
         }
@@ -734,13 +726,12 @@ p I.Where(a, 123)
 ambiguous
 7
 ");
-             // TODO:
-//             XTestOutput(@"
-//a = System::Array[Integer].new(1)
-//p I.Apply(a, lambda { |x| })
-//", @"
-//5
-//");
+            TestOutput(@"
+a = System::Array[Integer].new(1)
+p I.Apply(a, lambda { |x| })
+", @"
+8
+");
 
             // an inferred type is more specific than object:
             TestOutput(@"
@@ -831,7 +822,7 @@ p I.Mixed(1)
 
         public void ClrExtensionMethods1() {
             Context.ObjectClass.SetConstant("SystemCoreAssembly", SystemLinqAssembly);
-            TestOutput(@"
+            LegacyExtensionsTestOutput(@"
 load_assembly SystemCoreAssembly
 using_clr_extensions System::Linq
 
@@ -849,7 +840,7 @@ p a.first_or_default
         public void ClrExtensionMethods2() {
             Context.ObjectClass.SetConstant("SystemCoreAssembly", SystemLinqAssembly);
             Context.ObjectClass.SetConstant("DummyLinqAssembly", typeof(System.Linq.Dummy).Assembly.FullName);
-            TestOutput(@"
+            LegacyExtensionsTestOutput(@"
 load_assembly DummyLinqAssembly
 
 using_clr_extensions System::Linq
@@ -868,7 +859,7 @@ p System::Array[Integer].new([1,2,3]).first_or_default
             Context.ObjectClass.SetConstant("SystemCoreAssembly", SystemLinqAssembly);
             Context.ObjectClass.SetConstant("DummyLinqAssembly", typeof(System.Linq.Dummy).Assembly.FullName);
             
-            TestOutput(@"
+            LegacyExtensionsTestOutput(@"
 load_assembly DummyLinqAssembly
 load_assembly SystemCoreAssembly
 
@@ -878,7 +869,7 @@ a.first_or_default rescue p $!
 using_clr_extensions System::Linq
 p a.first_or_default
 ", @"
-#<NoMethodError: undefined method `first_or_default' for an instance of System::Int32[]>
+#<NoMethodError: undefined method 'first_or_default' for an instance of System::Int32[]>
 1
 ");  // names the receiver's class, not its inspect, as CRuby does since 3.3
         }
@@ -889,7 +880,7 @@ p a.first_or_default
         public void ClrExtensionMethods4() {
             Runtime.LoadAssembly(typeof(IronRubyTests.ExtensionMethods2.EMs).Assembly);
 
-            TestOutput(@"
+            LegacyExtensionsTestOutput(@"
 L = System::Collections::Generic::List
 D = System::Collections::Generic::Dictionary
 using_clr_extensions IronRubyTests::ExtensionMethods2
@@ -928,7 +919,7 @@ f1
 f2
 f2
 !f2
-#<Method: System::Collections::Generic::List[IronRubyTests::ExtensionMethods2::X]#f3>
+#<Method: System::Collections::Generic::List[IronRubyTests::ExtensionMethods2::X]#f3(t)>
 f3
 f3
 !f3
@@ -947,38 +938,448 @@ f6
         }
 
         /// <summary>
-        /// Extension methods are available on CLR interfaces implemented by Ruby classes.
+        /// Extension methods are added to a method group that has been used before they were activated.
+        /// The group is stored under the Ruby name (describe), not under the CLR name of the extension method (Describe).
         /// </summary>
-        public void ClrExtensionMethods5() {
-#if TODO
-            Runtime.LoadAssembly(typeof(System.Linq.Enumerable).Assembly);
-            XTestOutput(@"
+        public void ClrExtensionMethods6() {
+            Runtime.LoadAssembly(typeof(IronRubyTests.ExtensionMethods3.EMs).Assembly);
+
+            LegacyExtensionsTestOutput(@"
+include IronRubyTests::ExtensionMethods3
+class RubyWidget < Widget; end
+
+w = Widget.new
+puts w.describe
+puts w.Describe
+puts SubWidget.new.describe(1)
+puts RubyWidget.new.describe
+
+using_clr_extensions IronRubyTests::ExtensionMethods3
+
+puts w.describe('x')
+puts w.describe                           # same signature => regular method is preferred
+puts w.describe(1)
+puts w.Describe('x')
+puts SubWidget.new.describe('x')
+puts RubyWidget.new.describe('x')
+puts w.method(:describe).call('x')
+", @"
+Describe()
+Describe()
+Describe(int)
+Describe()
+e:Describe(string)
+Describe()
+Describe(int)
+e:Describe(string)
+e:Describe(string)
+e:Describe(string)
+e:Describe(string)
+");
+        }
+
+        /// <summary>
+        /// Like ClrExtensionMethods6 for extension methods defined on an interface and on a generic type definition.
+        /// </summary>
+        public void ClrExtensionMethods7() {
+            Runtime.LoadAssembly(typeof(IronRubyTests.ExtensionMethods3.EMs).Assembly);
+
+            LegacyExtensionsTestOutput(@"
+include IronRubyTests::ExtensionMethods3
+s = Square.new
+b = Box[Integer].new
+puts s.area
+puts b.open
+
+using_clr_extensions IronRubyTests::ExtensionMethods3
+
+puts s.area(2)
+puts b.open(1)
+puts s.area
+puts b.open
+", @"
+Area()
+Open()
+e:Area(int)
+e:Open(T)
+Area()
+Open()
+");
+        }
+
+        /// <summary>
+        /// Enumerable.Count on IEnumerable{T} once List{T}'s Count property has been called.
+        /// </summary>
+        public void ClrExtensionMethods8() {
+            Context.ObjectClass.SetConstant("SystemCoreAssembly", SystemLinqAssembly);
+            LegacyExtensionsTestOutput(@"
+load_assembly SystemCoreAssembly
+list = System::Collections::Generic::List[Integer].new
+list.add(1)
+list.add(2)
+list.add(3)
+puts list.count
+
 using_clr_extensions System::Linq
 
-class Sequence
-  include System::Collections::Generic::IEnumerable[Object]
-  
-  def initialize array
-    @array = array
-  end
-  
-  def get_enumerator
-    @array.GetEnumerator()
-  end
-end
-
-class Array
-  def to_seq
-    Sequence.new self
-  end
-end
-
-a = Sequence.new [1, 2, 3]
-p a.select(lambda { |n| n * 2 })
+puts list.count
+puts list.count(lambda { |x| x > 1 })
 ", @"
-[2, 3, 6]
+3
+3
+2
 ");
-#endif
+        }
+
+        // What ClrExtensionMethods9 and ClrScopedExtensions8 run once IronRubyTests::ExtensionMethods4 is activated, and
+        // what it prints, the same for both. An error shows as its class (and name), not its message.
+        private const string AccessorNamedExtensionsCode = @"
+include IronRubyTests::ExtensionMethods4
+def outcome = (yield rescue $!.is_a?(NameError) ? [$!.class, $!.name] : $!.class)
+
+c = Crate.new
+puts c.get_Weight, c.set_Weight(1), c.get_Item(0), c.set_Item(0, 1)
+p outcome { c.weight }, outcome { c.Weight }, outcome { c.weight = 1 }, outcome { c[0] }, outcome { c[0] = 1 }
+p outcome { c.respond_to?(:weight) }, outcome { c.method(:weight) }, outcome { c.clr_member(:weight) }
+
+pl = Plain.new
+puts pl.get_Weight
+p outcome { pl.weight }
+
+pa = Parcel.new
+puts pa.get_Weight
+p outcome { pa.weight }, outcome { Object.new.Heft }, outcome { 1.Heft }
+
+s = Scale.new
+p outcome { s.weight }, outcome { s.Weight }, outcome { s[2] }, outcome { s.get_Weight }, outcome { s.get_Item(2) }
+p outcome { s.clr_member(:weight).call }, outcome { s.clr_member(:[]).call(4) }
+p outcome { s.get_Weight(3).to_s }, outcome { s.weight(3) }
+p outcome { s.weight = 5; s.last.to_s }, outcome { s[2] = 9; s.last.to_s }
+";
+
+        private const string AccessorNamedExtensionsOutput = @"
+e:get_Weight()
+e:set_Weight(int)
+e:get_Item(int)
+e:set_Item(int, int)
+[NoMethodError, :weight]
+[NoMethodError, :Weight]
+[NoMethodError, :weight=]
+[NoMethodError, :[]]
+[NoMethodError, :[]=]
+false
+[NameError, :weight]
+[NameError, nil]
+get_Weight()
+[NoMethodError, :weight]
+e:IWeighed.get_Weight()
+[NoMethodError, :weight]
+[NoMethodError, :Heft]
+[NoMethodError, :Heft]
+1
+1
+12
+1
+12
+1
+14
+""e:get_Weight(int)""
+ArgumentError
+""Weight=5""
+""[2]=9""
+";
+
+        /// <summary>
+        /// An extension method named like a property accessor, such as get_Weight(this Crate), is an ordinary method, as in C#
+        /// and as an instance method so named that isn't an accessor is (Plain's): crate.weight and crate[0] are undefined, and
+        /// the extended type's own property and indexer (Scale's) are unchanged. using_clr_extensions used to leave a null in
+        /// the property's method group for it, which threw NullReferenceException.
+        /// </summary>
+        public void ClrExtensionMethods9() {
+            Runtime.LoadAssembly(typeof(IronRubyTests.ExtensionMethods4.EMs).Assembly);
+            LegacyExtensionsTestOutput("using_clr_extensions IronRubyTests::ExtensionMethods4" + AccessorNamedExtensionsCode, AccessorNamedExtensionsOutput);
+        }
+
+        /// <summary>
+        /// `using' a CLR namespace brings its extension methods into the rest of the file, class body or eval string,
+        /// lexically, like a refinement: a method defined before it, or outside the class body, does not see them.
+        /// </summary>
+        public void ClrScopedExtensions1() {
+            Runtime.LoadAssembly(typeof(IronRubyTests.ExtensionMethods3.EMs).Assembly);
+
+            TestOutput(@"
+include IronRubyTests::ExtensionMethods3
+w = Widget.new
+def before(w) = (w.describe('x') rescue $!.class)
+module M
+  using IronRubyTests::ExtensionMethods3
+  def self.inside(w) = w.describe('x')
+end
+class C
+  def self.outside(w) = (w.describe('x') rescue $!.class)
+end
+puts before(w), M.inside(w), C.outside(w), (w.describe('x') rescue $!.class)
+using IronRubyTests::ExtensionMethods3
+puts w.describe('x'), before(w)
+", @"
+TypeError
+e:Describe(string)
+TypeError
+TypeError
+e:Describe(string)
+TypeError
+");
+        }
+
+        /// <summary>
+        /// Extension methods are where using_clr_extensions puts them: they shadow the Ruby methods a CLR type picks up
+        /// from Enumerable (select), a CLR method group gets them as more overloads (List#count, Widget#describe - the
+        /// instance method winning a tie), and a name nothing else has gets them alone (where).
+        /// </summary>
+        public void ClrScopedExtensions2() {
+            Runtime.LoadAssembly(typeof(IronRubyTests.ExtensionMethods3.EMs).Assembly);
+            Context.ObjectClass.SetConstant("SystemCoreAssembly", SystemLinqAssembly);
+
+            TestOutput(@"
+load_assembly SystemCoreAssembly
+include IronRubyTests::ExtensionMethods3
+list = System::Collections::Generic::List[Integer].new
+list.add(3)
+list.add(1)
+list.add(2)
+using System::Linq
+using IronRubyTests::ExtensionMethods3
+p list.select { |x| x * 10 }.to_a
+p list.Select { |x| x * 10 }.to_a
+p list.count, list.count(lambda { |x| x > 1 })
+p list.where { |x| x > 1 }.to_a
+p list.reverse, list.to_a
+p list.respond_to?(:where), list.method(:where).call { |x| x < 3 }.to_a
+
+w = Widget.new
+puts w.describe, w.describe(1), w.describe('x'), SubWidget.new.describe('x')
+puts Square.new.area, Square.new.area(2), Box[Integer].new.open, Box[Integer].new.open(1)
+class RubyWidget < Widget
+  def describe(*) = 'ruby'
+end
+puts RubyWidget.new.describe('x')
+", @"
+[30, 10, 20]
+[30, 10, 20]
+3
+2
+[3, 2]
+nil
+[2, 1, 3]
+true
+[2, 1]
+Describe()
+Describe(int)
+e:Describe(string)
+e:Describe(string)
+Area()
+e:Area(int)
+Open()
+e:Open(T)
+ruby
+");
+        }
+
+        /// <summary>
+        /// A Ruby object gets no extension methods its Ruby ancestors don't extend: an Array's select is Array#select, its
+        /// where is Enumerable's, and it has no Select, as with using_clr_extensions - where a List's where is LINQ's
+        /// ahead of the same Enumerable#where. A Ruby class including IEnumerable[Object] gets none either. A CLR class's
+        /// place has those of its interfaces (a Dictionary's select is LINQ's, not the one its IDictionary picks up), a
+        /// singleton class sees them, and a Ruby method defined ahead of them takes over a call bound to them, and gives
+        /// it back.
+        /// </summary>
+        public void ClrScopedExtensions5() {
+            Context.ObjectClass.SetConstant("SystemCoreAssembly", SystemLinqAssembly);
+
+            TestOutput(@"
+load_assembly SystemCoreAssembly
+L = System::Collections::Generic::List[Integer]
+list = L.new
+list.add(3)
+list.add(1)
+d = System::Collections::Generic::Dictionary[Integer, Integer].new
+d.add(1, 2)
+module Enumerable
+  def where(&) = :ruby
+end
+using System::Linq
+a = [3, 1, 2]
+p a.select { |x| x > 1 }, (a.Select { |x| x } rescue $!.class), (a.where { |x| x } rescue $!.class)
+class RubyEnumerable
+  include System::Collections::Generic::IEnumerable[Object]
+end
+p RubyEnumerable.new.respond_to?(:first_or_default)
+p d.select { |kv| kv.key }.to_a
+def list.extra = nil
+p list.respond_to?(:where), list.method(:where).call { |x| x > 1 }.to_a, list.where { |x| x > 1 }.to_a
+def go(l) = l.select { |x| x * 10 }
+p go(list).to_a
+class L
+  def select(&) = :ruby
+end
+p go(list)
+class L
+  remove_method :select
+end
+p go(list).to_a
+", @"
+[3, 2]
+NoMethodError
+:ruby
+false
+[1]
+true
+[3]
+[3]
+[30, 10]
+:ruby
+[30, 10]
+");
+        }
+
+        /// <summary>
+        /// `using' a static class brings in its extension methods only (C#'s `using static').
+        /// </summary>
+        public void ClrScopedExtensions3() {
+            Runtime.LoadAssembly(typeof(IronRubyTests.ExtensionMethods3.EMs).Assembly);
+
+            TestOutput(@"
+include IronRubyTests::ExtensionMethods3
+module OnlyMore
+  using IronRubyTests::ExtensionMethods3::MoreEMs
+  def self.go(w) = [w.label.to_s, (w.describe('x') rescue $!.class)]
+end
+module Both
+  using IronRubyTests::ExtensionMethods3
+  def self.go(w) = [w.label.to_s, w.describe('x').to_s]
+end
+p OnlyMore.go(Widget.new), Both.go(Widget.new)
+", @"
+[""e:Label()"", TypeError]
+[""e:Label()"", ""e:Describe(string)""]
+");
+        }
+
+        /// <summary>
+        /// A call bound before anything `using'd the namespace re-binds when something does, and still does not see
+        /// the extension methods where they are not `using'd.
+        /// </summary>
+        public void ClrScopedExtensions4() {
+            Runtime.LoadAssembly(typeof(IronRubyTests.ExtensionMethods3.EMs).Assembly);
+
+            TestOutput(@"
+include IronRubyTests::ExtensionMethods3
+w = Widget.new
+def call_it(w) = (w.describe('x') rescue $!.class)
+3.times { call_it(w) }
+module Later
+  using IronRubyTests::ExtensionMethods3
+  def self.go(w) = w.describe('x')
+end
+puts call_it(w), Later.go(w), call_it(w)
+", @"
+TypeError
+e:Describe(string)
+TypeError
+");
+        }
+
+        /// <summary>
+        /// A call of a scoped extension method made in a method, or in a block in one, tests the method's refinement record:
+        /// the same `def' run again after a `using' of the namespace reaches the extension methods, and a method defined
+        /// after it reaches them as well.
+        /// </summary>
+        public void ClrScopedExtensions6() {
+            TestOutput(@"
+L = System::Collections::Generic::List[Integer]
+list = L.new([1, 2, 3])
+module R; refine(String) { def r = :r }; end
+using R
+definer = proc do
+  def counts(l) = [(l.where { |x| x > 1 }.Count rescue :none), [1].map { (l.Where { |x| x > 2 }.Count rescue :none) }.first]
+end
+definer.call
+p (1..100).map { counts(list) }.uniq
+using System::Linq
+p counts(list)
+definer.call
+p (1..100).map { counts(list) }.uniq
+module Other
+  def self.counts(l) = [l.where { |x| x > 1 }.Count, [1].map { l.Where { |x| x > 2 }.Count }.first]
+end
+p (1..100).map { Other.counts(list) }.uniq
+", @"
+[[:none, :none]]
+[:none, :none]
+[[2, 1]]
+[[2, 1]]
+");
+        }
+
+        /// <summary>
+        /// A refined call on a Ruby object, made in a method or in a block in one, gets a precompiled dispatcher when it
+        /// resolves to a Ruby method (RubyCallAction.BindPrecompiled). For an instance of a Ruby subclass of List[Object],
+        /// that is one the subclass or a singleton class defines ahead of the extension methods of List[Object]'s place.
+        /// Enumerable's, behind that place, lose to LINQ's, and taking the ones ahead away hands the calls back to LINQ,
+        /// with an argument and with a block. An Array has no place, so it keeps Enumerable's.
+        /// </summary>
+        public void ClrScopedExtensions7() {
+            TestOutput(@"
+module Enumerable
+  def where(&) = :behind
+  def skip(n) = :behind
+end
+class Bag < System::Collections::Generic::List[Object]
+end
+using System::Linq
+def show(r) = Symbol === r ? r : r.to_a
+def direct(b) = [show(b.skip(1)), show(b.where { |x| x > 1 })]
+def nested(b) = [1].map { [show(b.skip(2)), show(b.where { |x| x > 2 })] }.first
+def hot(b) = (1..100).map { direct(b) + nested(b) }.uniq
+b = Bag.new
+b.add(1); b.add(2); b.add(3)
+p hot(b)
+class Bag
+  def skip(n) = :ahead
+  def where(&) = :ahead
+end
+p hot(b)
+class Bag
+  remove_method :skip, :where
+end
+p hot(b)
+c = Bag.new
+c.add(5); c.add(6)
+def c.skip(n) = :singleton
+def c.where(&) = :singleton
+p hot(c), hot(b)
+class << c
+  remove_method :skip, :where
+end
+p hot(c)
+p hot([1, 2, 3])
+", @"
+[[[2, 3], [2, 3], [3], [3]]]
+[[:ahead, :ahead, :ahead, :ahead]]
+[[[2, 3], [2, 3], [3], [3]]]
+[[:singleton, :singleton, :singleton, :singleton]]
+[[[2, 3], [2, 3], [3], [3]]]
+[[[6], [5, 6], [], [5, 6]]]
+[[:behind, :behind, :behind, :behind]]
+");
+        }
+
+        /// <summary>
+        /// ClrExtensionMethods9 through `using': the same calls give the same results.
+        /// </summary>
+        public void ClrScopedExtensions8() {
+            Runtime.LoadAssembly(typeof(IronRubyTests.ExtensionMethods4.EMs).Assembly);
+            TestOutput("using IronRubyTests::ExtensionMethods4" + AccessorNamedExtensionsCode, AccessorNamedExtensionsOutput);
         }
 
         #endregion
@@ -1071,10 +1472,10 @@ p Obj.method(:bar)
 p Obj.method(:middle)
 p Obj.method(:skip)
 "), @"
-#<Method: *C#foo>
-#<Method: *C#bar>
-#<Method: *C(*B)#middle>
-#<Method: *C#skip>
+#<Method: *C#foo(_, *)>
+#<Method: *C#bar(_, *)>
+#<Method: *C(*B)#middle(a)>
+#<Method: *C#skip(*)>
 ", OutputFlags.Match);
 
             // hides Hidden method when called using mangled name "hidden":
@@ -1278,7 +1679,7 @@ f4
             Runtime.LoadAssembly(Assembly.GetExecutingAssembly());
             OverloadInheritance2.Load(Context);
 
-            TestOutput(@"
+            LegacyExtensionsTestOutput(@"
 using_clr_extensions IronRubyTests::ExtensionMethods1
 d = D.new
 puts d.f(1)                               # f1 on A
@@ -1314,7 +1715,7 @@ e6
             Runtime.LoadAssembly(Assembly.GetExecutingAssembly());
             OverloadInheritance2.Load(Context);
 
-            TestOutput(@"
+            LegacyExtensionsTestOutput(@"
 using_clr_extensions nil
 puts F.new.f(1,2,3,4,5,6,7)               # no namespace
  
@@ -1512,8 +1913,8 @@ m = OM.method(:M2)
 m.overload(Object, String) rescue p $!
 m.overload() rescue p $!
 "), @"
-#<ArgumentError: no overload of `M2' matches given parameter types>
-#<ArgumentError: no overload of `M2' matches given parameter types>
+#<ArgumentError: no overload of 'M2' matches given parameter types>
+#<ArgumentError: no overload of 'M2' matches given parameter types>
 "
             );
 
@@ -1535,7 +1936,7 @@ p method(:bar).overload(Object, Object).call(1,2)
 p method(:bar).overload(Object, Object, Object).call(1,2,3)
 "), @"
 [1, 2]
-#<ArgumentError: no overload of `foo' matches given parameter types>
+#<ArgumentError: no overload of 'foo' matches given parameter types>
 [1]
 [1, 2]
 [1, 2, 3]
@@ -1597,7 +1998,7 @@ puts m.overload(Integer).clr_members.size          # RubyScope and BlockParam ar
 puts m.overload(System::String) rescue p $!       # RubyClass is not hidden here
 ", @"
 1
-#<ArgumentError: no overload of `foo' matches given parameter types>
+#<ArgumentError: no overload of 'foo' matches given parameter types>
 ");
 
             // library methods:
@@ -2044,12 +2445,12 @@ C[Integer][1] rescue p $!
 InteropTests::Generics1::C
 InteropTests::Generics1::C[T]
 InteropTests::Generics1::C[T, S]
-#<ArgumentError: Type group `C' does not contain a type of generic arity 30>
+#<ArgumentError: Type group 'C' does not contain a type of generic arity 30>
 InteropTests::Generics1::C[Integer]
 InteropTests::Generics1::C[Integer]
 InteropTests::Generics1::C[Integer]
-#<ArgumentError: `InteropTests::Generics1::C[Integer]' is not a generic type definition>
-#<ArgumentError: `InteropTests::Generics1::C[Integer]' is not a generic type definition>
+#<ArgumentError: 'InteropTests::Generics1::C[Integer]' is not a generic type definition>
+#<ArgumentError: 'InteropTests::Generics1::C[Integer]' is not a generic type definition>
 ");
             
             // C<> is a mixin for all its instantiations:
@@ -2067,7 +2468,7 @@ p C[Float].ancestors[0..2]
 ", @"
 InteropTests::Generics1::C[Integer]
 InteropTests::Generics1::C[String]
-[InteropTests::Generics1::C[Float], InteropTests::Generics1::C[T], Object]
+[InteropTests::Generics1::C[Float], InteropTests::Generics1::C[T], IronRuby::Clr::PatternMatching]
 ");
 
             // It is possible to include a generic type definition into another class. It behaves like a Ruby module.
@@ -2101,9 +2502,9 @@ p C[Integer].new.method(:Arity)
 C[1].new rescue p $!
 C[1].instance_method(:Arity) rescue p $!
 ", @"
-#<Method: InteropTests::Generics1::C[Integer]#Arity>
-#<NoMethodError: undefined method `new' for module InteropTests::Generics1::C[T]>
-#<NameError: undefined method `Arity' for module `InteropTests::Generics1::C[T]'>
+#<Method: InteropTests::Generics1::C[Integer]#Arity()>
+#<NoMethodError: undefined method 'new' for module InteropTests::Generics1::C[T]>
+#<NameError: undefined method 'Arity' for module 'InteropTests::Generics1::C[T]'>
 ");
         }
 
@@ -2233,7 +2634,7 @@ $d = D.new { |foo, bar| $foo = foo; $bar = bar; 777 }
         /// A block handler for a standard (sender, EventArgs) event, closing over a local and
         /// calling back into the sender. This used to require WinForms (by its .NET 2.0 strong
         /// name), show a real Form and run Application.Run on it. WinForms is Windows-only and
-        /// is not referenced by this net8.0/net10.0 project, so it failed with a LoadError on
+        /// is not referenced by this net10.0/net11.0 project, so it failed with a LoadError on
         /// every platform; EventsForm1 stands in for the form, and the Ruby side is unchanged.
         /// </summary>
         public void ClrEvents1() {
@@ -2344,9 +2745,6 @@ false
         }
         
         public void ClrEventImpl1() {
-            // TODO: fix
-            if (_driver.PartialTrust) return;
-
             Context.ObjectClass.SetConstant("E", Context.GetClass(typeof(ClassWithVirtualEvent1)));
 
             var f = Engine.Execute<ClassWithVirtualEvent1>(@"
@@ -2417,6 +2815,47 @@ add {0}[System.Int32,System.Int32]
             unboxed = (S2)s;
             Assert(unboxed.X == 1);
             Assert(unboxed.Y == 4);
+        }
+
+        // A struct built and filled in Ruby (OpenSSL::PKey fills RSAParameters this way). The stores used to
+        // go to a temporary copy once the call sites were compiled, so after ~32 calls every field read nil.
+        public void ClrValueTypes3() {
+            Context.ObjectClass.SetConstant("S2", Context.GetClass(typeof(S2)));
+            Context.ObjectClass.SetConstant("RSAParameters", Context.GetClass(typeof(System.Security.Cryptography.RSAParameters)));
+
+            AssertOutput(() => CompilerTest(@"
+def fill(i)
+  s = S2.new
+  s.X = i
+  s.Y = i + 1
+  s
+end
+
+def set_x(i)
+  s = S2.new(i, i)
+  s.SetX
+  s
+end
+
+def rsa(i)
+  p = RSAParameters.new
+  p.Modulus = System::Array[System::Byte].new(i + 1)
+  p
+end
+
+bad = (0...100).reject { |i| s = fill(i); s.X == i && s.Y == i + 1 }
+puts ""fill: #{bad.inspect}""
+
+bad = (0...100).reject { |i| set_x(i).X == 1 }
+puts ""set_x: #{bad.inspect}""
+
+bad = (0...100).reject { |i| m = rsa(i).Modulus; m && m.Length == i + 1 }
+puts ""rsa: #{bad.inspect}""
+"), @"
+fill: []
+set_x: []
+rsa: []
+");
         }
 
         public class ClassWithValueTypeField1 {
@@ -2650,10 +3089,6 @@ p D.new.report
             public override int Bar() { return 2; }
         }
 
-        public class ClassWithVirtuals3 : ClassWithVirtuals2 {
-            public override int Bar() { return 3; }
-        }
-
         public interface I1 { int f(); }
         public interface I2 { int g(); }
 
@@ -2694,7 +3129,7 @@ end
 
 C.new.bar rescue p $!
 "), @"
-#<NoMethodError: Virtual CLR method `bar' called via super from *; Super calls to virtual CLR methods can only be used in a Ruby subclass of the class declaring the method>
+#<NoMethodError: Virtual CLR method 'bar' called via super from *; Super calls to virtual CLR methods can only be used in a Ruby subclass of the class declaring the method>
 ", OutputFlags.Match);
         }
 
@@ -2859,6 +3294,31 @@ p D.new, E.new, F.new
 ", OutputFlags.Match);
         }
 
+        /// <summary>
+        /// A CLR dictionary inspects in Ruby 3.4's Hash#inspect format, generic over object or not.
+        /// </summary>
+        public void ClrDictionaryInspect1() {
+            TestOutput(@"
+d = System::Collections::Generic::Dictionary[Object, Object].new
+d[:foo] = 'bar'
+d[1] = 2
+d[:'a b'] = nil
+d[:a=] = 3
+d[:k] = d
+p d
+puts d.to_s
+s = System::Collections::Generic::Dictionary[System::String, Integer].new
+s['x'] = 1
+p s
+p System::Collections::Hashtable.new
+", @"
+{foo: 'bar', 1 => 2, ""a b"": nil, ""a="": 3, k: {...}}
+{foo: 'bar', 1 => 2, ""a b"": nil, ""a="": 3, k: {...}}
+{'x' => 1}
+{}
+");
+        }
+
         public void ClrHashEquals4() {
             var e = new RubyObject(Context.ObjectClass);
             int h;
@@ -2939,7 +3399,7 @@ puts c = Thread.clr_ctor
 puts c.overload(System::Threading::ThreadStart).call(lambda { puts 'hello' }).status
 puts Thread.clr_new(System::Threading::ThreadStart.new(lambda { puts 'hello' })).status
 ", @"
-#<Method: #<Class:Thread>(Thread)#.ctor>
+#<Method: #<Class:Thread>(Thread)#.ctor(_, *)>
 unstarted
 unstarted
 ");
@@ -3095,7 +3555,8 @@ puts F.new('hello', 'world').p
             }, @"
 init
 test
-#<TypeError: can't allocate class `E' that derives from type `*::ClassWithNoDefaultConstructor' with no default constructor; define E#new singleton method instead of I#initialize>
+init
+#<TypeError: E.new: initialize did not call super, and ClassWithNoDefaultConstructor has no parameterless constructor to construct the instance with>
 ctor
 hello world
 ", OutputFlags.Match);
@@ -3151,8 +3612,8 @@ init
         /// </summary>
         public void ClrPrimitiveNumericTypes1() {
             TestOutput(@"
-# System::Int64 is not in this list: Int64 is one of the CLR types the Integer class itself
-# extends (alongside Int32 and BigInteger), so it has no separate Ruby class to probe.
+# System::Int64 is not in this list: a long is an Integer (like an Int32 or a BigInteger), so
+# System::Int64.new(i) is not an instance of System::Int64 (see ClrInt64AndBigInteger1).
 [System::Byte, System::SByte, System::UInt16, System::Int16, System::UInt32, System::UInt64, System::Single].each_with_index do |t,i|
   p t.ancestors
   p t.new(i).class
@@ -3191,11 +3652,173 @@ System::UInt64
 6
 Integer
 8
-[System::Single, Precision, Numeric, Comparable, Object, Kernel, BasicObject]
+[System::Single, Numeric, Comparable, Object, Kernel, BasicObject]
 System::Single
 7.0
 Float
 no size method
+");
+        }
+
+        public static class IntegerOverloads {
+            public static string Pick(int x) { return "int " + x; }
+            public static string Pick(long x) { return "long " + x; }
+            public static string Pick(BigInt x) { return "BigInteger " + x; }
+            public static string Wide(long x) { return "long " + x; }
+        }
+
+        /// <summary>
+        /// An Int64 or BigInteger is an Integer, but the System::Int64 and System::Numerics::BigInteger constants still name
+        /// those CLR types: they are subclasses of Integer whose CLR type is their own, not Integer (whose CLR type is Int32).
+        /// </summary>
+        public void ClrInt64AndBigInteger1() {
+            Context.ObjectClass.SetConstant("IO", Context.GetClass(typeof(IntegerOverloads)));
+            TestOutput(@"
+include System::Collections::Generic
+I64 = System::Int64
+BI = System::Numerics::BigInteger
+
+# the type constants
+p I64.to_clr_type, BI.to_clr_type, System::Int32.to_clr_type
+p I64.equal?(Integer), BI.equal?(Integer), System::Int32.equal?(Integer)
+p I64.superclass, BI.superclass, I64.name
+p I64.to_clr_type.to_class.equal?(I64), System::Int32.to_clr_type.to_class.equal?(Integer)
+
+# static members
+p I64.MaxValue, I64.MinValue, I64.MaxValue.class
+p I64.Parse('9223372036854775807'), I64.TryParse('123456789012')
+p BI.Parse('123456789012345678901234567890'), BI.One, BI.Pow(2, 70)
+p System::Int16.TryParse('12'), System::Int32.TryParse('12')
+
+# generic instantiation and arrays
+l = List[I64].new
+l.Add(2**40)
+l.Add(5)
+p l.GetType, l[0], l[0].class
+b = List[BI].new
+b.Add(2**100)
+p b.GetType, b[0]
+p List[System::Int32].new.GetType, List[Integer].new.GetType
+a = System::Array[I64].new(2)
+a[0] = 2**62
+p a.GetType, a[0]
+p System::Array[BI].new([2**80]).GetType
+
+# overload resolution
+p IO.Pick(1), IO.Pick(2**40), IO.Pick(2**80)
+p IO.method(:Pick).overload(I64).call(1), IO.Wide(2**40)
+p System::Math.method(:Max).overload(I64, I64).call(2**40, 1)
+
+# instance CLR methods of a long and of a bignum are their own type's
+p 7.ToString, (2**40).ToString, (2**100).ToString, (2**40).CompareTo(5), (2**40).GetType
+
+# Integer semantics are unchanged
+x = 2**40
+p x.class, Integer === x, x.is_a?(Integer), x + 1, x * x, (x * x).class
+", @"
+System.Int64
+System.Numerics.BigInteger
+System.Int32
+false
+false
+true
+Integer
+Integer
+""System::Int64""
+true
+true
+9223372036854775807
+-9223372036854775808
+Integer
+9223372036854775807
+[true, 123456789012]
+123456789012345678901234567890
+1
+1180591620717411303424
+[true, 12 (Int16)]
+[true, 12]
+System.Collections.Generic.List`1[System.Int64]
+1099511627776
+Integer
+System.Collections.Generic.List`1[System.Numerics.BigInteger]
+1267650600228229401496703205376
+System.Collections.Generic.List`1[System.Int32]
+System.Collections.Generic.List`1[System.Int32]
+System.Int64[]
+4611686018427387904
+System.Numerics.BigInteger[]
+'int 1'
+'long 1099511627776'
+'BigInteger 1208925819614629174706176'
+'long 1'
+'long 1099511627776'
+1099511627776
+'7'
+'1099511627776'
+'1267650600228229401496703205376'
+1
+System.Int64
+Integer
+true
+true
+1099511627777
+1208925819614629174706176
+Integer
+");
+        }
+
+        /// <summary>
+        /// A CLR member only an Int64's or a BigInteger's own type has is reachable on such an Integer, by its CLR or its
+        /// snake_case name. The CLR instance methods of Integer and Float (Int32's, Double's) take snake_case names too,
+        /// though, as Ruby built-ins, they stay out of the method lists.
+        /// </summary>
+        public void ClrIntegerClrMembers1() {
+            TestOutput(@"
+big = 2**70
+p big.IsEven, big.is_even, (big + 1).IsEven, big.Sign, (-big).sign
+p((2**40).IsEven) rescue p $!.class
+p 5.to_string, 255.to_string('X'), (2**40).to_string, big.to_string, 5.compare_to(3), 1.5.to_string, 1.5.compare_to(2.0)
+p 5.respond_to?(:to_string), 5.methods.include?(:to_string), Integer.instance_methods.include?(:compare_to)
+p((5.foo_bar rescue $!.class), (big.foo_bar rescue $!.class))
+", @"
+true
+true
+false
+1
+-1
+NoMethodError
+'5'
+'FF'
+'1099511627776'
+'1180591620717411303424'
+1
+'1.5'
+-1
+true
+false
+false
+NoMethodError
+NoMethodError
+");
+        }
+
+        /// <summary>
+        /// Nullable&lt;T&gt; is constructed like other value types: with a value it is that value, without one nil.
+        /// Type#to_class of an interface is a TypeError.
+        /// </summary>
+        public void ClrNullable1() {
+            TestOutput(@"
+p System::Nullable[Integer].new(3), System::Nullable[Integer].new
+p System::Nullable[System::DateTime].new(System::DateTime.new(2020, 1, 2)).Day
+p System::Collections::Generic::List[System::Nullable[Integer]].new([1, nil]).to_a
+p((System::IComparable.to_clr_type.to_class rescue $!.class), System::IComparable.to_clr_type.to_module)
+", @"
+3
+nil
+2
+[1, nil]
+TypeError
+System::IComparable
 ");
         }
 
@@ -3245,6 +3868,58 @@ p System::Array[System::Byte].new(3, 1)
 ['c', 'c']
 [0 (Byte), 1 (Byte), 2 (Byte)]
 [1 (Byte), 1 (Byte), 1 (Byte)]
+");
+        }
+
+        /// <summary>
+        /// A CLR array does not grow: an index out of its bounds raises System::IndexOutOfRangeException, which is an IndexError.
+        /// </summary>
+        public void ClrArrays3() {
+            TestOutput(@"
+a = System::Array[Integer].new(2)
+begin
+  a[10] = 1
+rescue IndexError => e
+  p e.class, e.is_a?(StandardError)
+end
+p((a[-3] rescue $!.class))
+p System::IndexOutOfRangeException.superclass, a.length
+", @"
+System::IndexOutOfRangeException
+true
+System::IndexOutOfRangeException
+IndexError
+2
+");
+        }
+
+        /// <summary>
+        /// The Array methods that answer a new list answer an Array for a CLR array, which cannot be allocated or grow;
+        /// those that reorder it in place (sort!) keep its items rather than clearing it first. IEnumerable#each without
+        /// a block is an Enumerator.
+        /// </summary>
+        public void ClrArrays4() {
+            TestOutput(@"
+a = System::Array[Integer].new([3, 1, 2, 3])
+p a.sort, a.reverse, a.uniq, a.flatten, a.sort { |x, y| y <=> x }
+p a.sort!.equal?(a), a
+p((a.replace([1]) rescue $!.class), a)
+e = System::Collections::Generic::List[Integer].new([5, 6]).each
+p e.class, e.first, e.to_a, System::Collections::ArrayList.new([7]).each.map { it * 2 }
+", @"
+[1, 2, 3, 3]
+[3, 2, 1, 3]
+[3, 1, 2]
+[3, 1, 2, 3]
+[3, 3, 2, 1]
+true
+[1, 2, 3, 3]
+System::NotSupportedException
+[1, 2, 3, 3]
+Enumerator
+5
+[5, 6]
+[14]
 ");
         }
 
@@ -3542,7 +4217,7 @@ p Inst.Double(2.0), Inst.Double(4), Inst.Double(System::Byte.new(8)), Inst.Doubl
 ");
             
             // primitive numerics. The Complex parameter is System.Numerics.Complex, which p shows
-            // through its own ToString: "<10; 0>" on .NET 8 and 10, where the "(10+0j)" this once
+            // through its own ToString: "<10; 0>" on .NET 8 and later, where the "(10+0j)" this once
             // expected was the Python-style formatting of the DLR's old Complex64.
             TestOutput(@"
 p(*Inst.numerics(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11))
@@ -3611,14 +4286,6 @@ p Inst.Foo(a) rescue p $!
             // meta-object conversions:
             var r1 = Engine.Execute<int>("Inst.delegate(Proc.new { |x| x + 1 }).invoke(123)");
             Assert(r1 == 124);
-
-            // foreign meta-object conversion:
-            if (!_driver.RunPython) return;
-            var py = Runtime.GetEngine("python");
-            var scope = Runtime.CreateScope();
-            py.Execute(@"def foo(x): return x + 2", scope);
-            var r2 = Engine.Execute<int>(@"Inst.delegate(foo).invoke(123)", scope);
-            Assert(r2 == 125);
         }
 
         #endregion

@@ -13,15 +13,10 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
-using System.Reflection;
 using System.Text;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
@@ -65,7 +60,7 @@ namespace IronRuby.Compiler.Ast {
             _kind = kind;
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             switch (_kind) {
                 case StringKind.Mutable:
                     return TransformConcatentation(gen, _parts, StringFactory.Instance);
@@ -110,8 +105,6 @@ namespace IronRuby.Compiler.Ast {
         }
 
         #region Factories
-
-        // TODO:
 
         internal interface IFactory {
             MSA.Expression/*!*/ CreateExpression(AstGenerator/*!*/ gen, string/*!*/ literal, RubyEncoding/*!*/ encoding);
@@ -174,10 +167,6 @@ namespace IronRuby.Compiler.Ast {
             private int _length;
             private bool _isBinary;
 
-            private void ObjectInvariant() {
-                ContractUtils.Invariant(_isBinary || CollectionUtils.TrueForAll(this, (item) => item is string));
-            }
-
             public LiteralConcatenation(RubyEncoding/*!*/ sourceEncoding) {
                 Assert.NotNull(sourceEncoding);
                 _encoding = sourceEncoding;
@@ -230,8 +219,6 @@ namespace IronRuby.Compiler.Ast {
             }
 
             public object/*!*/ GetValue() {
-                ContractUtils.Ensures(ContractUtils.Result<object>() is byte[] || ContractUtils.Result<object>() is string);
-
                 if (Count == 1) {
                     return this[0];
                 }

@@ -14,8 +14,6 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections.Generic;
-using System.Text;
 using Microsoft.Scripting.Utils;
 using System.Diagnostics;
 using IronRuby.Builtins;
@@ -36,9 +34,17 @@ namespace IronRuby.Runtime.Calls {
             return InvokeInternal(param, self, procArg, ArrayUtils.EmptyObjects);
         }
 
+        // A block with nothing but the rest parameter (|*args|, the Enumerable helpers' packing
+        // block, the prelude's `each { |*values| ... }`) gets the yielded values as a fresh
+        // Array built straight from them, rather than from a temporary object[] that was
+        // allocated and then copied into one.
+
         // R(1, -)
         public override object InvokeNoAutoSplat(BlockParam/*!*/ param, object self, Proc procArg, object arg1) {
-            return InvokeInternal(param, self, procArg, new object[] { arg1 }); // TODO: optimize
+            if (_parameterCount == 0) {
+                return _block(param, self, ArrayUtils.EmptyObjects, Rest(RubyOps.MakeArray1(arg1)), procArg);
+            }
+            return InvokeInternal(param, self, procArg, new object[] { arg1 });
         }
 
         // R(1, -)
@@ -47,23 +53,32 @@ namespace IronRuby.Runtime.Calls {
                 IList list = arg1 as IList ?? Protocols.ImplicitTrySplat(param.RubyContext, arg1) ?? new object[] { arg1 }; // TODO: optimize
                 return InvokeSplatInternal(param, self, procArg, ArrayUtils.EmptyObjects, list);
             } else {
-                return InvokeInternal(param, self, procArg, new object[] { arg1 }); // TODO: optimize
+                return _block(param, self, ArrayUtils.EmptyObjects, Rest(RubyOps.MakeArray1(arg1)), procArg);
             }
         }
 
         // R(2, -)
         public override object Invoke(BlockParam/*!*/ param, object self, Proc procArg, object arg1, object arg2) {
-            return InvokeInternal(param, self, procArg, new object[] { arg1, arg2 });// TODO: optimize
+            if (_parameterCount == 0) {
+                return _block(param, self, ArrayUtils.EmptyObjects, Rest(RubyOps.MakeArray2(arg1, arg2)), procArg);
+            }
+            return InvokeInternal(param, self, procArg, new object[] { arg1, arg2 });
         }
 
         // R(3, -)
         public override object Invoke(BlockParam/*!*/ param, object self, Proc procArg, object arg1, object arg2, object arg3) {
-            return InvokeInternal(param, self, procArg, new object[] { arg1, arg2, arg3 });// TODO: optimize
+            if (_parameterCount == 0) {
+                return _block(param, self, ArrayUtils.EmptyObjects, Rest(RubyOps.MakeArray3(arg1, arg2, arg3)), procArg);
+            }
+            return InvokeInternal(param, self, procArg, new object[] { arg1, arg2, arg3 });
         }
 
         // R(4, -)
         public override object Invoke(BlockParam/*!*/ param, object self, Proc procArg, object arg1, object arg2, object arg3, object arg4) {
-            return InvokeInternal(param, self, procArg, new object[] { arg1, arg2, arg3, arg4 });// TODO: optimize
+            if (_parameterCount == 0) {
+                return _block(param, self, ArrayUtils.EmptyObjects, Rest(RubyOps.MakeArray4(arg1, arg2, arg3, arg4)), procArg);
+            }
+            return InvokeInternal(param, self, procArg, new object[] { arg1, arg2, arg3, arg4 });
         }
 
         // R(N, -)

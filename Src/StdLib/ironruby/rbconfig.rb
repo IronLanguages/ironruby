@@ -31,17 +31,25 @@ module RbConfig
   # (MRI: "These directories have no meanings before the installation").
   TOPDIR = File.basename(libdir) == "Lib" ? File.dirname(libdir) : nil
 
+  # DESTDIR on make install.
+  DESTDIR = '' unless defined? DESTDIR
+
   windows = RUBY_PLATFORM =~ /mswin|mingw/
 
   CONFIG = {}
+  CONFIG["DESTDIR"] = DESTDIR
   CONFIG["MAJOR"], CONFIG["MINOR"], CONFIG["TEENY"] = RUBY_VERSION.split('.')
   CONFIG["PATCHLEVEL"] = RUBY_PATCHLEVEL.to_s
   CONFIG["RUBY_PROGRAM_VERSION"] = RUBY_VERSION.dup
   CONFIG["RUBY_API_VERSION"] = "#{CONFIG["MAJOR"]}.#{CONFIG["MINOR"]}"
   CONFIG["EXEEXT"] = windows ? ".exe" : ""
-  # This value is used by libraries to spawn new processes to run Ruby scripts. Hence it needs to match the ir.exe name
-  CONFIG["ruby_install_name"] = "ir"
-  CONFIG["RUBY_INSTALL_NAME"] = "ir"
+  # Libraries spawn RbConfig.ruby to run Ruby scripts, so this has to be a file in bindir:
+  # the build puts an ironruby apphost beside ir (Ruby.Console.csproj). And Bundler and
+  # Rails write it into binstubs as `#!/usr/bin/env ironruby`, which the ironruby launcher
+  # answers - a #! line with "ruby" in it, as JRuby's "jruby" is. (RubyGems' own binstubs
+  # name the launcher by its path: rubygems/defaults/ironruby.rb.)
+  CONFIG["ruby_install_name"] = "ironruby"
+  CONFIG["RUBY_INSTALL_NAME"] = "ironruby"
   CONFIG["RUBY_SO_NAME"] = "IronRuby"
   CONFIG["PATH_SEPARATOR"] = File::PATH_SEPARATOR.dup
 
@@ -69,18 +77,21 @@ module RbConfig
 
   # architecture
   clr_version = "#{System::Environment.Version.Major}.#{System::Environment.Version.Minor}"
-  CONFIG["arch"] = arch = "universal-dotnet#{clr_version}" # Not strictly true. For example, while running a .NET 2.0 version of IronRuby on .NET 4
+  # The .NET runtime IronRuby is running on, not the framework it was compiled for: the
+  # net10.0 build answers "universal-dotnet11.0" under the .NET 11 runtime.
+  CONFIG["arch"] = arch = "universal-dotnet#{clr_version}"
   CONFIG["sitearch"] = arch.dup
 
   # std lib
-  CONFIG["ruby_version"] = stdlib_version = "1.9.1"               # std library version
+  # The API version, "4.0.0" as in CRuby 4.0. It names the site and vendor directories
+  # (site_ruby/4.0.0 is first on $LOAD_PATH - Loader.cs - and empty as shipped) and the
+  # gem trees (gems/4.0.0, ~/.gem/ironruby/4.0.0). The standard library itself is
+  # ruby/4.0 (rubylibdir below).
+  CONFIG["ruby_version"] = stdlib_version = "#{CONFIG["MAJOR"]}.#{CONFIG["MINOR"]}.0"
   CONFIG["RUBY_BASE_NAME"] = ruby_base_name = "ruby"              # directory name
   CONFIG["datadir"] = datadir = "#{prefix}/share"
   CONFIG["rubylibprefix"] = rubylibprefix = "#{libdir}/#{ruby_base_name}"
-  # The 4.0 library comes first on the load path; the 1.9 tree only backs it up.
-  rubylibdir = "#{rubylibprefix}/4.0"
-  rubylibdir = "#{rubylibprefix}/#{stdlib_version}" unless File.directory?(rubylibdir)
-  CONFIG["rubylibdir"] = rubylibdir
+  CONFIG["rubylibdir"] = "#{rubylibprefix}/4.0"
   # What MRI keeps in its arch dir as C extensions IronRuby implements in ironruby/.
   CONFIG["rubyarchdir"] = CONFIG["archdir"] = "#{libdir}/ironruby"
 
@@ -181,6 +192,24 @@ module RbConfig
     end
     val.replace(newval) unless newval == val
     val
+  end
+
+  # As in MRI: updates +key+ in +mkconf+ with +val+, and every value of +conf+ that
+  # depends on it. Returns the updated keys, or nil if nothing changed.
+  def RbConfig.fire_update!(key, val, mkconf = MAKEFILE_CONFIG, conf = CONFIG) # :nodoc:
+    return if mkconf[key] == val
+    mkconf[key] = val
+    keys = [key]
+    deps = []
+    begin
+      re = Regexp.new("\\$\\((?:%1$s)\\)|\\$\\{(?:%1$s)\\}" % keys.join('|'))
+      deps |= keys
+      keys.clear
+      mkconf.each {|k,v| keys << k if re =~ v}
+    end until keys.empty?
+    deps.each {|k| conf[k] = mkconf[k].dup}
+    deps.each {|k| expand(conf[k])}
+    deps
   end
 
   # returns the absolute pathname of the ruby command.

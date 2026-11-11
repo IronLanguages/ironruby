@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using Microsoft.Scripting;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
@@ -30,7 +26,8 @@ namespace IronRuby.Compiler.Ast {
             : base(null, location) {
         }
 
-        // see Ruby Language.doc/Runtime/Control Flow Implementation/Retry
+        // retry, by where it stands: in eval, in a rescue clause (runs the begin block again), in a block
+        // or in a method body; the runtime halves are in RubyOps.FlowControl.cs
         internal override MSA.Expression/*!*/ TransformJump(AstGenerator/*!*/ gen) {
             return TransformRetry(gen);
         }

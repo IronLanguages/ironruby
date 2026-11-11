@@ -13,13 +13,8 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
-using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using IronRuby.Builtins;
@@ -69,9 +64,9 @@ namespace IronRuby.Runtime.Calls {
         }
 
         /// <summary>
-        /// `obj.respond_to?(:name)' answered by method lookups alone - no refinements anywhere, the name's
-        /// method or Kernel#respond_to_missing? found - is a constant for as long as the receiver class's
-        /// method version stays the same, which the rule's receiver test already checks: the lookups are
+        /// `obj.respond_to?(:name)' answered by method lookups alone - no refinement of the receiver's class
+        /// with the name, the name's method or Kernel#respond_to_missing? found - is a constant for as long as
+        /// the receiver class's method version stays the same, which the rule's receiver test already checks: the lookups are
         /// registered for invalidation the way a call site's own resolution is (RubyModule.GetMethodLookup).
         /// The symbol is part of the rule's test, so each literal site gets a rule of its own.
         /// </summary>
@@ -85,11 +80,22 @@ namespace IronRuby.Runtime.Calls {
             // Only a Ruby object's rule tests its exact class; a CLR object's may cover an instance with singleton methods.
             var symbol = args.GetSimpleArgument(0) as RubySymbol;
             var targetClass = args.TargetClass;
-            if (symbol == null || !(args.Target is IRubyObject) || targetClass.Context.HasRefinements) {
+            if (symbol == null || !(args.Target is IRubyObject)) {
                 return false;
             }
 
+            // Kernel#respond_to? sees the refinements active where it is called: where one could supply
+            // either method it would look up, the answer is not the class's alone. Refining either name
+            // re-versions the class, which the rule's receiver test checks.
             string name = symbol.ToString();
+            var context = targetClass.Context;
+            if (context.HasRefinements) {
+                using (context.ClassHierarchyLocker()) {
+                    if (context.IsRefinementSensitive(targetClass, name) || context.IsRefinementSensitive(targetClass, Symbols.RespondToMissing)) {
+                        return false;
+                    }
+                }
+            }
             int version;
             var lookup = targetClass.GetMethodLookup(name, out version);
             if (version < 0) {
@@ -129,12 +135,14 @@ namespace IronRuby.Runtime.Calls {
                 return false;
             }
 
-            var members = libraryMethod.GetMembers();
-            if (members.Length == 0 || members[0].Name != "SendMessage") {
+            // the first overload's method only (GetMembers would reflect upon every overload):
+            var overloads = libraryMethod.MethodBases;
+            var member = (overloads.Length > 0) ? overloads[0].ReflectionInfo : null;
+            if (member == null || member.Name != "SendMessage") {
                 return false;
             }
 
-            switch (members[0].DeclaringType.FullName) {
+            switch (member.DeclaringType.FullName) {
                 case "IronRuby.Builtins.KernelOps": _send = method; return true;
                 case "IronRuby.Builtins.BasicObjectOps": _basicSend = method; return true;
                 default: return false;
@@ -176,6 +184,13 @@ namespace IronRuby.Runtime.Calls {
         /// </summary>
         internal static bool MaySpecialize(RubyMemberInfo/*!*/ method) {
             return IsKernelMethod(method, ref _respondTo, "RespondTo") || IsSendMethod(method);
+        }
+
+        /// <summary>
+        /// Kernel#send and BasicObject#__send__: the call they make is bound in their place (TryBuildSend), and has no frame of its own.
+        /// </summary>
+        internal static bool IsSend(RubyMemberInfo/*!*/ method) {
+            return IsSendMethod(method);
         }
     }
 }

@@ -18,7 +18,13 @@ namespace IronRuby.Prism {
     public static class PrismSerialize {
         private delegate void SerializeCall(IntPtr buffer, IntPtr source, nuint size, IntPtr data);
 
+        // Every call into prism's parser goes through PrismNative.WithParserStack: the parser is recursive C,
+        // and a deeply nested source needs more native stack than the calling thread may have.
         private static byte[]/*!*/ Serialize(SerializeCall/*!*/ call, byte[]/*!*/ source, byte[] options) {
+            return PrismNative.WithParserStack(source.Length, () => SerializeHere(call, source, options));
+        }
+
+        private static byte[]/*!*/ SerializeHere(SerializeCall/*!*/ call, byte[]/*!*/ source, byte[] options) {
             PrismNative.EnsureResolver();
 
             IntPtr buffer = IntPtr.Zero;
@@ -58,6 +64,10 @@ namespace IronRuby.Prism {
         }
 
         public static bool ParseSuccess(byte[]/*!*/ source, byte[] options) {
+            return PrismNative.WithParserStack(source.Length, () => ParseSuccessHere(source, options));
+        }
+
+        private static bool ParseSuccessHere(byte[]/*!*/ source, byte[] options) {
             PrismNative.EnsureResolver();
 
             GCHandle pinnedSource = GCHandle.Alloc(source.Length == 0 ? new byte[1] : source, GCHandleType.Pinned);
@@ -77,6 +87,15 @@ namespace IronRuby.Prism {
         /// Prism.parse(raise_error: ...) turns into an exception.
         /// </summary>
         public static int ErrorsFormat(byte[]/*!*/ source, byte[] options, int formatType, out byte[] formatted) {
+            var result = PrismNative.WithParserStack(source.Length, () => {
+                int level = ErrorsFormatHere(source, options, formatType, out byte[] text);
+                return (level, text);
+            });
+            formatted = result.text;
+            return result.level;
+        }
+
+        private static int ErrorsFormatHere(byte[]/*!*/ source, byte[] options, int formatType, out byte[] formatted) {
             PrismNative.EnsureResolver();
 
             IntPtr buffer = IntPtr.Zero;
@@ -122,6 +141,7 @@ namespace IronRuby.Prism {
                     case "local": return PrismNative.pm_string_query_local(p, n, encodingName);
                     case "constant": return PrismNative.pm_string_query_constant(p, n, encodingName);
                     case "method_name": return PrismNative.pm_string_query_method_name(p, n, encodingName);
+                    case "keyword": return PrismNative.pm_string_query_keyword(p, n, encodingName);
                     default: throw new ArgumentException("unknown query: " + kind, nameof(kind));
                 }
             } finally {

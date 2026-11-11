@@ -15,9 +15,7 @@
 
 using System;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
 
 namespace IronRuby.Builtins {
@@ -29,8 +27,8 @@ namespace IronRuby.Builtins {
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance | RubyMethodAttributes.Empty)]
         public static object Reinitialize(object self) {
             // takes no arguments: Object.new(1), and a `super` passing arguments up to here, are
-            // "wrong number of arguments (given 1, expected 0)" in MRI
-            return self;
+            // "wrong number of arguments (given 1, expected 0)" in MRI; answers nil, as MRI's does
+            return null;
         }
 
         #region singleton_method_added, singleton_method_removed, singleton_method_undefined, method_missing
@@ -53,9 +51,29 @@ namespace IronRuby.Builtins {
         // This method is a binder intrinsic and the behavior of the binder needs to be adjusted appropriately if changed.
         [RubyMethod("method_missing", RubyMethodAttributes.PrivateInstance)]
         [RubyStackTraceHidden]
-        public static object MethodMissing(RubyContext/*!*/ context, object/*!*/ self, [NotNull]RubySymbol/*!*/ name, params object[]/*!*/ args) {
-            // the arguments of the call that found no method are what NoMethodError#args reports
-            throw NoMethodErrorOps.SetArguments(RubyExceptions.CreateMethodMissing(context, self, name.ToString()), args);
+        public static object MethodMissing(RubyScope/*!*/ scope, object/*!*/ self, [NotNull]RubySymbol/*!*/ name, params object[]/*!*/ args) {
+            var context = scope.RubyContext;
+            // the arguments of the call that found no method are what NoMethodError#args reports,
+            // and the way the call was made (implicit receiver or not) is what #private_call? reports
+            bool variableCall = RubyOps.MethodMissingVariableCall && args.Length == 0;
+            RubyOps.MethodMissingVariableCall = false;
+            if (variableCall) {
+                // a bare name: MRI's NameError, as the call would have raised without a method_missing
+                RubyOps.MethodMissingPrivateCall = false;
+                var nameError = RubyExceptions.CreateUndefinedLocalOrMethod(context, self, name.ToString());
+                // MRI's are those of the frame that called this: the method_missing that called super
+                RubyExceptionData.GetInstance(nameError).LocalVariables = scope.GetLocalVariableSymbols();
+                throw nameError;
+            }
+            var error = NoMethodErrorOps.SetArguments(RubyExceptions.CreateMethodMissing(context, self, name.ToString()), args);
+            RubyExceptionData.GetInstance(error).PrivateCall = RubyOps.MethodMissingPrivateCall;
+            RubyOps.MethodMissingPrivateCall = false;
+            throw error;
+        }
+
+        [RubyMethod("method_missing", RubyMethodAttributes.PrivateInstance)]
+        public static object MethodMissing(object/*!*/ self) {
+            throw RubyExceptions.CreateArgumentError("no method name given");
         }
 
         #endregion
@@ -69,6 +87,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 0
         [RubyMethod("__send__")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
             return KernelOps.SendMessage(storage, scope, self, methodName);
@@ -76,6 +95,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 0&
         [RubyMethod("__send__")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
             return KernelOps.SendMessage(storage, scope, block, self, methodName);
@@ -83,6 +103,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 1
         [RubyMethod("__send__")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1) {
@@ -91,6 +112,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 1&
         [RubyMethod("__send__")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1) {
@@ -99,6 +121,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 2
         [RubyMethod("__send__")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1, object arg2) {
@@ -107,6 +130,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 2&
         [RubyMethod("__send__")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1, object arg2) {
@@ -115,6 +139,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 3
         [RubyMethod("__send__")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1, object arg2, object arg3) {
@@ -123,6 +148,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 3&
         [RubyMethod("__send__")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1, object arg2, object arg3) {
@@ -131,6 +157,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: N
         [RubyMethod("__send__")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, RubyArray, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             params object[]/*!*/ args) {
@@ -139,6 +166,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: N&
         [RubyMethod("__send__")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, RubyArray, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             params object[]/*!*/ args) {
@@ -149,16 +177,36 @@ namespace IronRuby.Builtins {
 
         #region ==, !=, !, equal?
 
-        // equal? is an alias of == in BasicObject, so both names sit on both overloads (an
-        // UnboundMethod for one is == to one for the other).
+        // BasicObject#== and #equal? are both rb_obj_equal (identity) in CRuby, but they are two
+        // methods: a class that overrides == (Set, a String subclass) must not change equal?. For
+        // a Ruby-defined class BaseEquals ends in RubyObject.Equals - which calls the Ruby == - or
+        // in a CLR base's Equals (MutableString compares contents), so equal? must not use it:
+        // a == that starts with `equal?(other)` would recurse until the stack overflows.
         [RubyMethod("==")]
-        [RubyMethod("equal?")]
         public static bool ValueEquals([NotNull]IRubyObject/*!*/ self, object other) {
             return self.BaseEquals(other);
         }
 
-        [RubyMethod("==")]
+        // An overload for each of =='s, so that to Ruby the two are still the one method MRI defines
+        // them with (BasicObject.instance_method(:equal?) == BasicObject.instance_method(:==)).
         [RubyMethod("equal?")]
+        [SameRubyMethod("ValueEquals")]
+        public static bool IsEqual([NotNull]IRubyObject/*!*/ self, object other) {
+            return ReferenceEquals(self, other);
+        }
+
+        [RubyMethod("equal?")]
+        [SameRubyMethod("ValueEquals")]
+        public static bool IsEqual(object self, object other) {
+            // Integer, Float, true/false etc. are CLR value types boxed per use: their identity is
+            // their value (CRuby's immediates). Everything else is identical only to itself.
+            if (self is ValueType) {
+                return Object.Equals(self, other);
+            }
+            return ReferenceEquals(self, other);
+        }
+
+        [RubyMethod("==")]
         public static bool ValueEquals(object self, object other) {
             // a String, Regexp or Time compares its contents in Equals; for them this is identity
             if (self is MutableString || self is RubyRegex || self is RubyTime) {
@@ -226,8 +274,13 @@ namespace IronRuby.Builtins {
             return RubyUtils.Evaluate(code, scope, self, singleton, immediate.IsSingletonClass ? null : immediate, file, line);
         }
 
+        // Not [NotNull] params: a lone nil argument binds as the params array itself, and
+        // [NotNull] made instance_exec(nil) { } a TypeError - which is every ActiveRecord
+        // association scope, `relation.instance_exec(owner, &scope)` with no owner.
         [RubyMethod("instance_exec")]
-        public static object InstanceExec(BlockParam block, object self, [NotNull]params object[]/*!*/ args) {
+        [ReceivesKeywords]
+        public static object InstanceExec(BlockParam block, object self, params object[] args) {
+            args = args ?? new object[] { null };
             if (block == null) {
                 throw RubyExceptions.CreateLocalJumpError("no block given");
             }

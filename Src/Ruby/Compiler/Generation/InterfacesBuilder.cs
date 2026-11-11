@@ -12,13 +12,11 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_REFEMIT
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Reflection.Emit;
 using System.Runtime.Serialization;
-using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 
@@ -39,10 +37,8 @@ namespace IronRuby.Compiler.Generation {
             foreach (Type interfaceType in _interfaces) {
                 if (interfaceType != typeof(IRubyType) && 
                     interfaceType != typeof(IRubyObject) && 
-#if FEATURE_CUSTOM_TYPE_DESCRIPTOR
                     interfaceType != typeof(ICustomTypeDescriptor) &&
                     interfaceType != typeof(ISerializable) &&
-#endif
                     interfaceType != typeof(IRubyDynamicMetaObjectProvider)) {
                     _tb.AddInterfaceImplementation(interfaceType);
                     ImplementInterface(emitter, interfaceType, doneTypes);
@@ -63,4 +59,3 @@ namespace IronRuby.Compiler.Generation {
         }
     }
 }
-#endif

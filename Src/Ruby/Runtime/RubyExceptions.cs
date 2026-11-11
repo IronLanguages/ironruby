@@ -14,11 +14,11 @@
  * ***************************************************************************/
 
 using System;
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Security;
 using IronRuby.Builtins;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime.Calls;
@@ -200,21 +200,16 @@ namespace IronRuby.Runtime {
             return CreateTypeError("wrong argument type {0} (expected {1})", MessageTypeName(context.GetClassDisplayName(param)), MessageTypeName(type));
         }
 
-        public static Exception/*!*/ CannotConvertTypeToTargetType(RubyContext/*!*/ context, object param, string/*!*/ toType) {
-            Assert.NotNull(context, toType);
-            return CreateTypeConversionError(context.GetClassName(param), toType);
-        }
-
         public static Exception/*!*/ CreateAllocatorUndefinedError(RubyClass/*!*/ rubyClass) {
-            return CreateTypeError("allocator undefined for {0}", rubyClass.Name);
+            return CreateTypeError("allocator undefined for {0}", rubyClass.GetNonNullName(rubyClass.Context));
         }
 
         public static Exception/*!*/ CreateNotClrTypeError(RubyClass/*!*/ rubyClass) {
-            return CreateTypeError("`{0}' doesn't represent a CLR type", rubyClass.Name);
+            return CreateTypeError("'{0}' doesn't represent a CLR type", rubyClass.Name);
         }
 
         public static Exception/*!*/ CreateNotClrNamespaceError(RubyModule/*!*/ rubyModule) {
-            return CreateTypeError("`{0}' doesn't represent a CLR namespace", rubyModule.Name);
+            return CreateTypeError("'{0}' doesn't represent a CLR namespace", rubyModule.Name);
         }
 
         public static Exception/*!*/ CreateMissingDefaultConstructorError(RubyClass/*!*/ rubyClass, string/*!*/ initializerOwnerName) {
@@ -223,7 +218,7 @@ namespace IronRuby.Runtime {
             Type baseType = rubyClass.GetUnderlyingSystemType().BaseType;
             Debug.Assert(baseType != null);
 
-            return CreateTypeError("can't allocate class `{1}' that derives from type `{0}' with no default constructor;" +
+            return CreateTypeError("can't allocate class '{1}' that derives from type '{0}' with no default constructor;" +
                 " define {1}#new singleton method instead of {2}#initialize",
                 rubyClass.Context.GetTypeName(baseType, true), rubyClass.Name, initializerOwnerName
             );
@@ -248,15 +243,11 @@ namespace IronRuby.Runtime {
             return MessageTypeName(context.GetClassOf(value).Name);
         }
 
-        public static Exception/*!*/ CreateReturnTypeError(string/*!*/ className, string/*!*/ methodName, string/*!*/ returnTypeName) {
-            return CreateTypeError("{0}#{1} should return {2}", className, methodName, returnTypeName);
-        }
-
         /// <summary>
         /// An object promised a conversion and then broke the promise: it answers #to_ary but what
         /// came back is not an Array. MRI names both ends of the failed conversion and what was
         /// actually handed over:
-        ///   "can't convert Foo into Array (Foo#to_ary gives NilClass)"
+        ///   "can't convert Foo to Array (Foo#to_ary gives NilClass)"
         /// The class of the returned value is spelled as the class, not by value, so a nil result
         /// reads NilClass - unlike the "no implicit conversion of nil into Array" message, which is
         /// about the argument rather than about what a conversion method gave back.
@@ -272,7 +263,7 @@ namespace IronRuby.Runtime {
                 resultClass = (context != null) ? context.GetClassDisplayName(result) : result.GetType().Name;
             }
 
-            return CreateTypeError("can't convert {0} into {1} ({0}#{2} gives {3})",
+            return CreateTypeError("can't convert {0} to {1} ({0}#{2} gives {3})",
                 MessageTypeName(className), returnTypeName, methodName, resultClass);
         }
 
@@ -305,14 +296,14 @@ namespace IronRuby.Runtime {
 
         public static Exception/*!*/ CreateUndefinedMethodError(RubyModule/*!*/ module, string/*!*/ methodName) {
             return WithNameAndReceiver(module.Context,
-                CreateNameError("undefined method `{0}' for {2} `{1}'",
+                CreateNameError("undefined method '{0}' for {2} '{1}'",
                     methodName, GetModuleErrorName(module), module.IsClass ? "class" : "module"),
                 methodName, module);
         }
 
         /// <summary>
         /// How MRI names a module in an error message. A metaclass is reported as the class or
-        /// module it is attached to ("for class `String'" rather than "#&lt;Class:String&gt;"),
+        /// module it is attached to ("for class 'String'" rather than "#&lt;Class:String&gt;"),
         /// but the singleton class of an ordinary object keeps its own description. An anonymous
         /// module has no Name at all, so it falls back to #to_s - which is what the specs
         /// interpolate into their expected messages.
@@ -346,18 +337,35 @@ namespace IronRuby.Runtime {
             //   1 < nil   => "comparison of Integer with nil failed"
             //   1 < "a"   => "comparison of Integer with String failed"
             //   [1,:b].max => "comparison of Integer with :b failed"
-            string selfClass = MessageTypeName(context.GetClassOf(self).Name);
+            // An anonymous class has no name; MRI prints it the way #inspect does (#<Class:0x...>).
+            // the receiver is always named by class, so nil <=> 1 is "comparison of NilClass with 1 failed"
+            string selfClass = context.GetClassOf(self).GetNonNullName(context);
+            // An Integer is immediate in MRI only while it is a Fixnum (62 bits); a Bignum is
+            // spelled by class like any other object.
             string otherClass;
-            if (other == null || other is bool || other is int || other is long || other is BigInteger || other is double || other is RubySymbol) {
+            if (other == null || other is bool || other is int || other is double || other is RubySymbol
+                || (other is long && IsFixnumRange((long)other))
+                || (other is BigInteger && IsFixnumRange((BigInteger)other))) {
                 try {
                     otherClass = context.Inspect(other).ToString();
                 } catch (Exception) {
-                    otherClass = MessageTypeName(context.GetClassOf(other).Name);
+                    otherClass = MessageTypeName(context.GetClassOf(other).GetNonNullName(context));
                 }
             } else {
-                otherClass = MessageTypeName(context.GetClassOf(other).Name);
+                otherClass = MessageTypeName(context.GetClassOf(other).GetNonNullName(context));
             }
             return CreateArgumentError("comparison of {0} with {1} failed", selfClass, otherClass);
+        }
+
+        private static readonly BigInteger FixnumMax = BigInteger.Pow(2, 62) - 1;
+        private static readonly BigInteger FixnumMin = -BigInteger.Pow(2, 62);
+
+        private static bool IsFixnumRange(BigInteger value) {
+            return value >= FixnumMin && value <= FixnumMax;
+        }
+
+        private static bool IsFixnumRange(long value) {
+            return value >= -(1L << 62) && value <= (1L << 62) - 1;
         }
 
         #endregion
@@ -438,10 +446,35 @@ namespace IronRuby.Runtime {
         /// a pair with UTF-8 at one end is one hop and any other pair is two.
         /// </summary>
         public static RubyEncoding/*!*/[]/*!*/ ConversionPath(RubyEncoding/*!*/ source, RubyEncoding/*!*/ destination) {
-            if (source == RubyEncoding.UTF8 || destination == RubyEncoding.UTF8) {
+            RubyEncoding fromVia = source.TranscodingIntermediate, toVia = destination.TranscodingIntermediate;
+            if (fromVia == null && toVia == null) {
+                if (source == RubyEncoding.UTF8 || destination == RubyEncoding.UTF8) {
+                    return new[] { source, destination };
+                }
+                return new[] { source, RubyEncoding.UTF8, destination };
+            }
+
+            // stateless-ISO-2022-JP goes through EUC-JP (its KDDI variant through UTF8-KDDI), and
+            // from there through UTF-8 as anything else does
+            if (fromVia == destination || toVia == source) {
                 return new[] { source, destination };
             }
-            return new[] { source, RubyEncoding.UTF8, destination };
+            var path = new List<RubyEncoding> { source };
+            if (fromVia != null && fromVia != destination) {
+                path.Add(fromVia);
+            }
+            RubyEncoding last = path[path.Count - 1];
+            RubyEncoding next = toVia ?? destination;
+            if (next != last) {
+                if (last != RubyEncoding.UTF8 && next != RubyEncoding.UTF8) {
+                    path.Add(RubyEncoding.UTF8);
+                }
+                if (toVia != null) {
+                    path.Add(toVia);
+                }
+            }
+            path.Add(destination);
+            return path.ToArray();
         }
 
         /// <summary>
@@ -452,7 +485,8 @@ namespace IronRuby.Runtime {
         /// </summary>
         public static string/*!*/ TranscoderName(RubyEncoding/*!*/ encoding) {
             string name = encoding.Name;
-            return name.StartsWith("Windows-", StringComparison.Ordinal) || name.StartsWith("mac", StringComparison.Ordinal)
+            // Windows-31J's own tables (japanese_sjis) spell it as Encoding#name does
+            return (name.StartsWith("Windows-", StringComparison.Ordinal) && encoding != RubyEncoding.SJIS) || name.StartsWith("mac", StringComparison.Ordinal)
                 ? name.ToUpperInvariant() : name;
         }
 
@@ -466,7 +500,7 @@ namespace IronRuby.Runtime {
             string stageSource = TranscoderName(path[stage]);
             string stageDestination = TranscoderName(path[stage + 1]);
 
-            if (stageSource == path[0].Name && stageDestination == path[path.Length - 1].Name) {
+            if (stage == 0 && stage + 2 == path.Length) {
                 return FormatMessage("{0} from {1} to {2}", dumped, stageSource, stageDestination);
             }
 
@@ -505,17 +539,6 @@ namespace IronRuby.Runtime {
             );
         }
 
-        public static Exception/*!*/ CreateTranscodingError(DecoderFallbackException/*!*/ e, RubyEncoding/*!*/ fromEncoding, RubyEncoding/*!*/ toEncoding) {
-            throw new UndefinedConversionError(
-                FormatMessage(
-                    "\"{0}\" to {2} in conversion from {1} to UTF-8 to {2}",
-                    BitConverter.ToString(e.BytesUnknown),
-                    fromEncoding,
-                    toEncoding
-                )
-            );        
-        }
-
         #endregion
 
         #region MissingMethodException
@@ -530,21 +553,26 @@ namespace IronRuby.Runtime {
 
         public static Exception/*!*/ CreateUndefinedLocalOrMethod(RubyContext/*!*/ context, object self, string/*!*/ name) {
             return WithNameAndReceiver(context,
-                CreateNameError(FormatMethodMissingMessage(context, self, name, "undefined local variable or method `{0}' for {1}")), name, self);
+                CreateNameError(FormatMethodMissingMessage(context, self, name, "undefined local variable or method '{0}' for {1}")), name, self);
         }
 
         public static Exception/*!*/ CreatePrivateMethodCalled(RubyContext/*!*/ context, object self, string/*!*/ name) {
             return WithNameAndReceiver(context,
-                CreateMethodMissing(FormatMethodMissingMessage(context, self, name, "private method `{0}' called for {1}")), name, self);
+                CreateMethodMissing(FormatMethodMissingMessage(context, self, name, "private method '{0}' called for {1}")), name, self);
         }
 
         public static Exception/*!*/ CreateProtectedMethodCalled(RubyContext/*!*/ context, object self, string/*!*/ name) {
             return WithNameAndReceiver(context,
-                CreateMethodMissing(FormatMethodMissingMessage(context, self, name, "protected method `{0}' called for {1}")), name, self);
+                CreateMethodMissing(FormatMethodMissingMessage(context, self, name, "protected method '{0}' called for {1}")), name, self);
+        }
+
+        public static Exception/*!*/ CreateNoSuperclassMethod(RubyContext/*!*/ context, object self, string/*!*/ name) {
+            return WithNameAndReceiver(context,
+                CreateMethodMissing(FormatMethodMissingMessage(context, self, name, "super: no superclass method '{0}' for {1}")), name, self);
         }
 
         public static string/*!*/ FormatMethodMissingMessage(RubyContext/*!*/ context, object self, string/*!*/ name) {
-            return FormatMethodMissingMessage(context, self, name, "undefined method `{0}' for {1}");
+            return FormatMethodMissingMessage(context, self, name, "undefined method '{0}' for {1}");
         }
 
         [ThreadStatic]
@@ -587,18 +615,24 @@ namespace IronRuby.Runtime {
                 return kind + (String.IsNullOrEmpty(moduleName) ? SafeInspect(context, obj) : moduleName);
             }
 
-            // An object that carries a singleton class is spelled by inspect (that is how MRI keeps
-            // "main" and "#<Object:0x...>" for objects with singleton methods).
+            // An object that carries a singleton class is spelled the way the default #to_s would
+            // (rb_any_to_s: "#<Object:0x...>"), whatever #inspect it defines; the top-level object
+            // is "main".
             RubyClass immediate = context.GetImmediateClassOf(obj);
             if (immediate != null && immediate.IsSingletonClass) {
-                return SafeInspect(context, obj);
+                var globalScope = context.MainGlobalScope;
+                if (globalScope != null && ReferenceEquals(globalScope.MainObject, obj)) {
+                    return "main";
+                }
+                return RubyUtils.ObjectToMutableString(context, obj).ToString();
             }
 
-            // GetClassDisplayName is empty for an anonymous class; MRI prints "#<Class:0x...>".
+            // An anonymous class has no name; MRI then shows how the class inspects
+            // ("#<Class:0x...>", or whatever inspect it defines).
             var cls = context.GetClassOf(obj);
             string className = RubyName(context, cls);
             if (String.IsNullOrEmpty(className)) {
-                className = RubyExceptionData.GetDefaultMessage(cls).ToString();
+                className = SafeInspect(context, cls);
             }
             return "an instance of " + MessageTypeName(className);
         }
@@ -709,21 +743,34 @@ namespace IronRuby.Runtime {
             return new ExternalException(FormatMessage(message, args));
         }
 
-        public static Exception/*!*/ CreateSecurityError(string/*!*/ message, params object[] args) {
-            throw new SecurityException(FormatMessage(message, args));
+        public static Exception/*!*/ CreateEncodingCompatibilityError(RubyEncoding/*!*/ encoding1, RubyEncoding/*!*/ encoding2) {
+            return new EncodingCompatibilityError(FormatMessage("incompatible character encodings: {0} and {1}", encoding1.InspectName, encoding2.InspectName));
         }
 
-        public static Exception/*!*/ CreateEncodingCompatibilityError(RubyEncoding/*!*/ encoding1, RubyEncoding/*!*/ encoding2) {
-            return new EncodingCompatibilityError(FormatMessage("incompatible character encodings: {0} and {1}", encoding1.Name, encoding2.Name));
+        /// <summary>
+        /// MRI's rb_must_asciicompat: a string that is to be read as a number (or a format) has to
+        /// be in an ASCII-compatible encoding.
+        /// </summary>
+        public static Exception/*!*/ CreateAsciiIncompatibleEncodingError(RubyEncoding/*!*/ encoding) {
+            return new EncodingCompatibilityError(FormatMessage("ASCII incompatible encoding: {0}", encoding.Name));
         }
 
         #region Errno
 
-        // TODO: initialize errno property
-
         public static string/*!*/ MakeMessage(string message, string/*!*/ baseMessage) {
             Assert.NotNull(baseMessage);
-            return (message != null) ? String.Concat(baseMessage, " - ", message) : baseMessage;
+            if (message == null) {
+                return baseMessage;
+            }
+            // A message that already leads with the error's own text ("No such file or directory
+            // - path", as several callers build it) is complete: MRI never says it twice.
+            if (message.StartsWith(baseMessage, StringComparison.Ordinal)) {
+                string rest = message.Substring(baseMessage.Length);
+                if (rest.Length == 0 || rest.StartsWith(" - ", StringComparison.Ordinal) || rest.StartsWith(" @ ", StringComparison.Ordinal)) {
+                    return message;
+                }
+            }
+            return String.Concat(baseMessage, " - ", message);
         }
 
         public static string/*!*/ MakeMessage(ref MutableString message, string/*!*/ baseMessage) {
@@ -731,6 +778,27 @@ namespace IronRuby.Runtime {
             string result = MakeMessage(message != null ? message.ConvertToString() : null, baseMessage);
             message = MutableString.Create(result, message != null ? message.Encoding : RubyEncoding.UTF8);
             return result;
+        }
+
+        /// <summary>
+        /// The Errno exception MRI raises for <paramref name="errno"/>: an instance of the Errno class
+        /// for the number (most of them exist only once the prelude has made them), with
+        /// <paramref name="detail"/> after the strerror text. A plain SystemCallError if there is none.
+        /// </summary>
+        public static Exception/*!*/ CreateErrno(RubyContext/*!*/ context, int errno, string detail) {
+            string name = RubyErrno.GetName(errno);
+            object errnoModule, errnoClass;
+            if (name != null &&
+                context.ObjectClass.TryGetConstant(null, "Errno", out errnoModule) &&
+                errnoModule is RubyModule module && module.TryGetConstant(null, name, out errnoClass) &&
+                errnoClass is RubyClass cls) {
+
+                var site = cls.NewSite;
+                if (site.Target(site, cls, detail != null ? MutableString.Create(detail, RubyEncoding.UTF8) : null) is Exception result) {
+                    return result;
+                }
+            }
+            return new ExternalException(MakeMessage(detail, RubyErrno.GetMessage(errno)), errno);
         }
 
         public static Exception/*!*/ CreateEEXIST() {
@@ -758,7 +826,7 @@ namespace IronRuby.Runtime {
         }
 
         public static Exception/*!*/ CreateENOENT() {
-            return new FileNotFoundException("No such file or directory");
+            return new FileNotFoundException(RubyErrno.GetMessage("ENOENT"));
         }
 
         public static Exception/*!*/ CreateENOENT(string/*!*/ message, params object[] args) {

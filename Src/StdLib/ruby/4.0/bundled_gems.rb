@@ -122,6 +122,15 @@ module Gem::BUNDLED_GEMS # :nodoc:
       false
     end
 
+    # IronRuby: fiddle, syslog, nkf, win32ole and bigdecimal are IronRuby's own,
+    # in its archdir (Src/StdLib/ironruby) where CRuby keeps C extensions, and no
+    # gem can replace them. They are not leaving anything, so there is nothing to
+    # warn of.
+    if RUBY_ENGINE == "ironruby"
+      resolved = $LOAD_PATH.resolve_feature_path(feature) rescue nil
+      return if resolved && resolved[1].start_with?(ARCHDIR)
+    end
+
     if suppress_list = Thread.current[:__bundled_gems_warning_suppression]
       return if suppress_list.include?(name) || suppress_list.include?(feature)
     end

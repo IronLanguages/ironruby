@@ -16,11 +16,10 @@
 using System;
 using IronRuby.Builtins;
 using System.Text;
-using System.Diagnostics;
 using System.Collections.Generic;
 using IronRuby.Runtime;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
+using System.Threading;
 
 namespace IronRuby.Tests {
     using MSC = MutableString.Character;
@@ -132,15 +131,6 @@ namespace IronRuby.Tests {
             Assert(a.GetHashCode() == b.GetHashCode());
             Assert(a.GetHashCode() == c.GetHashCode());
             Assert(b.GetHashCode() == c.GetHashCode());
-
-            // TODO: do we need this property?
-            // non-ASCII characters:
-            // a = MutableString.Create("α", RubyEncoding.UTF8);
-            // b = MutableString.Create("α", RubyEncoding.SJIS);
-            // c = MutableString.CreateBinary(Encoding.UTF8.GetBytes("α"), RubyEncoding.Binary);
-            // Assert(a.GetHashCode() != b.GetHashCode());
-            // Assert(a.GetHashCode() != c.GetHashCode());
-            // Assert(b.GetHashCode() != c.GetHashCode());
         }
 
         [Options(NoRuntime = true)]
@@ -379,9 +369,9 @@ namespace IronRuby.Tests {
             x = MutableString.CreateBinary(b, RubyEncoding.UTF8);
             Assert(x.GetCharacterCount() == 6);
 
-            // TODO: throws an exception
-            //x = MutableString.CreateBinary(b, RubyEncoding.UTF8);
-            //Assert(x.GetCharCount() == 7);
+            // UTF-16 code units: the invalid bytes, a, b and a surrogate pair:
+            x = MutableString.CreateBinary(b, RubyEncoding.UTF8);
+            Assert(x.GetCharCount() == 7);
 
             x = MutableString.CreateBinary(b, RubyEncoding.UTF8);
             Assert(x.GetByteCount() == b.Length);
@@ -681,41 +671,6 @@ namespace IronRuby.Tests {
             Assert(x.Equals(MS("", e)));
         }
 
-        // ASCII <-> ASCII
-        // non-ASCII -> 0x80 -> '\u0080'
-        public class NonInvertibleEncoding : Encoding {
-            public override int GetBytes(char[] chars, int charIndex, int charCount, byte[] bytes, int byteIndex) {
-                for (int i = 0; i < charCount; i++) {
-                    char c = chars[charIndex + i];
-                    bytes[byteIndex + i] = c > '\u007f' ? (byte)0x80 : (byte)c;
-                }
-                return charCount;
-            }
-
-            public override int GetChars(byte[] bytes, int byteIndex, int byteCount, char[] chars, int charIndex) {
-                for (int i = 0; i < byteCount; i++) {
-                    chars[charIndex + i] = (char)bytes[i + byteIndex];
-                }
-                return byteCount;
-            }
-
-            public override int GetByteCount(char[] chars, int index, int count) {
-                return count;
-            }
-
-            public override int GetCharCount(byte[] bytes, int index, int count) {
-                return count;
-            }
-
-            public override int GetMaxByteCount(int charCount) {
-                return charCount;
-            }
-
-            public override int GetMaxCharCount(int byteCount) {
-                return byteCount;
-            }
-        }
-
         [Options(NoRuntime = true)]
         public void MutableString_SwitchRepr() {
             // \u{12345} in UTF-8:
@@ -735,45 +690,40 @@ namespace IronRuby.Tests {
             result = MutableString.AppendUnicodeRepresentation(new StringBuilder(), Encoding.UTF8.GetString(u215c), MutableString.Escape.NonAscii, -1, -1);
             Assert(result.ToString() == "\\u215C");
 
-            //var incompleteChar = MS(new byte[] { 0xF0, 0x92 }, RubyEncoding.UTF8);
-            //AssertExceptionThrown<DecoderFallbackException>(() => incompleteChar.Append('x'));
-
-            // TODO:
-            // var e = RubyEncoding.GetRubyEncoding(new NonInvertibleEncoding());
+            // appending to an incomplete character keeps the bytes, as "\xF0\x92" << "x" does:
+            var incompleteChar = MS(new byte[] { 0xF0, 0x92 }, RubyEncoding.UTF8);
+            incompleteChar.Append('x');
+            Assert(incompleteChar.ToByteArray().ValueEquals(new byte[] { 0xF0, 0x92, (byte)'x' }));
         }
         
         [Options(NoRuntime = true)]
         public void MutableString_Concatenate() {
-#if TODO
             var utf8 = new byte[] { 0xe2, 0x85, 0x9c };
             var sjis = new byte[] { 0x82, 0xA0 };
             var ascii = new byte[] { 0x20 };
 
+            // the same encoding:
             Test_Concatenate(utf8, RubyEncoding.Binary, utf8, RubyEncoding.Binary, RubyEncoding.Binary);
-            Test_Concatenate(utf8, RubyEncoding.Binary, sjis, RubyEncoding.KCodeSJIS, RubyEncoding.Binary);
-            Test_Concatenate(utf8, RubyEncoding.Binary, utf8, RubyEncoding.KCodeUTF8, RubyEncoding.Binary);
-
-            Test_Concatenate(sjis, RubyEncoding.KCodeSJIS, utf8, RubyEncoding.Binary, RubyEncoding.Binary);
-            Test_Concatenate(sjis, RubyEncoding.KCodeSJIS, sjis, RubyEncoding.KCodeSJIS, RubyEncoding.KCodeSJIS);
-            Test_Concatenate(sjis, RubyEncoding.KCodeSJIS, utf8, RubyEncoding.KCodeUTF8, RubyEncoding.Binary);
-            Test_Concatenate(sjis, RubyEncoding.KCodeSJIS, utf8, RubyEncoding.UTF8, RubyEncoding.Binary);
-
-            Test_Concatenate(utf8, RubyEncoding.KCodeUTF8, utf8, RubyEncoding.Binary, RubyEncoding.Binary);
-            Test_Concatenate(utf8, RubyEncoding.KCodeUTF8, sjis, RubyEncoding.KCodeSJIS, RubyEncoding.Binary);
-            Test_Concatenate(utf8, RubyEncoding.KCodeUTF8, utf8, RubyEncoding.KCodeUTF8, RubyEncoding.KCodeUTF8);
-            Test_Concatenate(utf8, RubyEncoding.KCodeUTF8, utf8, RubyEncoding.UTF8, RubyEncoding.KCodeUTF8);
-
-            Test_Concatenate(utf8, RubyEncoding.UTF8, sjis, RubyEncoding.KCodeSJIS, RubyEncoding.Binary);
-            Test_Concatenate(utf8, RubyEncoding.UTF8, utf8, RubyEncoding.KCodeUTF8, RubyEncoding.KCodeUTF8);
+            Test_Concatenate(sjis, RubyEncoding.SJIS, sjis, RubyEncoding.SJIS, RubyEncoding.SJIS);
             Test_Concatenate(utf8, RubyEncoding.UTF8, utf8, RubyEncoding.UTF8, RubyEncoding.UTF8);
 
+            // an ASCII-only side takes the encoding of the other one; two ASCII-only sides take the first one's:
             Test_Concatenate(utf8, RubyEncoding.UTF8, ascii, RubyEncoding.Binary, RubyEncoding.UTF8);
-            Test_Concatenate(ascii, RubyEncoding.Binary, ascii, RubyEncoding.UTF8, RubyEncoding.UTF8);
+            Test_Concatenate(ascii, RubyEncoding.Binary, utf8, RubyEncoding.UTF8, RubyEncoding.UTF8);
+            Test_Concatenate(sjis, RubyEncoding.SJIS, ascii, RubyEncoding.Binary, RubyEncoding.SJIS);
+            Test_Concatenate(ascii, RubyEncoding.Binary, ascii, RubyEncoding.UTF8, RubyEncoding.Binary);
+            Test_Concatenate(ascii, RubyEncoding.UTF8, ascii, RubyEncoding.Binary, RubyEncoding.UTF8);
 
+            // non-ASCII characters in different encodings:
             AssertExceptionThrown<EncodingCompatibilityError>(
                 () => Test_Concatenate(utf8, RubyEncoding.Binary, utf8, RubyEncoding.UTF8, RubyEncoding.Binary)
             );
-#endif
+            AssertExceptionThrown<EncodingCompatibilityError>(
+                () => Test_Concatenate(utf8, RubyEncoding.UTF8, utf8, RubyEncoding.Binary, RubyEncoding.UTF8)
+            );
+            AssertExceptionThrown<EncodingCompatibilityError>(
+                () => Test_Concatenate(sjis, RubyEncoding.SJIS, utf8, RubyEncoding.UTF8, RubyEncoding.SJIS)
+            );
         }
 
         private void Test_Concatenate(byte[]/*!*/ b1, RubyEncoding/*!*/ e1, byte[]/*!*/ b2, RubyEncoding/*!*/ e2, RubyEncoding/*!*/ resultEncoding) {
@@ -1357,28 +1307,28 @@ namespace IronRuby.Tests {
 
         [Options(NoRuntime = true)]
         public void MutableString_ChangeEncoding1() {
-#if TODO
-            var alpha = Encoding.UTF8.GetBytes("α");
-            MutableString s = MutableString.CreateBinary(alpha, RubyEncoding.UTF8);
-
             var SJIS = RubyEncoding.SJIS;
-            var hc2 = MutableString.Create("α", SJIS).GetHashCode();
-            var hc3 = MutableString.CreateBinary(alpha, SJIS).GetHashCode();
-            // TODO: hc2 should be equal to hc3
-            s.ChangeEncoding(SJIS, true);
-            Assert(s.ToString() == "ﾎｱ" && s.Encoding == SJIS && !s.IsBinaryEncoded && (s.GetHashCode() == hc2 || s.GetHashCode() == hc3));
+            var alpha = Encoding.UTF8.GetBytes("α");
+            var sjisAlpha = SJIS.StrictEncoding.GetBytes("α");
 
-            s = MutableString.CreateMutable("α", RubyEncoding.UTF8);
-            s.ChangeEncoding(SJIS, true);
-            Assert(s.ToByteArray().ValueEquals(SJIS.StrictEncoding.GetBytes("α")));
+            // "α".encode("Windows-31J") from either representation:
+            foreach (var s in new[] { MutableString.CreateBinary(alpha, RubyEncoding.UTF8), MutableString.CreateMutable("α", RubyEncoding.UTF8) }) {
+                s.Transcode(RubyEncoding.UTF8, SJIS);
+                Assert(s.Encoding == SJIS && s.ToString() == "α");
+                Assert(s.ToByteArray().ValueEquals(sjisAlpha));
 
-            hc = s.GetHashCode();
-            hc2 = MutableString.Create("α", RubyEncoding.SJIS).GetHashCode();
-            hc3 = MutableString.CreateBinary(alpha, RubyEncoding.SJIS).GetHashCode();
-            
-            s.ChangeEncoding(RubyEncoding.SJIS, true);
-            Assert(s.GetHashCode() == hc2 || s.GetHashCode() == hc3);
-#endif
+                // equal strings hash the same, whatever their representation:
+                var c = MutableString.Create("α", SJIS);
+                var b = MutableString.CreateBinary(sjisAlpha, SJIS);
+                Assert(s.Equals(c) && s.Equals(b));
+                Assert(s.GetHashCode() == c.GetHashCode() && s.GetHashCode() == b.GetHashCode());
+            }
+
+            // "\xCE\xB1".b.force_encoding("UTF-8") keeps the bytes:
+            var f = MutableString.CreateBinary(alpha, RubyEncoding.Binary);
+            f.ForceEncoding(RubyEncoding.UTF8);
+            Assert(f.Encoding == RubyEncoding.UTF8 && f.ToString() == "α");
+            Assert(f.ToByteArray().ValueEquals(alpha));
         }
 
         [Options(NoRuntime = true)]
@@ -1394,6 +1344,538 @@ namespace IronRuby.Tests {
 
             str = MutableString.CreateMutable("ﾎｱ", RubyEncoding.SJIS);
             Assert(!str.ContainsInvalidCharacters());
+        }
+
+        private static MutableString/*!*/ CowSource(int kind) {
+            string text = new string('a', 150) + "bcd efg" + new string('h', 150) + "  \n";
+            switch (kind) {
+                case 0: return MutableString.CreateBinary(Encoding.ASCII.GetBytes(text), RubyEncoding.Binary);
+                case 1: return MutableString.CreateBinary(Encoding.UTF8.GetBytes(text + "é"), RubyEncoding.UTF8);
+                case 2: return MutableString.CreateMutable(RubyEncoding.UTF8).Append(text + "éあ");
+                default: return MutableString.CreateMutable(RubyEncoding.UTF8).Append(text);
+            }
+        }
+
+        // An independent string with the same content and representation.
+        private static MutableString/*!*/ CowFresh(MutableString/*!*/ str) {
+            return str.IsBinary
+                ? MutableString.CreateBinary(str.ToByteArray(), str.Encoding)
+                : MutableString.CreateMutable(str.Encoding).Append(str.ToString());
+        }
+
+        private static string/*!*/ CowRun(Action<MutableString>/*!*/ mutation, MutableString/*!*/ str) {
+            try {
+                mutation(str);
+                return BitConverter.ToString(str.ToByteArray()) + "/" + str.Encoding;
+            } catch (Exception e) {
+                return e.GetType().Name;
+            }
+        }
+
+        /// <summary>
+        /// Copies share their array until one of them is written to (copy-on-write, #89): every way
+        /// of copying, both representations, every kind of write through the MutableString API, on
+        /// the copy and on the original. The other string must not see the write, and the written one
+        /// must end up as an unshared string given the same write would.
+        /// </summary>
+        public void MutableString_CopyOnWrite1() {
+            var copies = new Func<MutableString, MutableString>[] {
+                s => s.Clone(),
+                s => MutableString.Create(s),
+                s => s.CloneDerived(),
+                s => MutableString.CreateMutable(RubyEncoding.Binary).Replace(s),
+                s => s.GetSlice(0, s.GetLength() - 1),
+                s => s.GetSlice(0, s.GetLength()),
+                s => s.CreateFrozenSnapshot().Clone(),
+                // slices from an offset share the array too
+                s => s.GetSlice(1, s.GetLength() - 1),
+                s => s.GetSlice(2, s.GetLength() - 4),
+                s => s.GetSlice(1).GetSlice(2),
+                s => s.GetByteSlice(3, s.GetByteCount() - 3),
+                s => s.Clone().Trim(1, s.GetLength() - 2),
+            };
+
+            var mutations = new Action<MutableString>[] {
+                s => s.Append('Z'),
+                s => s.Append('い'),
+                s => s.Append((byte)'Y'),
+                s => s.Append((byte)0xFE, 3),
+                s => s.Append("str"),
+                s => s.Append(new char[] { 'c', 'd' }),
+                s => s.Append(new byte[] { 1, 2 }),
+                s => s.Append(s),
+                s => s.Append(MutableString.CreateAscii("tail")),
+                s => s.AppendFormat("{0}", 42),
+                s => s.Insert(3, 'I'),
+                s => s.Insert(3, (byte)'J'),
+                s => s.Insert(3, "ins"),
+                s => s.Insert(3, new byte[] { 9, 8 }),
+                s => s.Insert(0, s),
+                s => s.Remove(2, 5),
+                s => s.Remove(0, 1),
+                s => s.Remove(10),
+                s => s.Remove(5, 0),
+                s => s.SetByte(0, 0x41),
+                s => s.SetChar(1, 'Q'),
+                s => s.SetChar(1, 'ü'),
+                s => s.Write(5, new byte[] { 1, 2, 3 }, 0, 3),
+                s => s.Write(s.GetByteCount() + 4, (byte)7, 2),
+                s => s.WriteBytes(2, MutableString.CreateAscii("wb"), 0, 2),
+                s => s.SetLength(s.GetLength() + 20),
+                s => s.SetLength(5),
+                s => s.SetByteCount(s.GetByteCount() + 3),
+                s => s.Reverse(),
+                s => s.Trim(3, 10),
+                s => s.Clear(),
+                s => s.Replace(1, 3, MutableString.CreateAscii("rep")),
+                s => s.Replace(MutableString.CreateAscii("whole")),
+                s => s.TrimExcess().Append('t'),
+                s => s.SwitchToCharacters().Append('u'),
+                s => s.SwitchToBytes().Append((byte)'v'),
+                s => s.PrepareForCharacterWrite().SetChar(0, 'w'),
+                s => { s.ForceEncoding(RubyEncoding.Binary); s.SetByte(2, 0x42); },
+                s => s.Transcode(s.Encoding, RubyEncoding.UTF8),
+                s => {
+                    // what RubyBufferedStream does: make room, then write into the array in place
+                    s.SwitchToBytes();
+                    int n = s.GetByteCount();
+                    s.EnsureCapacity(n + 3);
+                    int start, count;
+                    var bytes = s.GetByteArray(out start, out count);
+                    Assert(start == 0 && count == n);
+                    bytes[0] = 0x58;
+                    bytes[n] = 0x0D;
+                },
+                s => {
+                    int count;
+                    var bytes = s.GetWritableByteArray(out count);
+                    bytes[1] = 0x59;
+                },
+                s => {
+                    // reading the array in place (IO#write): the slice's bytes, wherever they are in it
+                    int start, count;
+                    var bytes = s.GetByteArray(out start, out count);
+                    s.Append(new byte[] { bytes[start], bytes[start + count - 1] });
+                },
+                s => { s.Capacity = s.Capacity + 10; s.SetByte(0, 0x43); },
+                s => {
+                    // an enumeration in progress keeps reading what it started with
+                    var e = s.GetCharacters();
+                    e.MoveNext();
+                    s.SetChar(0, 'E');
+                    e.MoveNext();
+                    s.Append(e.Current.Value);
+                },
+            };
+
+            int checks = 0;
+            for (int kind = 0; kind < 4; kind++) {
+                for (int c = 0; c < copies.Length; c++) {
+                    for (int m = 0; m < mutations.Length; m++) {
+                        for (int which = 0; which < 2; which++) {
+                            var original = CowSource(kind);
+                            var copy = copies[c](original);
+                            var target = (which == 0) ? copy : original;
+                            var other = (which == 0) ? original : copy;
+                            byte[] otherBefore = other.ToByteArray();
+                            string expected = CowRun(mutations[m], CowFresh(target));
+                            string actual = CowRun(mutations[m], target);
+
+                            string where = String.Format("kind {0}, copy {1}, mutation {2}, {3}", kind, c, m, which == 0 ? "copy" : "original");
+                            Assert(expected == actual, where + ": written string");
+                            Assert(BitConverter.ToString(other.ToByteArray()) == BitConverter.ToString(otherBefore), where + ": other string");
+
+                            // and the other one still writes on its own
+                            other.Append('!');
+                            Assert(BitConverter.ToString(target.ToByteArray()) == actual.Split('/')[0] || actual.IndexOf('/') < 0, where + ": written string after");
+                            checks++;
+                        }
+                    }
+                }
+            }
+            Assert(checks == 4 * copies.Length * mutations.Length * 2);
+        }
+
+        /// <summary>
+        /// The hash of a string does not depend on how it is held, and does not copy it (#89): bytes,
+        /// characters, a CLR string and a copy and a slice of each agree - short (on the stack) and
+        /// long (in a pooled buffer). Long ASCII hashes its bytes, the same in every encoding in which
+        /// it is #eql?; anything else hashes as String.GetHashCode of its characters.
+        /// </summary>
+        public void MutableString_GetHashCode2() {
+            foreach (int length in new[] { 0, 1, 2, 3, 127, 128, 129, 200, 256, 257, 600, 5000 }) {
+                foreach (string unit in new[] { "a", "ab", "é", "あ", "aé" }) {
+                    var sb = new StringBuilder();
+                    while (sb.Length < length) {
+                        sb.Append(unit);
+                    }
+                    string text = sb.ToString();
+                    bool ascii = System.Text.Ascii.IsValid(text);
+                    int h = MutableString.GetHashCode(text);
+                    Assert(ascii && text.Length >= 128 || h == text.GetHashCode());
+
+                    var binary = MutableString.CreateBinary(Encoding.UTF8.GetBytes(text), RubyEncoding.UTF8);
+                    var chars = MutableString.CreateMutable(RubyEncoding.UTF8).Append(text);
+                    var clr = MutableString.Create(text, RubyEncoding.UTF8);
+                    Assert(binary.GetHashCode() == h);
+                    Assert(chars.GetHashCode() == h);
+                    Assert(clr.GetHashCode() == h);
+                    Assert(binary.Clone().GetHashCode() == h);
+                    Assert(chars.Clone().GetHashCode() == h);
+                    Assert(binary.IsBinary && !chars.IsBinary);
+
+                    // from an offset into a shared array
+                    var prefixed = MutableString.CreateMutable(RubyEncoding.UTF8).Append("xyz" + text);
+                    Assert(prefixed.GetSlice(3).GetHashCode() == h);
+                    var prefixedBytes = MutableString.CreateBinary(Encoding.UTF8.GetBytes("xyz" + text), RubyEncoding.UTF8);
+                    Assert(prefixedBytes.GetSlice(3).GetHashCode() == h);
+
+                    if (ascii) {
+                        // #eql? in US-ASCII and BINARY as well
+                        Assert(MutableString.CreateBinary(Encoding.ASCII.GetBytes(text), RubyEncoding.Binary).GetHashCode() == h);
+                        Assert(MutableString.CreateMutable(RubyEncoding.Ascii).Append(text).GetHashCode() == h);
+                        Assert(MutableString.CreateBinary(Encoding.ASCII.GetBytes(text), RubyEncoding.Ascii).GetHashCode() == h);
+                    }
+                }
+            }
+
+            // invalid bytes hash as the escaping decoder's characters, whichever way they are held
+            var invalid = MutableString.CreateBinary(new byte[] { 0x61, 0xFF, 0x62 }, RubyEncoding.UTF8);
+            int h1 = invalid.GetHashCode();
+            invalid.SwitchToCharacters();
+            Assert(invalid.GetHashCode() == h1);
+        }
+
+        /// <summary>
+        /// SipHash-1-3, the hash of long ASCII strings (#89), against a plain implementation with the number of rounds as
+        /// parameters, which itself gives the SipHash paper's SipHash-2-4 test vectors (key 00..0f, message 00..len-1).
+        /// </summary>
+        public void MutableString_SipHash1() {
+            static ulong Rotl(ulong x, int b) => (x << b) | (x >> (64 - b));
+            static ulong Reference(byte[] message, ulong k0, ulong k1, int c, int d) {
+                ulong v0 = 0x736f6d6570736575UL ^ k0, v1 = 0x646f72616e646f6dUL ^ k1, v2 = 0x6c7967656e657261UL ^ k0, v3 = 0x7465646279746573UL ^ k1;
+                void Rounds(int count) {
+                    for (int r = 0; r < count; r++) {
+                        v0 += v1; v1 = Rotl(v1, 13); v1 ^= v0; v0 = Rotl(v0, 32);
+                        v2 += v3; v3 = Rotl(v3, 16); v3 ^= v2;
+                        v0 += v3; v3 = Rotl(v3, 21); v3 ^= v0;
+                        v2 += v1; v1 = Rotl(v1, 17); v1 ^= v2; v2 = Rotl(v2, 32);
+                    }
+                }
+                var padded = new byte[(message.Length / 8 + 1) * 8];
+                Array.Copy(message, padded, message.Length);
+                padded[padded.Length - 1] = (byte)message.Length;
+                for (int i = 0; i < padded.Length; i += 8) {
+                    ulong m = 0;
+                    for (int j = 7; j >= 0; j--) {
+                        m = (m << 8) | padded[i + j];
+                    }
+                    v3 ^= m;
+                    Rounds(c);
+                    v0 ^= m;
+                }
+                v2 ^= 0xff;
+                Rounds(d);
+                return v0 ^ v1 ^ v2 ^ v3;
+            }
+
+            var bytes = new byte[300];
+            for (int i = 0; i < bytes.Length; i++) {
+                bytes[i] = (byte)i;
+            }
+            byte[] Prefix(int length) => bytes.AsSpan(0, length).ToArray();
+            const ulong key0 = 0x0706050403020100UL, key1 = 0x0f0e0d0c0b0a0908UL;
+            Assert(Reference(Prefix(0), key0, key1, 2, 4) == 0x726fdb47dd0e0e31UL);
+            Assert(Reference(Prefix(1), key0, key1, 2, 4) == 0x74f839c593dc67fdUL);
+            Assert(Reference(Prefix(2), key0, key1, 2, 4) == 0x0d6c8009d9a94f5aUL);
+            Assert(Reference(Prefix(3), key0, key1, 2, 4) == 0x85676696d7fb7e2dUL);
+
+            var random = new Random(89);
+            for (int length = 0; length <= 300; length++) {
+                ulong k0 = (ulong)random.NextInt64(), k1 = (ulong)random.NextInt64();
+                Assert(SipHash.Hash13(Prefix(length), key0, key1) == Reference(Prefix(length), key0, key1, 1, 3));
+                Assert(SipHash.Hash13(Prefix(length), k0, k1) == Reference(Prefix(length), k0, k1, 1, 3));
+            }
+        }
+
+        /// <summary>
+        /// Ruby's side of the hash (#89): #eql? strings hash the same - ASCII in UTF-8, BINARY and
+        /// US-ASCII, empty strings in any encoding, a slice from an offset and an equal fresh string,
+        /// and a CLR string and the String of the same characters, which are #eql? as well.
+        /// </summary>
+        public void MutableString_GetHashCode3() {
+            TestOutput(@"
+require 'ruby4'
+h = { System::String.new('abc') => 1, 'déf' => 2 }
+p h['abc'], h[System::String.new('déf')], System::String.new('abc').hash == 'abc'.hash
+p 'abc'.hash == 'abc'.b.hash, 'abc'.hash == 'abc'.dup.force_encoding('US-ASCII').hash
+p ''.hash == ''.encode('UTF-16LE').hash, ''.hash == ''.b.hash
+s = 'x' * 1000
+p s[1..].hash == ('x' * 999).hash, s.b[1..].hash == ('x' * 999).hash, s[1..].eql?('x' * 999)
+clr = System::String.new('a' * 200)
+p [clr, ('a' * 200).encode('UTF-16LE')].uniq.size, { ('a' * 200).encode('UTF-32BE') => 1 }[clr]
+u = 'é' * 600
+p u[1..].hash == ('é' * 599).hash, u.b.force_encoding('UTF-8').byteslice(2..).hash == ('é' * 599).hash
+", @"
+1
+2
+true
+true
+true
+true
+true
+true
+true
+true
+1
+1
+true
+true
+");
+        }
+
+        /// <summary>
+        /// Copy-on-write while another thread writes the string. There is no GVL, so a copy can be made
+        /// in the middle of a write, and it must not change after Clone returns (a frozen copy may be
+        /// a Hash key): the write must neither land in the array Clone just handed out nor make the
+        /// original forget that it shares a new one. Bytes and characters, a write in place and a
+        /// write that moves the rest of the string. Before the content state word, the writes landed in
+        /// a few hundred copies out of 200,000. A slice that shares the array (GetSlice) likewise.
+        /// </summary>
+        public void MutableString_CopyOnWrite3() {
+            string text = "abcdefghijklmnop";
+            while (text.Length < 4096) {
+                text += text;
+            }
+
+            foreach (bool binary in new[] { true, false }) {
+                foreach (bool shift in new[] { false, true }) {
+                    var s = binary
+                        ? MutableString.CreateBinary(Encoding.ASCII.GetBytes(text), RubyEncoding.UTF8)
+                        : MutableString.CreateMutable(RubyEncoding.UTF8).Append("\u00e9" + text);
+                    Assert(s.IsBinary == binary);
+
+                    bool stop = false;
+                    var writer = new Thread(() => {
+                        for (int i = 0; !Volatile.Read(ref stop); i++) {
+                            if (shift) {
+                                s.Insert(50, 'Z');
+                                s.Remove(50, 1);
+                            } else if (binary) {
+                                s.SetByte(100, (byte)('a' + (i & 15)));
+                            } else {
+                                s.SetChar(100, (char)('a' + (i & 15)));
+                            }
+                        }
+                    });
+                    writer.Start();
+
+                    int changed = 0;
+                    try {
+                        for (int i = 0; i < 50000; i++) {
+                            // a copy, a slice from an offset (sharing the array from there) and a prefix
+                            var copy = (i % 3 == 0) ? s.Clone() : (i % 3 == 1) ? s.GetSlice(1, 4000) : s.GetSlice(0, 4000);
+                            int a = binary ? copy.GetByte(100) : copy.GetChar(100);
+                            int b = binary ? copy.GetByte(60) : copy.GetChar(60);
+                            Thread.SpinWait(20);
+                            if ((binary ? copy.GetByte(100) : copy.GetChar(100)) != a ||
+                                (binary ? copy.GetByte(60) : copy.GetChar(60)) != b) {
+                                changed++;
+                            }
+                        }
+                    } finally {
+                        Volatile.Write(ref stop, true);
+                        writer.Join();
+                    }
+                    Assert(changed == 0, String.Format("binary: {0}, shift: {1}: {2} copies changed", binary, shift, changed));
+                }
+            }
+        }
+
+        /// <summary>
+        /// A reader of a slice takes no lock while the slice's first write gives it an array of its
+        /// own. A slice from an offset is replaced rather than written in place (Content.IsOffsetSlice):
+        /// before that, a reader could pair the new array with the old offset and read bytes from
+        /// outside the string, or form a span past the array it read. Bytes and characters, a slice
+        /// from an offset and a prefix.
+        /// </summary>
+        public void MutableString_CopyOnWrite5() {
+            string text = "";
+            for (int i = 0; i < 100; i++) {
+                text += "0123456789";
+            }
+
+            foreach (bool binary in new[] { true, false }) {
+                foreach (bool suffix in new[] { true, false }) {
+                    var source = binary
+                        ? MutableString.CreateBinary(Encoding.ASCII.GetBytes(text), RubyEncoding.Binary)
+                        : MutableString.CreateMutable(RubyEncoding.UTF8).Append(text);
+                    string expected = suffix ? "1234" : "0123";
+
+                    MutableString current = null;
+                    bool stop = false;
+                    int wrong = 0, errors = 0;
+                    var reader = new Thread(() => {
+                        while (!Volatile.Read(ref stop)) {
+                            var str = Volatile.Read(ref current);
+                            if (str == null) {
+                                continue;
+                            }
+                            try {
+                                var read = binary
+                                    ? Encoding.ASCII.GetString(str.GetBinarySlice(0, 4))
+                                    : str.GetStringSlice(0, 4);
+                                if (read != expected) {
+                                    wrong++;
+                                }
+                            } catch (Exception) {
+                                errors++;
+                            }
+                        }
+                    });
+                    reader.Start();
+                    try {
+                        for (int i = 0; i < 100000; i++) {
+                            var slice = suffix ? source.GetSlice(1, 999) : source.GetSlice(0, 999);
+                            Volatile.Write(ref current, slice);
+                            slice.Append('x');
+                            slice.Append('y');
+                        }
+                    } finally {
+                        Volatile.Write(ref stop, true);
+                        reader.Join();
+                    }
+                    Assert(wrong == 0 && errors == 0, String.Format("binary: {0}, suffix: {1}: {2} wrong reads, {3} errors", binary, suffix, wrong, errors));
+                }
+            }
+        }
+
+        /// <summary>
+        /// Append(Stream) reads before it holds the string's content, which is not reentrant: a stream
+        /// whose Read copies the string it is read into must not wait for itself, and a Read that
+        /// blocks must not block a copy made on another thread meanwhile.
+        /// </summary>
+        public void MutableString_CopyOnWrite4() {
+            foreach (bool binary in new[] { true, false }) {
+                var s = binary
+                    ? MutableString.CreateBinary(Encoding.ASCII.GetBytes("abc"), RubyEncoding.UTF8)
+                    : MutableString.CreateMutable(RubyEncoding.UTF8).Append("\u00e9bc");
+
+                MutableString copy = null;
+                var copyingStream = new ReadCallbackStream(() => copy = s.Clone());
+                MutableString copyOnOtherThread = null;
+                var blockingStream = new ReadCallbackStream(() => {
+                    var t = new Thread(() => copyOnOtherThread = s.Clone()) { IsBackground = true };
+                    t.Start();
+                    Assert(t.Join(5000), "a copy waited for a stream read");
+                });
+
+                // background threads: a hang must fail the test, not keep the process alive
+                var appender = new Thread(() => {
+                    s.Append(copyingStream, 2);
+                    s.Append(blockingStream, 2);
+                }) { IsBackground = true };
+                appender.Start();
+                if (!appender.Join(5000)) {
+                    Assert(false, "Append(Stream) hung");
+                    return;
+                }
+
+                Assert(copy.ToString() == (binary ? "abc" : "\u00e9bc"));
+                Assert(copyOnOtherThread.ToString() == (binary ? "abcxy" : "\u00e9bcxy"));
+                Assert(s.ToString() == (binary ? "abcxyxy" : "\u00e9bcxyxy"));
+            }
+        }
+
+        private sealed class ReadCallbackStream : System.IO.MemoryStream {
+            private readonly Action _onRead;
+
+            public ReadCallbackStream(Action onRead) {
+                _onRead = onRead;
+            }
+
+            public override int Read(byte[] buffer, int offset, int count) {
+                _onRead();
+                buffer[offset] = (byte)'x';
+                buffer[offset + 1] = (byte)'y';
+                return 2;
+            }
+        }
+
+        /// <summary>
+        /// The Ruby side of copy-on-write (#89): #dup, #clone, String.new, +@, #replace,
+        /// #initialize, StringIO#read of the whole buffer, a long slice from anywhere (s[n..],
+        /// #byteslice, #delete_prefix), #chomp and an interpolation share the content; each is changed through many String and StringIO
+        /// methods, on the copy and on the original. Checked against an independent string given
+        /// the same change. The output is CRuby 4.0's.
+        /// </summary>
+        public void MutableString_CopyOnWrite2() {
+            TestOutput(@"
+require 'ruby4'
+require 'stringio'
+fresh = ->(bytes, enc) { bytes.pack('C*').force_encoding(enc) }
+makers = [
+  -> { ('abc def ' * 40) + ""xyz  \n"" },
+  -> { (('abc def ' * 40) + ""\xFFxyz  \n"").b },
+  -> { (""abc déf "" * 40) + ""あyz  \n"" },
+  -> { (('abc def ' * 40) + ""xyz  \n"").encode('UTF-16LE') },
+]
+copies = [
+  ->(s) { s.dup }, ->(s) { s.clone }, ->(s) { String.new(s) }, ->(s) { +(s.dup.freeze) },
+  ->(s) { String.new.replace(s) }, ->(s) { String.new.tap { |x| x.send(:initialize, s) } },
+  ->(s) { StringIO.new(s).read }, ->(s) { StringIO.new(s).read(nil, String.new) },
+  ->(s) { StringIO.new(s).read(s.bytesize) }, ->(s) { s.byteslice(0, s.bytesize - 2) },
+  ->(s) { s.chomp }, ->(s) { s[0, s.length] }, ->(s) { Class.new(String).new(s).to_s }, ->(s) { ""#{s}"" },
+  ->(s) { s[1..] }, ->(s) { s[2, s.length - 4] }, ->(s) { s[1..][1..] }, ->(s) { s.byteslice(2..) },
+  ->(s) { s.byteslice(2, s.bytesize - 4) }, ->(s) { s.delete_prefix(s[0, 2]) }, ->(s) { io = StringIO.new(s); io.read(2); io.read },
+]
+e = ->(x, t) { t.encode(x.encoding) }
+mutators = [
+  ->(x) { x << e.(x, 'Z') }, ->(x) { x.concat(e.(x, 'Q'), e.(x, 'R')) }, ->(x) { x.prepend(e.(x, 'P')) },
+  ->(x) { x.insert(5, e.(x, 'II')) }, ->(x) { x[3] = e.(x, 'W') }, ->(x) { x[2, 4] = e.(x, '') },
+  ->(x) { x.setbyte(0, 0x41) }, ->(x) { x.setbyte(-1, 0x21) }, ->(x) { x.slice!(1, 7) }, ->(x) { x.slice!(-3..) },
+  ->(x) { x.sub!(e.(x, 'a'), e.(x, 'A')) }, ->(x) { x.gsub!(e.(x, 'b'), e.(x, 'BB')) },
+  ->(x) { x.tr!(e.(x, 'a-c'), e.(x, 'x-z')) }, ->(x) { x.squeeze! }, ->(x) { x.delete!(e.(x, 'd')) },
+  ->(x) { x.upcase! }, ->(x) { x.capitalize! }, ->(x) { x.swapcase! }, ->(x) { x.reverse! },
+  ->(x) { x.strip! }, ->(x) { x.chomp! }, ->(x) { x.chop! }, ->(x) { x.succ! },
+  ->(x) { x.replace(e.(x, 'other')) }, ->(x) { x.clear }, ->(x) { x << x },
+  ->(x) { x.force_encoding(Encoding::BINARY); x << 0xFE }, ->(x) { x.bytesplice(0, 2, e.(x, 'zz')) },
+  ->(x) { io = StringIO.new(x); io.seek(4); io.write(e.(x, 'SIO')) }, ->(x) { StringIO.new(x).truncate(10) },
+  ->(x) { io = StringIO.new(x); io.seek(x.bytesize + 3); io.write('E') }, ->(x) { x.scrub!(e.(x, '?')) },
+  ->(x) { n = 0; x.each_char { |c| x << c if (n += 1) < 3 } },
+  ->(x) { x.encode!('UTF-8', invalid: :replace, undef: :replace) },
+  ->(x) { StringIO.new('from-stringio').read(6, x) }, ->(x) { StringIO.new('partial').readpartial(4, x) },
+  ->(x) { r, w = IO.pipe; w.write('pipe-bytes'); w.close; r.read(4, x); r.close },
+  ->(x) { r, w = IO.pipe; w.write('pipe-bytes'); w.close; r.readpartial(5, x); r.close },
+  ->(x) { r, w = IO.pipe; w.write('pipe-bytes'); w.close; r.sysread(3, x); r.close },
+  ->(x) { x.slice!(0, 2) }, ->(x) { x.lstrip! }, ->(x) { x[0, 3] = e.(x, '') },
+]
+failures = []
+checks = 0
+makers.each_with_index do |make, mi|
+  copies.each_with_index do |copy, ci|
+    mutators.each_with_index do |mut, ui|
+      [true, false].each do |on_copy|
+        orig = make.()
+        c = copy.(orig)
+        target, other = on_copy ? [c, orig] : [orig, c]
+        before = [other.bytes, other.encoding]
+        expected = fresh.(target.bytes, target.encoding)
+        r1 = begin; mut.(expected); :ok; rescue => ex; ex.class; end
+        r2 = begin; mut.(target); :ok; rescue => ex; ex.class; end
+        checks += 1
+        failures << [mi, ci, ui, on_copy, :other] if [other.bytes, other.encoding] != before
+        failures << [mi, ci, ui, on_copy, :target, r1, r2] if r1 != r2 || (r1 == :ok && [target.bytes, target.encoding] != [expected.bytes, expected.encoding])
+      end
+    end
+  end
+end
+failures.each { |f| p f }
+puts checks, failures.size
+", @"
+7056
+0
+");
         }
     }
 }

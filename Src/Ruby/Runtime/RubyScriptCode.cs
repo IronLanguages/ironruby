@@ -13,38 +13,20 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
-using System.Collections.Generic;
-using System.Text;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Generation;
 using System.Threading;
-using System.Reflection;
 using Microsoft.Scripting.Utils;
-using System.Runtime.CompilerServices;
-using System.Security;
 using IronRuby.Compiler;
-using System.Diagnostics;
 
 namespace IronRuby.Runtime {
     using ScriptCodeFunc = Func<RubyScope, object, object>;
 
     internal class RubyScriptCode : ScriptCode {
-#if FEATURE_REFEMIT
-        private sealed class CustomGenerator : DebugInfoGenerator {
-            public override void MarkSequencePoint(LambdaExpression method, int ilOffset, DebugInfoExpression node) {
-                RubyMethodDebugInfo.GetOrCreate(method.Name).AddMapping(ilOffset, node.StartLine);
-            }
-        }
-#endif
-
         private readonly Expression<ScriptCodeFunc> _code;
         private readonly TopScopeFactoryKind _kind;
         private ScriptCodeFunc _target;
@@ -70,7 +52,13 @@ namespace IronRuby.Runtime {
         private ScriptCodeFunc/*!*/ Target {
             get {
                 if (_target == null) {
-                    var compiledMethod = (ScriptCodeFunc)CompileLambda(_code, SourceUnit.LanguageContext);
+                    bool timed = PhaseTimer.Enter(PhaseTimer.LightCompileTop);
+                    ScriptCodeFunc compiledMethod;
+                    try {
+                        compiledMethod = (ScriptCodeFunc)CompileLambda(_code, SourceUnit.LanguageContext);
+                    } finally {
+                        PhaseTimer.Exit(timed);
+                    }
                     Interlocked.CompareExchange(ref _target, compiledMethod, null);
                 }
                 return _target;
@@ -110,52 +98,34 @@ namespace IronRuby.Runtime {
                     throw Assert.Unreachable;                
             }
 
+            if (_code == null) {
+                // compiled ahead of time (IronRuby.Startup.dll): see PrecompiledCode.IsRunningOnThread
+                return Precompiled.PrecompiledCode.Run(_target, localScope);
+            }
             return Target(localScope, localScope.SelfObject);
         }
 
         internal static Delegate/*!*/ CompileLambda(LambdaExpression/*!*/ lambda, LanguageContext/*!*/ context) {
-            return CompileLambda(lambda, context.DomainManager.Configuration.DebugMode, context.Options.NoAdaptiveCompilation, context.Options.CompilationThreshold);
+            return CompileLambda(lambda, context.DomainManager.Configuration.DebugMode, context.Options.NoAdaptiveCompilation,
+                context is RubyContext rubyContext ? rubyContext.CompilationThreshold : context.Options.CompilationThreshold);
         }
 
         internal static Delegate/*!*/ CompileLambda(LambdaExpression/*!*/ lambda, bool debugMode, bool noAdaptiveCompilation, 
             int compilationThreshold) {
 
-#if FEATURE_REFEMIT
             if (debugMode) {
-                return CompileDebug(lambda);
-            } 
-#endif
-            if (noAdaptiveCompilation) {
-                Delegate result = lambda.Compile();
-#if NETFRAMEWORK
-                // DLR closures should not be used:
-                Debug.Assert(!(result.Target is Closure) || ((Closure)result.Target).Locals == null);
-#endif
-                return result;
-            } 
-
-            return lambda.LightCompile(compilationThreshold);
-        }
-
-#if FEATURE_PDBEMIT
-        private static bool _HasPdbPermissions = true;
-#endif
-
-#if FEATURE_REFEMIT
-        private static Delegate/*!*/ CompileDebug(LambdaExpression/*!*/ lambda) {
-#if FEATURE_PDBEMIT
-            // try to use PDBs and fallback to CustomGenerator if not allowed to:
-            if (_HasPdbPermissions) {
-                try {
-                    return CompilerHelpers.CompileToMethod(lambda, DebugInfoGenerator.CreatePdbGenerator(), true);
-                } catch (SecurityException) {
-                    // do not attempt next time in this app-domain:
-                    _HasPdbPermissions = false;
-                }
+                return lambda.Compile();
             }
-#endif
-            return lambda.Compile();
+            long traceStart = StartupTrace.Now();
+            try {
+                if (noAdaptiveCompilation) {
+                    return lambda.Compile();
+                }
+
+                return lambda.LightCompile(compilationThreshold);
+            } finally {
+                StartupTrace.Compiled(traceStart);
+            }
         }
-#endif
     }
 }

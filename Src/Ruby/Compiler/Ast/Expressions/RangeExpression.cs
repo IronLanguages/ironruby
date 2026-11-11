@@ -13,17 +13,10 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
-using Microsoft.Scripting.Generation;
-using System.Runtime.CompilerServices;
-using System;
 using System.Threading;
 using IronRuby.Runtime;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
@@ -69,7 +62,7 @@ namespace IronRuby.Compiler.Ast {
             }
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             int intBegin, intEnd;
             if (IsIntegerRange(out intBegin, out intEnd)) {
                 // a Range is frozen, and MRI makes a literal one of integers a single object, which
@@ -140,7 +133,7 @@ namespace IronRuby.Compiler.Ast {
         ///     false
         ///   end  
         /// </code>
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             var begin = AstUtils.Box(_range.Begin.TransformRead(gen));
             var end = AstUtils.Box(_range.End.TransformRead(gen));
 

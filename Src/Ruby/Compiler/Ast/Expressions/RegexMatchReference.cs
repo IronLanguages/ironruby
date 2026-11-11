@@ -13,16 +13,10 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System.Diagnostics;
-using System.Dynamic;
 using Microsoft.Scripting;
-using Microsoft.Scripting.Utils;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Compiler.Ast {
@@ -51,65 +45,13 @@ namespace IronRuby.Compiler.Ast {
 
         private readonly int _index;
 
-        public int Index {
-            get { return (_index > 0) ? _index : 0; }
-        }
-
         internal RegexMatchReference(int index, SourceSpan location) 
             : base(location) {
             Debug.Assert(index >= PostMatch, "index");
             _index = index;
         }
 
-        public RegexMatchReference/*!*/ CreateGroupReference(int index, SourceSpan location) {
-            ContractUtils.Requires(index >= 0);
-            return new RegexMatchReference(index, location);
-        }
-
-        public RegexMatchReference/*!*/ CreateLastGroupReference(SourceSpan location) {
-            return new RegexMatchReference(MatchLastGroup, location);
-        }
-
-        public RegexMatchReference/*!*/ CreatePrefixReference(SourceSpan location) {
-            return new RegexMatchReference(PreMatch, location);
-        }
-
-        public RegexMatchReference/*!*/ CreateSuffixReference(SourceSpan location) {
-            return new RegexMatchReference(PostMatch, location);
-        }
-
-        public RegexMatchReference/*!*/ CreateMatchReference(SourceSpan location) {
-            return new RegexMatchReference(MatchData, location);
-        }
-
-        // TODO: keep only full names?
-        public string/*!*/ VariableName {
-            get {
-                switch (_index) {
-                    case EntireMatch: return EntireMatchName;
-                    case MatchData: return MatchDataName;
-                    case MatchLastGroup: return MatchLastGroupName;
-                    case PreMatch: return PreMatchName;
-                    case PostMatch: return PostMatchName;
-                    default: return _index.ToString();
-                }
-            }
-        }
-
-        public string/*!*/ FullName {
-            get {
-                return "$" + VariableName;
-            }
-        }
-
-        // Numeric references cannot be aliased (alias _ $n doesn't work for some reason):
-        internal bool CanAlias {
-            get {
-                return _index <= 0;
-            }
-        }
-
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             switch (_index) {
                 case MatchData: 
                     return Methods.GetCurrentMatchData.OpCall(gen.CurrentScopeVariable);
@@ -133,14 +75,7 @@ namespace IronRuby.Compiler.Ast {
         }
         
         internal override string/*!*/ GetNodeName(AstGenerator/*!*/ gen) {
-            // TODO: Ruby 1.9: all return "global-variable"
-            switch (_index) {
-                case MatchData: return "$" + MatchDataName;
-                case MatchLastGroup: return "$" + MatchLastGroupName;
-                case PreMatch: return "$" + PreMatchName;
-                case PostMatch: return "$" + PostMatchName;
-                default: return "$" + _index.ToString();
-            }
+            return "global-variable";
         }
     }
 }

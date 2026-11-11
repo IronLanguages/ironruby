@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Reflection;
@@ -45,6 +41,11 @@ namespace IronRuby.Runtime.Calls {
         // the instance method's are "M#foo", so it runs a compilation of its own.
         private bool _isModuleFunctionCopy;
 
+        // The module the body runs as a method of, where that is not the module that holds it: the copy a top-level `def'
+        // of code run in a host's scope leaves in main's singleton class is Object's method (RubyOps.DefineMethod), so it
+        // is labelled "Object#foo" and `super' looks up from Object, as in CRuby. Null otherwise.
+        private RubyModule _bodyModule;
+
         public string/*!*/ DefinitionName { get { return _body.Name; } }
         public Parameters/*!*/ Parameters { get { return _body.Ast.Parameters; } }
         public MSA.SymbolDocumentInfo Document { get { return _body.Document; } }
@@ -52,6 +53,12 @@ namespace IronRuby.Runtime.Calls {
         public RubyScope/*!*/ DeclaringScope { get { return _declaringScope; } }
         internal RubyMethodBody/*!*/ Body { get { return _body; } }
         internal bool UsesBlock { get { return _body.Ast.UsesBlock; } }
+
+        /// <summary>
+        /// The module the body is compiled for and its frames are labelled after: <see cref="RubyMemberInfo.DeclaringModule"/>,
+        /// except for the scope's copy of a hosted top-level `def', which is Object's method (see <see cref="_bodyModule"/>).
+        /// </summary>
+        internal RubyModule/*!*/ BodyModule { get { return _bodyModule ?? DeclaringModule; } }
 
         // method:
         internal RubyMethodInfo(RubyMethodBody/*!*/ body, RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule, RubyMemberFlags flags)
@@ -64,7 +71,21 @@ namespace IronRuby.Runtime.Calls {
         }
 
         protected internal override RubyMemberInfo/*!*/ Copy(RubyMemberFlags flags, RubyModule/*!*/ module) {
-            return new RubyMethodInfo(_body, _declaringScope, module, flags) { _isModuleFunctionCopy = _isModuleFunctionCopy };
+            return new RubyMethodInfo(_body, _declaringScope, module, flags) {
+                _isModuleFunctionCopy = _isModuleFunctionCopy,
+                // `alias' and visibility changes in the same module keep it Object's method
+                _bodyModule = (module == DeclaringModule) ? _bodyModule : null
+            };
+        }
+
+        /// <summary>
+        /// The scope's copy of a top-level `def' of code run in a host's scope: held by main's singleton class
+        /// (<paramref name="holder"/>), a method of <paramref name="bodyModule"/> (Object) in every other respect.
+        /// </summary>
+        internal RubyMethodInfo(RubyMethodBody/*!*/ body, RubyScope/*!*/ declaringScope, RubyModule/*!*/ holder, RubyMemberFlags flags,
+            RubyModule/*!*/ bodyModule)
+            : this(body, declaringScope, holder, flags) {
+            _bodyModule = bodyModule;
         }
 
         internal RubyMethodInfo/*!*/ CopyAsModuleFunction(RubyMemberFlags flags, RubyModule/*!*/ singletonClass) {
@@ -85,11 +106,21 @@ namespace IronRuby.Runtime.Calls {
             }
             // `alias` and visibility changes copy the info but share the body.
             var info = other as RubyMethodInfo;
-            return info != null && ReferenceEquals(_body, info._body);
+            return info != null && ReferenceEquals(_body.EquivalenceKey, info._body.EquivalenceKey);
         }
         
         public override int GetEquivalenceHashCode() {
-            return System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(_body);
+            return System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(_body.EquivalenceKey);
+        }
+
+        /// <summary>
+        /// Makes this method the same method as <paramref name="other"/> to Method#==, for the core methods written in Ruby
+        /// that MRI defines as one C function under two names (Array#select! and #filter!): MRI's backtrace names each frame
+        /// by the name called, so each name here is a method of its own rather than an alias, which would be labelled by
+        /// the name the body was defined with.
+        /// </summary>
+        public void MakeEquivalentTo(RubyMethodInfo/*!*/ other) {
+            _body.EquivalenceKey = other._body.EquivalenceKey;
         }
 
         public override RubyMemberInfo TrySelectOverload(Type/*!*/[]/*!*/ parameterTypes) {
@@ -204,12 +235,40 @@ namespace IronRuby.Runtime.Calls {
         internal Delegate/*!*/ GetDelegate() {
             return _isModuleFunctionCopy
                 ? _body.GetModuleFunctionDelegate(_declaringScope, DeclaringModule)
-                : _body.GetDelegate(_declaringScope, DeclaringModule);
+                : _body.GetDelegate(_declaringScope, BodyModule);
         }
 
         #region Dynamic Sites
 
         internal override MemberDispatcher GetDispatcher(Type/*!*/ delegateType, RubyCallSignature signature, object target, int version) {
+            return (target is IRubyObject) ? GetDispatcher(delegateType, signature, version, null, false) : null;
+        }
+
+        /// <summary>
+        /// A dispatcher for a receiver that is nil, true, false or a CLR object whose rule tests its type and class version only
+        /// (see RubyCallAction.HasPlainClrTypeTest): the method is called the same way, the receiver test is the rule's.
+        /// </summary>
+        internal MemberDispatcher GetClrDispatcher(Type/*!*/ delegateType, RubyCallSignature signature, object target, RubyClass/*!*/ targetClass, int version) {
+            var dispatcher = GetDispatcher(delegateType, signature, version, null, false);
+            if (dispatcher != null) {
+                dispatcher.SetClrReceiver(target, targetClass);
+            }
+            return dispatcher;
+        }
+
+        /// <summary>
+        /// The dispatcher of a call a refinement could change, which also tests that the method's refinement record holds
+        /// <paramref name="refinements"/> (see MethodDispatcher.CreateRefinedRubyObjectDispatcher).
+        /// </summary>
+        internal MemberDispatcher GetRefinedDispatcher(Type/*!*/ delegateType, RubyCallSignature signature, object target, int version,
+            RefinementActivation/*!*/ refinements, bool inBlock) {
+            Assert.NotNull(refinements);
+            return (target is IRubyObject) ? GetDispatcher(delegateType, signature, version, refinements, inBlock) : null;
+        }
+
+        private MemberDispatcher GetDispatcher(Type/*!*/ delegateType, RubyCallSignature signature, int version,
+            RefinementActivation refinements, bool inBlock) {
+
             if (Parameters.Unsplat != null) {
                 return null;
             }
@@ -228,14 +287,10 @@ namespace IronRuby.Runtime.Calls {
                 parameterCount += Parameters.Optional.Length;
             }
 
-            if (!(target is IRubyObject)) {
-                return null;
-            }
-
             var method = GetDelegate();
-            var dispatcher = MethodDispatcher.CreateRubyObjectDispatcher(
-                delegateType, method, parameterCount, signature.HasScope, signature.HasBlock, version
-            );
+            var dispatcher = (refinements != null) ?
+                MethodDispatcher.CreateRefinedRubyObjectDispatcher(delegateType, method, parameterCount, signature.HasBlock, version, refinements, inBlock) :
+                MethodDispatcher.CreateRubyObjectDispatcher(delegateType, method, parameterCount, signature.HasScope, signature.HasBlock, version);
             if (dispatcher != null && !_isModuleFunctionCopy) {
                 _body.RegisterDispatcher(dispatcher, method);
             }
@@ -246,7 +301,8 @@ namespace IronRuby.Runtime.Calls {
             Assert.NotNull(metaBuilder, args, name);
 
             // 2 implicit args: self, block
-            var argsBuilder = new ArgsBuilder(2, Parameters.Mandatory.Length, Parameters.LeadingMandatoryCount, Parameters.Optional.Length, Parameters.Unsplat != null);
+            var argsBuilder = new ArgsBuilder(2, Parameters.Mandatory.Length, Parameters.LeadingMandatoryCount, Parameters.Optional.Length, Parameters.Unsplat != null,
+                TakesOrRefusesKeywords ? GetParameterSignature() : null);
             argsBuilder.SetImplicit(0, AstUtils.Box(args.TargetExpression));
             argsBuilder.SetImplicit(1, args.Signature.HasBlock ? AstUtils.Convert(args.GetBlockExpression(), typeof(Proc)) : AstFactory.NullOfProc);
             argsBuilder.AddCallArguments(metaBuilder, args);

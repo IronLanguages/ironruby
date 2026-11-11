@@ -40,10 +40,16 @@ namespace IronRuby.Builtins {
         
         private uint _flags = AsciiUnknownFlag | SurrogatesUnknownFlag | CharIndexChangedFlags;
 
+        // Counts changes, for a method that yields to a block and must notice that the block changed the
+        // string ("string modified"): it saves ChangeCount and compares. Unlike HasChangedFlag, which every
+        // watcher clears, a watcher only reads it, so watches nest (#gsub inside another's block) and
+        // read-only watches on other threads don't disturb each other. On 64-bit it fits in the padding
+        // after _flags. An increment lost to a racing writer still moves the count.
+        private int _changeCount;
+
         // true if frozen:
         private const uint IsFrozenFlag = 1;
 
-        // TODO: obsolete? (supported 1.8 behavior?)
         // set every time a change occurs (visible externally):
         private const uint HasChangedFlag = 1 << 1;
 
@@ -67,12 +73,6 @@ namespace IronRuby.Builtins {
 
         // true if NoHighCharacters flag is not up-to-date:
         private const uint SurrogatesUnknownFlag = 1 << 6;
-
-        // true if tainted:
-        private const uint IsTaintedFlag = 1 << 8;
-
-        // true if untrusted:
-        private const uint IsUntrustedFlag = 1 << 9;
 
         // true if the content should be copied on mutation:
         private const uint CopyOnWriteFlag = 1 << 10;
@@ -155,11 +155,9 @@ namespace IronRuby.Builtins {
             }
         }
 
-        // creates a copy including the taint flag:
+        // creates a copy:
         protected MutableString(MutableString/*!*/ str) 
             : this(str._content.Clone(), str._encoding) {
-            IsTainted = str.IsTainted;
-            IsUntrusted = str.IsUntrusted;
             // The same characters in the same encoding: what is known about them still holds, so
             // a copy - the frozen one each MatchData keeps, say - need not scan them again.
             const uint CharacterFlags = IsAsciiFlag | AsciiUnknownFlag | NoSurrogatesFlag | SurrogatesUnknownFlag;
@@ -190,6 +188,17 @@ namespace IronRuby.Builtins {
         // immutable:
         private MutableString(string/*!*/ str, RubyEncoding/*!*/ encoding)
             : this(new StringContent(str, null), encoding) {
+        }
+
+        // A string literal the compiler has found to be all ASCII, in an encoding where ASCII is
+        // itself (see CreateAsciiLiteral): everything the general constructor works out is known.
+        private MutableString(string/*!*/ str, RubyEncoding/*!*/ encoding, uint flags) {
+            _encoding = encoding;
+            _content = new StringContent(str, this);
+            _flags = flags;
+            if (ObjectTracking.Enabled) {
+                ObjectTracking.Track(this);
+            }
         }
 
         // mutable (visible for subclasses):
@@ -235,6 +244,28 @@ namespace IronRuby.Builtins {
             var result = Create(str, RubyEncoding.Ascii);
             result._flags = IsAsciiFlag | NoSurrogatesFlag;
             return result;
+        }
+
+        private const uint AsciiLiteralFlags = IsAsciiFlag | NoSurrogatesFlag | HasChangedFlag | CharIndexChangedFlags;
+
+        /// <summary>
+        /// A string literal that the compiler has checked is all ASCII, in an ASCII-compatible
+        /// encoding. Evaluating a literal is common enough that the general constructor's working out
+        /// of the encoding's flags was a measurable part of it, and knowing the string is ASCII from
+        /// the start spares the first #bytesize, #hash or comparison a scan of it.
+        /// </summary>
+        internal static MutableString/*!*/ CreateAsciiLiteral(string/*!*/ str, RubyEncoding/*!*/ encoding) {
+            Debug.Assert(encoding.IsAsciiIdentity && str.IsAscii());
+            return new MutableString(str, encoding, AsciiLiteralFlags);
+        }
+
+        /// <summary>
+        /// <see cref="CreateAsciiLiteral"/> for a literal in a file that said nothing about
+        /// frozen_string_literal (see <see cref="Chill"/>).
+        /// </summary>
+        internal static MutableString/*!*/ CreateChilledAsciiLiteral(string/*!*/ str, RubyEncoding/*!*/ encoding) {
+            Debug.Assert(encoding.IsAsciiIdentity && str.IsAscii());
+            return new MutableString(str, encoding, AsciiLiteralFlags | IsChilledFlag);
         }
 
         public static MutableString/*!*/ Create(string/*!*/ str) {
@@ -283,7 +314,7 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// Creates an instance of MutableString with content and taint copied from a given string.
+        /// Creates an instance of MutableString with content copied from a given string.
         /// </summary>
         public static MutableString/*!*/ Create(MutableString/*!*/ str) {
             ContractUtils.RequiresNotNull(str, "str");
@@ -324,6 +355,24 @@ namespace IronRuby.Builtins {
             return new MutableString(_encoding);
         }
 
+        /// <summary>
+        /// A String (see above) of the first <paramref name="count"/> of <paramref name="chars"/>, which
+        /// it takes over: the caller must not touch the array again.
+        /// </summary>
+        public MutableString/*!*/ CreateDerived(char[]/*!*/ chars, int count) {
+            ContractUtils.RequiresArrayRange(chars, 0, count, "offset", "count");
+            return new MutableString(chars, count, _encoding);
+        }
+
+        /// <summary>
+        /// A String (see above) of the first <paramref name="count"/> of <paramref name="bytes"/>, which
+        /// it takes over: the caller must not touch the array again.
+        /// </summary>
+        public MutableString/*!*/ CreateDerived(byte[]/*!*/ bytes, int count) {
+            ContractUtils.RequiresArrayRange(bytes, 0, count, "offset", "count");
+            return new MutableString(bytes, count, _encoding);
+        }
+
         internal MutableString/*!*/ CreateDerived(Content/*!*/ content, RubyEncoding/*!*/ encoding) {
             return new MutableString(content, encoding);
         }
@@ -342,7 +391,29 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// Creates a copy of this instance, including content and taint.
+        /// String#replace and #initialize_copy (#dup, #clone): makes this string a copy of
+        /// <paramref name="other"/> - its content, encoding and what is known about its characters.
+        /// The content is shared until one of the two is changed (see Content.Clone), so this does not
+        /// depend on the length of the string. A frozen, chilled or locked receiver is handled as by
+        /// any other mutation.
+        /// </summary>
+        public MutableString/*!*/ Replace(MutableString/*!*/ other) {
+            ContractUtils.RequiresNotNull(other, "other");
+            Mutate();
+            if (ReferenceEquals(this, other)) {
+                return this;
+            }
+
+            var content = other._content.Clone();
+            SetEncoding(other._encoding);
+            SetContent(content);
+            const uint CharacterFlags = IsAsciiFlag | AsciiUnknownFlag | NoSurrogatesFlag | SurrogatesUnknownFlag;
+            _flags = (_flags & ~CharacterFlags) | (other._flags & CharacterFlags);
+            return this;
+        }
+
+        /// <summary>
+        /// Creates a copy of this instance, including content.
         /// Doesn't copy frozen state and instance variables. 
         /// Preserves the class of the String.
         /// </summary>
@@ -351,7 +422,31 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// Creates an empty copy of this instance, taint and instance variables. 
+        /// A frozen plain String with this one's content, encoding and character flags,
+        /// for a MatchData to keep: a later change to this string must not show through it.
+        /// A char-based string keeps an immutable .NET string of its characters for the regex
+        /// to run on (ConvertToString), and the copy wraps that very string rather than copying
+        /// the characters a second time - matching a long subject used to spend most of its time
+        /// copying it. Other content is cloned as before: a clone of a StringContent shares its
+        /// string anyway, and binary content has no such string to share.
+        /// </summary>
+        public MutableString/*!*/ CreateFrozenSnapshot() {
+            // Like MRI's rb_str_new_frozen: a frozen string cannot change, so it is its own
+            // snapshot, and a copy keeps the class of a String subclass (md.string.class).
+            if (IsFrozen) {
+                return this;
+            }
+            Content content = (_content is CharArrayContent)
+                ? new StringContent(_content.ConvertToString(), null)
+                : _content.Clone();
+            var result = CreateInstance(content, _encoding);
+            const uint CharacterFlags = IsAsciiFlag | AsciiUnknownFlag | NoSurrogatesFlag | SurrogatesUnknownFlag;
+            result._flags = (result._flags & ~CharacterFlags) | (_flags & CharacterFlags);
+            return result.Freeze();
+        }
+
+        /// <summary>
+        /// Creates an empty copy of this instance with its instance variables. 
         /// </summary>
         public MutableString/*!*/ Duplicate(RubyContext/*!*/ context, bool copySingletonMembers, MutableString/*!*/ result) {
             context.CopyInstanceData(this, result, copySingletonMembers);
@@ -425,7 +520,12 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateTemporarilyLockedError();
             }
 
-            if ((flags & CopyOnWriteFlag) != 0) {
+            if (_content.IsOffsetSlice) {
+                // A slice from an offset is not written in place (see Content.IsOffsetSlice); its copy
+                // is a content of its own, so this also covers CopyOnWriteFlag.
+                _content = _content.Unslice();
+                flags &= ~CopyOnWriteFlag;
+            } else if ((flags & CopyOnWriteFlag) != 0) {
                 // TODO: we can do better if the representation is being changed: we don't need to copy the data twice
                 _content = _content.Clone();
                 flags &= ~CopyOnWriteFlag;
@@ -541,10 +641,11 @@ namespace IronRuby.Builtins {
 
         private void MutateContent(uint setFlags) {
             uint flags = _flags;
-            if ((flags & MutationGuardFlags) != 0) {
+            if ((flags & MutationGuardFlags) != 0 || _content.IsOffsetSlice) {
                 flags = FrozenOrCopyOnWrite(flags);
             }
             _flags = flags | setFlags;
+            _changeCount++;
         }
 
         /// <summary>
@@ -559,7 +660,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         private void MutateOne(char c) {
             uint flags = _flags;
-            if ((flags & MutationGuardFlags) != 0) {
+            if ((flags & MutationGuardFlags) != 0 || _content.IsOffsetSlice) {
                 flags = FrozenOrCopyOnWrite(flags);
             }
             if (c >= 0x80) {
@@ -568,8 +669,12 @@ namespace IronRuby.Builtins {
                 } else {
                     flags &= ~(AsciiUnknownFlag | IsAsciiFlag);
                 }
+            } else if ((flags & (AsciiUnknownFlag | IsAsciiFlag)) == 0) {
+                // a set char may have replaced the last non-ASCII one
+                flags |= AsciiUnknownFlag;
             }
             _flags = flags | HasChangedFlags;
+            _changeCount++;
         }
 
         /// <summary>
@@ -577,7 +682,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         private void MutateOne(byte b) {
             uint flags = _flags;
-            if ((flags & MutationGuardFlags) != 0) {
+            if ((flags & MutationGuardFlags) != 0 || _content.IsOffsetSlice) {
                 flags = FrozenOrCopyOnWrite(flags);
             }
             if (b >= 0x80) {
@@ -586,6 +691,7 @@ namespace IronRuby.Builtins {
                 flags |= AsciiUnknownFlag;
             }
             _flags = flags | SurrogatesUnknownFlag | HasChangedFlags;
+            _changeCount++;
         }
 
         /// <summary>
@@ -606,15 +712,6 @@ namespace IronRuby.Builtins {
                 ((_flags & NoSurrogatesFlag) != 0 ? 0 : SurrogatesUnknownFlag) |
                 HasChangedFlags 
             );
-        }
-
-        /// <summary>
-        /// Prepares the string for mutation that combines its content with content of another mutable string.
-        /// </summary>
-        private void Mutate(MutableString/*!*/ other) {
-            RubyEncoding newEncoding = RequireCompatibleEncoding(other);
-            Mutate();
-            SetEncoding(newEncoding);
         }
 
         /// <summary>
@@ -858,12 +955,23 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// Returns hash code of the string. The hash code is the same regardless of the internal string representation 
-        /// and also equal to <see cref="System.String.GetHashCode"/> if the string only contains ASCII characters, is binary-encoded,
-        /// or UTF8 encoded. The hash code is not cached.
+        /// Returns hash code of the string. The hash code is the same regardless of the internal string representation,
+        /// and the same for strings that are #eql? in different encodings (ASCII in US-ASCII, UTF-8 or BINARY, say).
+        /// A long string of ASCII characters hashes its bytes with SipHash-1-3 (Content.HashAsciiBytes); any other string
+        /// is hashed as <see cref="System.String.GetHashCode"/> hashes its characters, and so is equal to it. Both hashes
+        /// are keyed per process. The hash code is not cached.
         /// </summary>
         public override int GetHashCode() {
             return _content.CalculateHashCode();
+        }
+
+        /// <summary>
+        /// The hash of a CLR string that is the same as that of an equal (#eql?) String in UTF-8, as
+        /// a CLR string is #eql? to a String of the same characters: see <see cref="GetHashCode()"/>.
+        /// </summary>
+        public static int GetHashCode(string/*!*/ str) {
+            ContractUtils.RequiresNotNull(str, "str");
+            return Content.HashCharacters(str.AsSpan(), true);
         }
 
         /// <summary>
@@ -911,6 +1019,11 @@ namespace IronRuby.Builtins {
                     flags = flags & ~SurrogatesUnknownFlag | NoSurrogatesFlag;
                 } else {
                     flags = _content.UpdateCharacterFlags(_flags);
+                    if (!_encoding.IsAsciiIdentity) {
+                        // the scan answers ASCII too, but no string in UTF-16 or UTF-32 is (see IsAscii):
+                        // HasSingleByteCharacters would take "abc" in UTF-16LE for its three bytes
+                        flags &= ~(AsciiUnknownFlag | IsAsciiFlag);
+                    }
                 }
                 _flags = flags;
             }
@@ -946,6 +1059,18 @@ namespace IronRuby.Builtins {
             return this;
         }
 
+        /// <summary>
+        /// The runs of bytes String#scrub replaces, as offset and length pairs, for a multibyte
+        /// encoding other than the Unicode ones; null for any other encoding.
+        /// </summary>
+        public List<int> GetScrubRuns() {
+            if (_encoding.IsDummy || _encoding == RubyEncoding.Binary) {
+                return null;
+            }
+            byte[] bytes = ToByteArray();
+            return RubyOnlyEncodings.FindScrubRuns(_encoding.StrictEncoding, bytes, bytes.Length);
+        }
+
         public bool ContainsInvalidCharacters() {
             // Nothing is invalid in a dummy encoding, which says nothing about its bytes.
             if (_encoding.IsDummy || _encoding == RubyEncoding.Binary) {
@@ -970,34 +1095,6 @@ namespace IronRuby.Builtins {
             return _content.ContainsInvalidCharacters();
         }
 
-        public bool IsTainted {
-            get {
-                return (_flags & IsTaintedFlag) != 0; 
-            }
-            set {
-                var flags = _flags;
-                if ((flags & IsFrozenFlag) != 0) {
-                    throw RubyExceptions.CreateStringFrozenError(this);
-                }
-
-                _flags = (flags & ~IsTaintedFlag) | (value ? IsTaintedFlag : 0);
-            }
-        }
-
-        public bool IsUntrusted {
-            get {
-                return (_flags & IsUntrustedFlag) != 0;
-            }
-            set {
-                var flags = _flags;
-                if ((flags & IsFrozenFlag) != 0) {
-                    throw RubyExceptions.CreateStringFrozenError(this);
-                }
-
-                _flags = (flags & ~IsUntrustedFlag) | (value ? IsUntrustedFlag : 0);
-            }
-        }
-
         public bool IsFrozen {
             get {
                 return (_flags & IsFrozenFlag) != 0;
@@ -1018,6 +1115,14 @@ namespace IronRuby.Builtins {
 
         public void TrackChanges() {
             _flags &= ~HasChangedFlag;
+        }
+
+        /// <summary>
+        /// Moves on every change of the content (see _changeCount): equal before and after a block means the block
+        /// did not change the string.
+        /// </summary>
+        public int ChangeCount {
+            get { return _changeCount; }
         }
 
         void IRubyObjectState.Freeze() {
@@ -1052,46 +1157,6 @@ namespace IronRuby.Builtins {
         public MutableString/*!*/ UnlockTemporarily() {
             _flags &= ~IsTemporarilyLockedFlag;
             return this;
-        }
-
-        public bool IsTemporarilyLocked {
-            get { return (_flags & IsTemporarilyLockedFlag) != 0; }
-        }
-
-        /// <summary>
-        /// Makes this string tainted if the specified string is tainted.
-        /// </summary>
-        public MutableString/*!*/ TaintBy(MutableString/*!*/ str) {
-            IsTainted |= str.IsTainted;
-            IsUntrusted |= str.IsUntrusted;
-            return this;
-        }
-
-        /// <summary>
-        /// Makes this string tainted if the specified object is tainted.
-        /// </summary>
-        public MutableString/*!*/ TaintBy(IRubyObjectState/*!*/ obj) {
-            IsTainted |= obj.IsTainted;
-            IsUntrusted |= obj.IsUntrusted;
-            return this;
-        }
-
-        /// <summary>
-        /// Makes this string tainted if the specified object is tainted.
-        /// </summary>
-        public MutableString/*!*/ TaintBy(object/*!*/ obj, RubyContext/*!*/ context) {
-            bool tainted, untrusted;
-            context.GetObjectTrust(obj, out tainted, out untrusted);
-            IsTainted |= tainted;
-            IsUntrusted |= untrusted;
-            return this;
-        }
-
-        /// <summary>
-        /// Makes this string tainted if the specified object is tainted.
-        /// </summary>
-        public MutableString/*!*/ TaintBy(object/*!*/ obj, RubyScope/*!*/ scope) {
-            return TaintBy(obj, scope.RubyContext);
         }
 
         #endregion
@@ -1134,9 +1199,9 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <exception cref="DecoderFallbackException">Invalid characters present.</exception>
         public string/*!*/ ToString(Encoding/*!*/ encoding) {
-            int count;
-            byte[] bytes = _content.GetByteArray(out count);
-            return encoding.GetString(bytes, 0, count);
+            int offset, count;
+            byte[] bytes = _content.GetByteArray(out offset, out count);
+            return encoding.GetString(bytes, offset, count);
         }
 
         /// <summary>
@@ -1144,7 +1209,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <exception cref="DecoderFallbackException">Invalid characters present.</exception>
         public string/*!*/ ToString(Encoding/*!*/ encoding, int start, int count) {
-            byte[] bytes = GetByteArrayChecked(start, count);
+            byte[] bytes = GetByteArrayChecked(ref start, count);
             return encoding.GetString(bytes, start, count);
         }
 
@@ -1227,6 +1292,26 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// The characters in place, without copying them, for a string that
+        /// <see cref="PrepareForCharacterRead"/> has prepared: it is held either as characters - then
+        /// <paramref name="chars"/> is set and the result is true - or as bytes that are its characters
+        /// one for one (<see cref="DetectByteCharacters"/>), and then <paramref name="bytes"/> is.
+        /// Either span is only good until the string next changes.
+        /// </summary>
+        public bool GetCharacterData(out ReadOnlySpan<char> chars, out ReadOnlySpan<byte> bytes) {
+            var content = _content;
+            if (content is BinaryContent binary) {
+                Debug.Assert(DetectByteCharacters());
+                chars = default(ReadOnlySpan<char>);
+                bytes = binary.GetDataSpan();
+                return false;
+            }
+            bytes = default(ReadOnlySpan<byte>);
+            chars = (content is StringContent str) ? str.Data.AsSpan() : ((CharArrayContent)content).GetDataSpan();
+            return true;
+        }
+
+        /// <summary>
         /// Prepares the string for mutating character based operations that can potentially write arbitrary characters to the string.
         /// </summary>
         /// <exception cref="ArgumentException">
@@ -1303,12 +1388,14 @@ namespace IronRuby.Builtins {
 
             // TODO: How does MRI deal with invalid characters, surrogates?
             if (_encoding != other._encoding) {
+                // Characters only compare across encodings when both are ASCII in an ASCII
+                // compatible encoding; "abc" in UTF-16LE is the bytes "a\0b\0c\0".
                 bool bothAscii = true;
-                if (!IsAscii()) {
+                if (!_encoding.IsAsciiIdentity || !IsAscii()) {
                     SwitchToBytes();
                     bothAscii = false;
                 }
-                if (!other.IsAscii()) {
+                if (!other._encoding.IsAsciiIdentity || !other.IsAscii()) {
                     other.SwitchToBytes();
                     bothAscii = false;
                 }
@@ -1359,10 +1446,13 @@ namespace IronRuby.Builtins {
 
         public void SetLength(int value) {
             ContractUtils.Requires(value >= 0, "value");
-            _flags |= CharIndexChangedFlags;
+            // a mutation like any other: refused on a frozen string, a copy-on-write string gets its own
+            // content first, and the cached CLR string (CharArrayContent's snapshot) is invalidated
             if (value < _content.Count) {
+                MutateRemove();
                 _content.Remove(value, _content.Count - value);
-            } else {
+            } else if (value > _content.Count) {
+                Mutate();
                 _content.Count = value;
             }
         }
@@ -1386,10 +1476,6 @@ namespace IronRuby.Builtins {
             return _content.GetCharacterCount();
         }
 
-        public void SetCharCount(int value) {
-            PrepareForCharacterRead().SetLength(value);
-        }
-
         public int GetByteCount() {
             return _content.GetByteCount();
         }
@@ -1399,6 +1485,7 @@ namespace IronRuby.Builtins {
         }
 
         public MutableString/*!*/ TrimExcess() {
+            _content = _content.Unslice();
             _content.TrimExcess();
             return this;
         }
@@ -1407,11 +1494,20 @@ namespace IronRuby.Builtins {
             get {
                 return _content.GetCapacity();
             } set {
+                _content = _content.Unslice();
                 _content.SetCapacity(value);
             }
         }
 
+        /// <summary>
+        /// Makes room for <paramref name="minCapacity"/> bytes or characters. Also makes sure the
+        /// array is not shared with another string (copy-on-write, see Content.Clone), as a caller that
+        /// asks for capacity is about to write into it - RubyBufferedStream writes into the array
+        /// <see cref="GetByteArray"/> answers.
+        /// </summary>
         public void EnsureCapacity(int minCapacity) {
+            _content = _content.Unslice();
+            _content.PrepareForWrite(minCapacity);
             if (_content.GetCapacity() < minCapacity) {
                 _content.SetCapacity(minCapacity);
             }
@@ -1486,7 +1582,6 @@ namespace IronRuby.Builtins {
         #region Enumerations (read-only)
 
         public struct Character : IEquatable<Character> {
-            [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2105:ArrayFieldsShouldNotBeReadOnly")]
             public readonly byte[] Invalid;
             public readonly char Value;
             public readonly char LowSurrogate;
@@ -1618,7 +1713,6 @@ namespace IronRuby.Builtins {
                 if (Tokenizer.IsHighSurrogate(c = _data[index]) && index + 1 < _data.Length && Tokenizer.IsLowSurrogate(d = _data[index + 1])) {
                     _current = new Character(c, d);
                     _index = index + 2;
-#if FEATURE_ENCODING
                 } else if (EscapingEncoding.IsEscapedByte(c)) {
                     // A byte that is not valid in the string's encoding, carried through the
                     // character representation as a lone low surrogate. It is a character for
@@ -1626,7 +1720,6 @@ namespace IronRuby.Builtins {
                     // anything else that needs a code point has to say so.
                     _current = new Character(new byte[] { (byte)(c - EscapingEncoding.EscapeBase) });
                     _index = index + 1;
-#endif
                 } else {
                     _current = new Character(c);
                     _index = index + 1;
@@ -1639,14 +1732,17 @@ namespace IronRuby.Builtins {
             }
         }
 
+        // _index counts from _start, the first item of the string in _data (see BinaryContent._start).
         internal sealed class BinaryCharacterEnumerator : CharacterEnumerator {
             private readonly byte[]/*!*/ _data;
+            private readonly int _start;
             private readonly int _count;
 
-            internal BinaryCharacterEnumerator(RubyEncoding/*!*/ encoding, byte[]/*!*/ data, int count)
+            internal BinaryCharacterEnumerator(RubyEncoding/*!*/ encoding, byte[]/*!*/ data, int start, int count)
                 : base(encoding) {
                 Assert.NotNull(data);
                 _data = data;
+                _start = start;
                 _count = count;
             }
 
@@ -1663,45 +1759,30 @@ namespace IronRuby.Builtins {
                     return false;
                 }
 
-                _current = new Character((char)_data[_index++]);
+                _current = new Character((char)_data[_start + _index++]);
                 return true;
             }
 
             internal override void AppendDataTo(MutableString/*!*/ str) {
-                str.Append(_data, _index, _count - _index);
+                str.Append(_data, _start + _index, _count - _index);
             }
         }
 
-        internal sealed class CompositeCharacterEnumerator : CharacterEnumerator {
+        // _index counts from _start, as in BinaryCharacterEnumerator.
+        internal sealed class CharArrayCharacterEnumerator : CharacterEnumerator {
             private readonly char[]/*!*/ _data;
+            private readonly int _start;
             private readonly int _count;
-            private readonly List<byte[]> _invalid;
-#if FEATURE_ENCODING
-            private int _invalidIndex;
-#endif
 
-            internal CompositeCharacterEnumerator(RubyEncoding/*!*/ encoding, char[]/*!*/ data, int count, List<byte[]> invalid) 
+            internal CharArrayCharacterEnumerator(RubyEncoding/*!*/ encoding, char[]/*!*/ data, int start, int count) 
                 : base(encoding) {
                 _data = data;
+                _start = start;
                 _count = count;
-                _invalid = invalid;
-            }
-
-            private int InvalidCount {
-                get { return _invalid != null ? _invalid.Count : 0; }
             }
 
             internal override void AppendDataTo(MutableString/*!*/ str) {
-#if FEATURE_ENCODING
-                int i;
-                while (_index < _count && _invalidIndex < InvalidCount) {
-                    i = Array.IndexOf(_data, LosslessDecoderFallback.InvalidCharacterPlaceholder, _index);
-                    str.Append(_data, _index, i - _index);
-                    _index = i + 1;
-                    str.Append(_invalid[_invalidIndex++]);
-                }
-#endif
-                str.Append(_data, _index, _count - _index);
+                str.Append(_data, _start + _index, _count - _index);
             }
 
             public override bool HasMore {
@@ -1719,68 +1800,24 @@ namespace IronRuby.Builtins {
                     return false;
                 }
 
-                char c = _data[index];
-#if FEATURE_ENCODING
-                if (c != LosslessDecoderFallback.InvalidCharacterPlaceholder) {
-#endif
+                char c = _data[_start + index];
                 char d;
-                    if (Tokenizer.IsHighSurrogate(c) && index + 1 < _data.Length && Tokenizer.IsLowSurrogate(d = _data[index + 1])) {
-                        _current = new Character(c, d);
-                        _index = index + 2;
-#if FEATURE_ENCODING
-                    } else if (EscapingEncoding.IsEscapedByte(c)) {
-                        // See StringCharacterEnumerator: a byte that is not valid in the string's
-                        // encoding is a character, but not a valid one.
-                        _current = new Character(new byte[] { (byte)(c - EscapingEncoding.EscapeBase) });
-                        _index = index + 1;
-#endif
-                    } else {
-                        _current = new Character(c);
-                        _index = index + 1;
-                    }
-#if FEATURE_ENCODING
-                } else if (_invalidIndex < InvalidCount) {
-                    _current = new Character(_invalid[_invalidIndex++]);
+                if (Tokenizer.IsHighSurrogate(c) && index + 1 < _count && Tokenizer.IsLowSurrogate(d = _data[_start + index + 1])) {
+                    _current = new Character(c, d);
+                    _index = index + 2;
+                } else if (EscapingEncoding.IsEscapedByte(c)) {
+                    // See StringCharacterEnumerator: a byte that is not valid in the string's
+                    // encoding is a character, but not a valid one.
+                    _current = new Character(new byte[] { (byte)(c - EscapingEncoding.EscapeBase) });
                     _index = index + 1;
                 } else {
-                    // this can only happen if the decoder produces invalid characters \uFFFF, which it should not:
-                    throw new InvalidOperationException("Decoder produced an invalid chracter \uFFFF.");
+                    _current = new Character(c);
+                    _index = index + 1;
                 }
-#endif
                 return true;
             }
-
-            public override void Reset() {
-                base.Reset();
-#if FEATURE_ENCODING
-                _invalidIndex = -1;
-#endif
-            }
         }
 
-        internal static CharacterEnumerator/*!*/ EnumerateAsCharacters(byte[]/*!*/ data, int count, RubyEncoding/*!*/ encoding, out char[] allValid) {
-#if FEATURE_ENCODING
-            Decoder decoder = encoding.Encoding.GetDecoder();
-            var fallback = new LosslessDecoderFallback();
-            decoder.Fallback = fallback;
-
-            fallback.Track = true;
-            char[] chars = new char[decoder.GetCharCount(data, 0, count, true)];
-
-            // TODO: we can use singleton lossless non-tracking decoder for counting characters and tracking for getting the actual chars
-            decoder.Reset();
-            fallback.Track = false;
-            decoder.GetChars(data, 0, count, chars, 0, true);
-
-            allValid = (fallback.InvalidCharacters == null) ? chars : null;
-            return new CompositeCharacterEnumerator(encoding, chars, chars.Length, fallback.InvalidCharacters);
-#else
-            char[] chars = encoding.Encoding.GetChars(data, 0, count);
-            allValid = null;
-            return new CompositeCharacterEnumerator(encoding, chars, chars.Length, null);
-#endif
-        }
-        
         /// <summary>
         /// Enumerates over characters contained in the string. 
         /// Yields both valid characters and invalid byte sequences.
@@ -1831,7 +1868,33 @@ namespace IronRuby.Builtins {
         public MutableString/*!*/ GetSlice(int start, int count) {
             ContractUtils.Requires(start >= 0, "start");
             ContractUtils.Requires(count >= 0, "count");
-            return CreateDerived(_content.GetSlice(start, count), _encoding);
+            return GetSlice(_content, start, count);
+        }
+
+        // The content is read once by the caller: a read on another thread can switch the string
+        // between bytes and characters, and the indices are meant for the one the caller looked at.
+        private MutableString/*!*/ GetSlice(Content/*!*/ content, int start, int count) {
+            var result = CreateDerived(content.GetSlice(start, count), _encoding);
+            // a part of an ASCII string is ASCII, and saying so spares the next operation a scan of it
+            if ((_flags & (IsAsciiFlag | AsciiUnknownFlag)) == IsAsciiFlag) {
+                result._flags = (result._flags & ~(AsciiUnknownFlag | SurrogatesUnknownFlag)) | IsAsciiFlag | NoSurrogatesFlag;
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// A new String of the bytes [start, start + count) of this one (String#byteslice). A string
+        /// held as bytes slices them as <see cref="GetSlice(int, int)"/> does, which shares a long
+        /// slice's bytes with this string.
+        /// </summary>
+        public MutableString/*!*/ GetByteSlice(int start, int count) {
+            ContractUtils.Requires(start >= 0, "start");
+            ContractUtils.Requires(count >= 0, "count");
+            var content = _content;
+            if (content is BinaryContent) {
+                return GetSlice(content, start, count);
+            }
+            return CreateDerived().Append(GetBinarySlice(start, count));
         }
 
         public string/*!*/ GetStringSlice(int start) {
@@ -2034,7 +2097,159 @@ namespace IronRuby.Builtins {
             var encoding = RequireCompatibleEncoding(other);
 
             // MRI doesn't create a subclass
-            return new MutableString(_content.Concat(other._content), encoding);
+            var result = new MutableString(_content.Concat(other._content), encoding);
+
+            // Two halves known to be ASCII make an ASCII whole (MRI's coderange of a concatenation),
+            // which keeps "a" + x + "b" from scanning the first sum again for the second:
+            const uint AsciiFlags = IsAsciiFlag | AsciiUnknownFlag;
+            if ((_flags & AsciiFlags) == IsAsciiFlag && (other._flags & AsciiFlags) == IsAsciiFlag && encoding.IsAsciiIdentity) {
+                result._flags = (result._flags & ~(AsciiFlags | SurrogatesUnknownFlag)) | IsAsciiFlag | NoSurrogatesFlag;
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// What is known, part by part, about a string interpolation being built in one pass:
+        /// the encoding rb_str_concat_literals would arrive at, whether everything so far is ASCII,
+        /// and the number of characters. Fails (and the caller goes the general way, which raises
+        /// what is to be raised) for anything but a character representation, and for any pair of
+        /// encodings that the general way would have to do more than relabel for.
+        /// </summary>
+        private struct CharacterConcatenation {
+            public RubyEncoding/*!*/ Encoding;
+            public bool Ascii;
+            public bool Empty;
+            public int Length;
+
+            public CharacterConcatenation(RubyEncoding/*!*/ encoding) {
+                Encoding = encoding;
+                Ascii = true;
+                Empty = true;
+                Length = 0;
+            }
+
+            public bool Add(MutableString part) {
+                if ((object)part == null) {
+                    return true;
+                }
+
+                var content = part._content;
+                int count;
+                if (content is StringContent s) {
+                    count = s.Data.Length;
+                } else if (content is CharArrayContent c) {
+                    count = c.Count;
+                } else {
+                    return false;
+                }
+
+                // MutateAppend and GetCompatibleEncoding, for two character representations:
+                var partEncoding = part._encoding;
+                RubyEncoding encoding;
+                if (partEncoding == Encoding) {
+                    encoding = Encoding;
+                } else if (!Encoding.IsAsciiIdentity || !partEncoding.IsAsciiIdentity) {
+                    return false;
+                } else if (count == 0) {
+                    encoding = Encoding;
+                } else if (Empty) {
+                    encoding = part.IsAscii() ? Encoding : partEncoding;
+                } else {
+                    bool partAscii = part.IsAscii();
+                    if (Ascii != partAscii) {
+                        encoding = Ascii ? partEncoding : Encoding;
+                    } else if (partAscii) {
+                        encoding = Encoding;
+                    } else {
+                        // incompatible:
+                        return false;
+                    }
+                }
+
+                if (count != 0) {
+                    // a part already known not to be ASCII is not scanned again (MutateAppend):
+                    Ascii = Ascii && part.IsAscii();
+                    Empty = false;
+                    if ((Length += count) < 0) {
+                        return false;
+                    }
+                }
+
+                // RubyOps.AppendInterpolatedPart: a result still US-ASCII takes the part's encoding,
+                // which for ASCII characters relabels them and nothing else
+                if (partEncoding != RubyEncoding.Ascii && encoding == RubyEncoding.Ascii) {
+                    if (!Ascii) {
+                        return false;
+                    }
+                    encoding = partEncoding;
+                }
+
+                Encoding = encoding;
+                return true;
+            }
+
+            public MutableString/*!*/ Create(string/*!*/ chars) {
+                var result = new MutableString(new StringContent(chars, null), Encoding);
+                if (Encoding.IsAsciiIdentity) {
+                    const uint CharacterFlags = IsAsciiFlag | AsciiUnknownFlag | NoSurrogatesFlag | SurrogatesUnknownFlag;
+                    uint flags = result._flags;
+                    result._flags = (flags & ~CharacterFlags) | (Ascii ?
+                        IsAsciiFlag | NoSurrogatesFlag :
+                        flags & (NoSurrogatesFlag | SurrogatesUnknownFlag));
+                }
+                return result;
+            }
+        }
+
+        private static void CopyCharacters(MutableString part, Span<char> target, ref int offset) {
+            if ((object)part != null) {
+                var content = part._content;
+                ReadOnlySpan<char> chars = (content is StringContent s) ? s.Data.AsSpan() : ((CharArrayContent)content).GetDataSpan();
+                chars.CopyTo(target.Slice(offset));
+                offset += chars.Length;
+            }
+        }
+
+        /// <summary>
+        /// "#{a}#{b}" in one pass (as TruffleRuby builds an interpolation): the parts' characters are
+        /// copied once, into a CLR string of exactly their total length, rather than into a copy of
+        /// the first part that each further part regrows; and the result knows it is ASCII when its
+        /// parts did, so a hash, a comparison or a conversion to bytes need not scan it again.
+        /// Null when a part is not held as characters, or the encodings need more than relabeling
+        /// (see <see cref="CharacterConcatenation"/>): the caller then takes the general way.
+        /// </summary>
+        internal static MutableString TryConcatenateCharacters(MutableString first, MutableString second, RubyEncoding/*!*/ encoding) {
+            var concat = new CharacterConcatenation(((object)first != null) ? first._encoding : encoding);
+            if (!concat.Add(first) || !concat.Add(second)) {
+                return null;
+            }
+
+            string chars = String.Create(concat.Length, (first, second), static (span, state) => {
+                int offset = 0;
+                CopyCharacters(state.first, span, ref offset);
+                CopyCharacters(state.second, span, ref offset);
+            });
+            return concat.Create(chars);
+        }
+
+        /// <summary>
+        /// The same for any number of parts, starting from the encoding of the first.
+        /// </summary>
+        internal static MutableString TryConcatenateCharacters(MutableString/*!*/[]/*!*/ parts) {
+            var concat = new CharacterConcatenation(((object)parts[0] != null) ? parts[0]._encoding : RubyEncoding.Ascii);
+            for (int i = 0; i < parts.Length; i++) {
+                if (!concat.Add(parts[i])) {
+                    return null;
+                }
+            }
+
+            string chars = String.Create(concat.Length, parts, static (span, parts) => {
+                int offset = 0;
+                for (int i = 0; i < parts.Length; i++) {
+                    CopyCharacters(parts[i], span, ref offset);
+                }
+            });
+            return concat.Create(chars);
         }
 
         #endregion
@@ -2179,9 +2394,38 @@ namespace IronRuby.Builtins {
             ContractUtils.RequiresNotNull(value, "value");
             MutateAppend(value, repeatCount > 0);
 
-            // TODO: we can do better here (double the amount of copied bytes/chars in each iteration)
             var other = value._content;
             EnsureCapacity(other.Count * repeatCount);
+
+            if (repeatCount > 1 && _content.IsEmpty && !ReferenceEquals(value, this)) {
+                // One copy is appended and then what is there is doubled: a short string repeated
+                // many times ("-" * 80) made as many appends, each one through the double dispatch
+                // between the contents and a capacity check, to copy a byte or two.
+                _content.Append(other, 0, other.Count);
+                repeatCount--;
+
+                // the appended copy is in this string's representation, which may differ from value's:
+                int unit = _content.Count;
+                long total = (long)unit * (repeatCount + 1);
+                if (total <= Int32.MaxValue) {
+                    int done = unit;
+                    while (done < total) {
+                        int count = (int)Math.Min(done, total - done);
+                        _content.Append(_content, 0, count);
+                        done += count;
+                    }
+                    return this;
+                }
+            }
+
+            if (repeatCount > 2 && !ReferenceEquals(value, this)) {
+                // The copies are put together on their own and then appended in one go - doubling
+                // them in place would have to know where they start in this string's representation.
+                var copies = CreateMutable(value._encoding).AppendMultiple(value, repeatCount);
+                _content.Append(copies._content, 0, copies._content.Count);
+                return this;
+            }
+
             while (repeatCount-- > 0) {
                 _content.Append(other, 0, other.Count);
             }
@@ -2244,7 +2488,6 @@ namespace IronRuby.Builtins {
         }
 
         public MutableString/*!*/ Insert(int index, string value) {
-            //RequiresArrayInsertIndex(index);
             if (value != null) {
                 Mutate();
                 _content.Insert(index, value, 0, value.Length);
@@ -2253,7 +2496,6 @@ namespace IronRuby.Builtins {
         }
 
         public MutableString/*!*/ Insert(int index, string/*!*/ value, int start, int count) {
-            //RequiresArrayInsertIndex(index);
             ContractUtils.RequiresNotNull(value, "value");
             ContractUtils.RequiresArrayRange(value, start, count, "start", "count");
 
@@ -2263,7 +2505,6 @@ namespace IronRuby.Builtins {
         }
 
         public MutableString/*!*/ Insert(int index, byte[] value) {
-            //RequiresArrayInsertIndex(index);
             if (value != null) {
                 Mutate();
                 _content.Insert(index, value, 0, value.Length);
@@ -2272,7 +2513,6 @@ namespace IronRuby.Builtins {
         }
 
         public MutableString/*!*/ Insert(int index, byte[]/*!*/ value, int start, int count) {
-            //RequiresArrayInsertIndex(index);
             ContractUtils.RequiresNotNull(value, "value");
             ContractUtils.RequiresArrayRange(value, start, count, "start", "count");
 
@@ -2281,9 +2521,12 @@ namespace IronRuby.Builtins {
             return this;
         }
 
+        /// <summary>
+        /// Inserts <paramref name="value"/> before the CLR char at <paramref name="index"/>.
+        /// </summary>
         public MutableString/*!*/ Insert(int index, MutableString value) {
-            //RequiresArrayInsertIndex(index);
             if (value != null) {
+                index = ToContentInsertIndex(index, value);
                 MutateAppend(value, true);
                 value._content.InsertTo(_content, index, 0, value._content.Count);
             }
@@ -2292,13 +2535,34 @@ namespace IronRuby.Builtins {
 
         // TODO: start, count measured in characters or bytes?
         public MutableString/*!*/ Insert(int index, MutableString/*!*/ value, int start, int count) {
-            //RequiresArrayInsertIndex(index);
             ContractUtils.RequiresNotNull(value, "value");
-            //value.RequiresArrayRange(start, count);
 
+            index = ToContentInsertIndex(index, value);
             MutateAppend(value, start == 0 && count == value._content.Count);
             value._content.InsertTo(_content, index, start, count);
             return this;
+        }
+
+        /// <summary>
+        /// The index the content takes for inserting <paramref name="value"/> before the CLR char at
+        /// <paramref name="index"/>. A value held as bytes is inserted as bytes, into this string's
+        /// bytes, so the content takes the index as a byte offset - which is the same only while
+        /// every character before it is a single byte. "あい".b.force_encoding("UTF-8") had a
+        /// character inserted after its first byte, and s[1] = str corrupted s the same way.
+        /// </summary>
+        private int ToContentInsertIndex(int index, MutableString/*!*/ value) {
+            if (index <= 0 || !value.IsBinary) {
+                return index;
+            }
+
+            // binary content that is not one byte per character is switched to characters, so that
+            // the index means what it does for every other operation:
+            PrepareForCharacterRead();
+            if (IsBinary || HasSingleByteCharacters || DetectByteCharacters()) {
+                return index;
+            }
+
+            return (index >= _content.Count) ? _content.GetByteCount() : GetSlice(0, index).GetByteCount();
         }
 
         #endregion
@@ -2345,7 +2609,6 @@ namespace IronRuby.Builtins {
         #region Replace, Write, Remove, Trim, Clear, Translate, TranslateSqueeze, TranslateRemove
 
         public MutableString/*!*/ Replace(int start, int count, MutableString value) {
-            //RequiresArrayRange(start, count);
 
             // Checked up front, so that an incompatible value leaves the string as it was. Remove
             // and Insert then keep what is known about the ASCII-ness and surrogates of the string
@@ -2370,7 +2633,7 @@ namespace IronRuby.Builtins {
 
         // TODO: characters
         public MutableString/*!*/ WriteBytes(int offset, MutableString/*!*/ value, int start, int count) {
-            byte[] bytes = value.GetByteArrayChecked(start, count);
+            byte[] bytes = value.GetByteArrayChecked(ref start, count);
             return Write(offset, bytes, start, count);
         }
 
@@ -2453,7 +2716,7 @@ namespace IronRuby.Builtins {
             }
 
             Debug.Assert(dstContent == dst._content && srcContent == src._content);
-            Debug.Assert(!dst.KnowsAscii);
+            Debug.Assert(!dst.KnowsAscii || !dst.Encoding.IsAsciiIdentity);
             return anyMaps;
         }
 
@@ -2487,7 +2750,7 @@ namespace IronRuby.Builtins {
             }
 
             Debug.Assert(dstContent == dst._content && srcContent == src._content);
-            Debug.Assert(!dst.KnowsAscii);
+            Debug.Assert(!dst.KnowsAscii || !dst.Encoding.IsAsciiIdentity);
             return anyMaps;
         }
 
@@ -2516,7 +2779,7 @@ namespace IronRuby.Builtins {
             }
 
             Debug.Assert(dstContent == dst._content && srcContent == src._content);
-            Debug.Assert(!dst.KnowsAscii);
+            Debug.Assert(!dst.KnowsAscii || !dst.Encoding.IsAsciiIdentity);
             return anyMaps;
         }
 
@@ -2524,7 +2787,6 @@ namespace IronRuby.Builtins {
 
         #region Quoted Representation (read-only)
 
-#if FEATURE_ENCODING
         private sealed class DumpDecoderFallback : DecoderFallback {
             // \xXX
             // \000
@@ -2620,13 +2882,6 @@ namespace IronRuby.Builtins {
             escapePlaceholder = ((DumpDecoderFallback.Buffer)decoder.FallbackBuffer).HasInvalidCharacters ? DumpDecoderFallback.EscapePlaceholder : -1;
             return new String(chars);
         }
-#else
-        private static string/*!*/ ToStringWithEscapedInvalidCharacters(byte[]/*!*/ bytes, Encoding/*!*/ encoding, bool octalEscapes, out int escapePlaceholder) {
-            // fallback not supported, just replace invalid characters with the default replacement:
-            escapePlaceholder = -1;
-            return new String(encoding.GetChars(bytes));
-        }
-#endif
 
         // TODO: make struct and include quote character
         [Flags]
@@ -2716,6 +2971,9 @@ namespace IronRuby.Builtins {
                 } else {
                     AppendBinaryCharRepresentation(result, currentChar, nextChar, escape, quote);
                 }
+            } else if (IsEscapedByte(currentChar)) {
+                // a byte that did not decode (see EscapingEncoding) is shown as the byte it is
+                AppendHexEscape(result, currentChar - EscapingEncoding.EscapeBase);
             } else if ((escape & Escape.NonAscii) != 0) {
                 if (nextChar != -1 && Char.IsSurrogatePair((char)currentChar, (char)nextChar)) {
                     currentChar = Tokenizer.ToCodePoint(currentChar, nextChar);
@@ -2744,6 +3002,11 @@ namespace IronRuby.Builtins {
                 result.Append((char)currentChar);
             }
             return inc;
+        }
+
+        /// <summary>A lone low surrogate in U+DC80..U+DCFF stands for one undecodable byte.</summary>
+        private static bool IsEscapedByte(int c) {
+            return c >= EscapingEncoding.EscapeBase + 0x80 && c <= EscapingEncoding.EscapeBase + 0xFF;
         }
 
         /// <summary>\uXXXX up to U+FFFF, \u{XXXXXX} above it - MRI writes both in upper case.</summary>
@@ -2928,16 +3191,42 @@ namespace IronRuby.Builtins {
 
         #region Internal Helpers
 
-        internal byte[]/*!*/ GetByteArray(out int count) {
-            return _content.GetByteArray(out count);
+        /// <summary>
+        /// The bytes of the string in place: <paramref name="count"/> items of the array from
+        /// <paramref name="start"/> (not 0 for a slice that shares the array of the string it was
+        /// taken from). Only for reading - the array may be shared with another string (see
+        /// Content.Clone). A caller that writes into it gets it from <see cref="GetWritableByteArray"/> instead.
+        /// </summary>
+        internal byte[]/*!*/ GetByteArray(out int start, out int count) {
+            return _content.GetByteArray(out start, out count);
         }
 
-        internal byte[]/*!*/ GetByteArrayChecked(int start, int count) {
-            int byteCount;
-            var result = _content.GetByteArray(out byteCount);
-            if (count < 0 || start > byteCount - count) {
+        /// <summary>
+        /// The bytes of the string in place, for a caller that writes into the array (native code
+        /// filling a buffer, say): switches to bytes and gives the string an array of its own
+        /// first, in which the string starts at index 0.
+        /// </summary>
+        internal byte[]/*!*/ GetWritableByteArray(out int count) {
+            SwitchToBytes();
+            _content = _content.Unslice();
+            _content.PrepareForWrite(0);
+            int start;
+            var result = _content.GetByteArray(out start, out count);
+            Debug.Assert(start == 0);
+            return result;
+        }
+
+        /// <summary>
+        /// The array of the bytes, after checking that [<paramref name="start"/>, start + count) is in
+        /// the string; <paramref name="start"/> is moved to the index of that byte in the array.
+        /// </summary>
+        internal byte[]/*!*/ GetByteArrayChecked(ref int start, int count) {
+            int offset, byteCount;
+            var result = _content.GetByteArray(out offset, out byteCount);
+            if (count < 0 || start < 0 || start > byteCount - count) {
                 throw new ArgumentOutOfRangeException("count");
             }
+            start += offset;
             return result;
         }
 

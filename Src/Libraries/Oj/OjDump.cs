@@ -989,7 +989,7 @@ namespace IronRuby.StandardLibrary.Oj {
         /// <summary>oj_dump_strict_val / oj_dump_null_val.</summary>
         internal static void DumpStrictVal(object obj, int depth, Out/*!*/ output, bool nullMode) {
             if (MaxDepth < depth) {
-                throw new NoMemoryError("Too deeply nested.\n");
+                throw new OutOfMemoryException("Too deeply nested.\n");
             }
             RType type = TypeOf(output.Context, obj);
             switch (type) {
@@ -1171,7 +1171,7 @@ namespace IronRuby.StandardLibrary.Oj {
         private static void DumpCompatBignum(Out/*!*/ output, object obj) {
             MutableString rs;
             if (output.State.UseBignumAlt) {
-                rs = MutableString.CreateAscii(ToBignum(obj).ToString(System.Globalization.CultureInfo.InvariantCulture));
+                rs = MutableString.CreateAscii(IronRuby.Builtins.ClrInteger.ToRadixString(ToBignum(obj), 10));
             } else {
                 rs = Sites.Call(output.Context, obj, "to_s") as MutableString;
                 if (rs == null) {

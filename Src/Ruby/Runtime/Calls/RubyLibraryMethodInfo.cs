@@ -13,29 +13,18 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Reflection;
-using System.Reflection.Emit;
-using System.Dynamic;
-using Microsoft.Scripting;
-using Microsoft.Scripting.Actions;
+using System.Threading;
 using Microsoft.Scripting.Actions.Calls;
-using Microsoft.Scripting.Generation;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
-using IronRuby.Compiler.Generation;
 using IronRuby.Compiler;
 
-using AstFactory = IronRuby.Compiler.Ast.AstFactory;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Runtime.Calls {
@@ -81,6 +70,26 @@ namespace IronRuby.Runtime.Calls {
             get { return false; }
         }
 
+        /// <summary>
+        /// The arity of the C function MRI implements the method with: the number of arguments it takes if every overload
+        /// takes just that many (rb_define_method with an argc of 0 or more), -1 otherwise - for a method that takes optional
+        /// or keyword arguments, or overloads of different lengths (argc/argv). Integer#round is -1, not -1 less one per
+        /// mandatory parameter; #parameters follows: [[:req]] for Integer#+, [[:rest]] for Integer#round. (A core method MRI
+        /// writes in Ruby reports its Ruby parameters, see MethodReflection in the libraries.)
+        /// </summary>
+        protected override int ComputeArity() {
+            int count = -1;
+            foreach (OverloadInfo method in MethodBases) {
+                int mandatory, optional;
+                RubyOverloadResolver.GetParameterCount(method, CallConvention, out mandatory, out optional);
+                if (optional > 0 || count >= 0 && count != mandatory || RubyOverloadResolver.TakesKeywords(method)) {
+                    return -1;
+                }
+                count = mandatory;
+            }
+            return count;
+        }
+
         internal protected override OverloadInfo/*!*/[]/*!*/ MethodBases {
             get {
                 Debug.Assert(base.MethodBases != null || _overloads != null);
@@ -102,7 +111,8 @@ namespace IronRuby.Runtime.Calls {
                 if (_notImplemented == 0) {
                     bool result = true;
                     foreach (var member in GetMembers()) {
-                        if (!member.IsDefined(typeof(RubyNotImplementedAttribute), false)) {
+                        var notImplemented = (RubyNotImplementedAttribute)Attribute.GetCustomAttribute(member, typeof(RubyNotImplementedAttribute), false);
+                        if (notImplemented == null || !notImplemented.AppliesHere) {
                             result = false;
                             break;
                         }
@@ -110,6 +120,22 @@ namespace IronRuby.Runtime.Calls {
                     _notImplemented = result ? 2 : 1;
                 }
                 return _notImplemented == 2;
+            }
+        }
+
+        // 0 = not computed yet, 1 = no, 2 = yes
+        private int _emptyUnary;
+
+        /// <summary>
+        /// True for a method that does nothing and takes exactly one argument: Module#method_added and the other
+        /// default hooks (see <see cref="RubyContext.IsDefaultHook"/>, which asks for every hook it would call).
+        /// </summary>
+        internal bool IsEmptyUnary {
+            get {
+                if (_emptyUnary == 0) {
+                    _emptyUnary = (IsEmpty && GetArity() == 1) ? 2 : 1;
+                }
+                return _emptyUnary == 2;
             }
         }
 
@@ -135,6 +161,13 @@ namespace IronRuby.Runtime.Calls {
                 return null;
             }
 
+            // The stub reports no :c_call, but CRuby reports these methods - Module#method_added and the other default
+            // hooks are C functions - so a rule bound while c_call is traced must not be the stub. Switching c_call
+            // tracing on or off rebinds every rule.
+            if (TracePoint.CCallTracing) {
+                return null;
+            }
+
             return MethodDispatcher.CreateRubyObjectDispatcher(
                 delegateType, new Func<object, Proc, object, object>(EmptyRubyMethodStub1), arity, signature.HasScope, signature.HasBlock, version
             );
@@ -145,8 +178,71 @@ namespace IronRuby.Runtime.Calls {
             return null;
         }
 
+        #region Calls without rules (LibraryDispatcher)
+
+        // Per overload: null until made, NoCallPlan if a call of the overload can't be made without a rule.
+        private static readonly object NoCallPlan = new object();
+        private object[] _callPlanStates;
+
+        // The overload the resolver picked for calls of the method of several overloads, by the types they were made with.
+        private Dictionary<LibraryResolutionKey, int> _resolvedOverloads;
+
+        internal LibraryCallPlan GetCallPlan(int index) {
+            var states = _callPlanStates;
+            if (states == null) {
+                Interlocked.CompareExchange(ref _callPlanStates, new object[MethodBases.Length], null);
+                states = _callPlanStates;
+            }
+
+            var state = states[index];
+            if (state == null) {
+                state = (object)LibraryCallPlan.TryCreate(Context, MethodBases[index]) ?? NoCallPlan;
+                Interlocked.CompareExchange(ref states[index], state, null);
+                state = states[index];
+            }
+            return state as LibraryCallPlan;
+        }
+
+        // null until made; NoSelector if the overloads' parameters can't be told
+        private object _overloadSelector;
+        private static readonly object NoSelector = new object();
+
+        internal LibraryOverloadSelector GetOverloadSelector() {
+            var selector = _overloadSelector;
+            if (selector == null) {
+                Interlocked.CompareExchange(ref _overloadSelector, (object)LibraryOverloadSelector.TryCreate(MethodBases, CallConvention) ?? NoSelector, null);
+                selector = _overloadSelector;
+            }
+            return selector as LibraryOverloadSelector;
+        }
+
+        internal int GetResolvedOverload(RubyCallAction/*!*/ binder, object target, Type/*!*/[]/*!*/ argTypes, bool hasBlock, bool blockGiven,
+            object[]/*!*/ args) {
+
+            var key = new LibraryResolutionKey(target != null ? target.GetType() : null, argTypes, hasBlock, blockGiven);
+            int index;
+            lock (this) {
+                if (_resolvedOverloads != null && _resolvedOverloads.TryGetValue(key, out index)) {
+                    return index;
+                }
+            }
+
+            index = LibraryDispatcher.Resolve(binder, this, args);
+
+            lock (this) {
+                if (_resolvedOverloads == null) {
+                    _resolvedOverloads = new Dictionary<LibraryResolutionKey, int>();
+                }
+                _resolvedOverloads[key] = index;
+            }
+            return index;
+        }
+
+        #endregion
+
         internal override void BuildCallNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ name) {
-            BuildCallNoFlow(metaBuilder, args, name, MethodBases, CallConvention, ImplicitProtocolConversions);
+            // An alias calls the method it aliases: a [CalledName] parameter gets that one's name, as in MRI.
+            BuildCallNoFlow(metaBuilder, args, OriginalName ?? name, MethodBases, CallConvention, ImplicitProtocolConversions);
 
             // Rules are rebound when c_call tracing is switched on or off, so a rule bound without it costs nothing.
             if (TracePoint.CCallTracing && !metaBuilder.Error && metaBuilder.Result != null) {

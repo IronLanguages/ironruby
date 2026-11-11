@@ -13,33 +13,19 @@
  *
  * ***************************************************************************/
 
-using System;
 using System.Collections.Generic;
-using System.Text;
 using System.Reflection;
 
 namespace IronRuby.Runtime {
+    /// <summary>
+    /// The IL offset to source line map of a precompiled startup-library method, which has no PDB.
+    /// </summary>
     internal sealed class RubyMethodDebugInfo {
-        private static readonly Dictionary<string, RubyMethodDebugInfo> _Infos = new Dictionary<string, RubyMethodDebugInfo>();
-
         private readonly List<int>/*!*/ _offsets = new List<int>();
         private readonly List<int>/*!*/ _lines = new List<int>();
 
         public static bool TryGet(MethodBase/*!*/ method, out RubyMethodDebugInfo info) {
-            lock (_Infos) {
-                return _Infos.TryGetValue(method.Name, out info);
-            }
-        }
-
-        public static RubyMethodDebugInfo GetOrCreate(string/*!*/ methodName) {
-            lock (_Infos) {
-                RubyMethodDebugInfo info;
-                if (!_Infos.TryGetValue(methodName, out info)) {
-                    info = new RubyMethodDebugInfo();
-                    _Infos.Add(methodName, info);
-                }
-                return info;
-            }
+            return IronRuby.Runtime.Precompiled.PrecompiledCode.TryGetDebugInfo(method, out info);
         }
 
         public void AddMapping(int ilOffset, int line) {

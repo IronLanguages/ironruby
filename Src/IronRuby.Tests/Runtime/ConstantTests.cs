@@ -15,7 +15,6 @@
 
 using IronRuby.Builtins;
 using System;
-using System.IO;
 using Microsoft.Scripting.Hosting.Providers;
 using IronRuby.Runtime;
 namespace IronRuby.Tests {
@@ -259,10 +258,35 @@ uninitialized constant M::W
         }
 
         /// <summary>
-        /// Global constants defined in loaded code are defined on the anonymous module created by the load.
+        /// Global constants defined in loaded code are defined on the anonymous module created by the load
+        /// (load(file, true)), or on the module given to it (load(file, module)); top-level methods of the
+        /// file are defined on the module, too, and they see its constants.
         /// </summary>
         public void LoadAndGlobalConstants() {
-            // TODO:
+            using (_driver.MakeTempFile("file", ".rb", @"
+X = 1
+class C; end
+def self.f; X; end
+p Module.nesting.size, f
+")) {
+                TestOutput(@"
+load $file, true
+p defined?(X), defined?(C)
+
+m = Module.new
+load $file, m
+p m.constants.sort, defined?(X)
+", @"
+1
+1
+nil
+nil
+1
+1
+[:C, :X]
+nil
+");
+            }
         }
 
         /// <summary>
@@ -281,6 +305,23 @@ Foo::Bar rescue p $!
 ", @"
 nil
 #<NameError: uninitialized constant Foo::Bar>
+");
+        }
+
+        /// <summary>
+        /// Ruby 1.9 dropped the unprefixed VERSION, PLATFORM and RELEASE_DATE; only the RUBY_ ones are left.
+        /// </summary>
+        public void GlobalConstants2() {
+            TestOutput(@"
+p defined?(VERSION), defined?(PLATFORM), defined?(RELEASE_DATE)
+p RUBY_VERSION.frozen?, RUBY_PLATFORM.frozen?, RUBY_RELEASE_DATE.frozen?
+", @"
+nil
+nil
+nil
+true
+true
+true
 ");
         }
 
@@ -372,10 +413,10 @@ p C.foo
         }
 
         /// <summary>
-        /// module_eval {} in Ruby 1.9 changes constant lookup chain.
+        /// module_eval {} does not change the constant lookup chain (it did in Ruby 1.9.1 only):
+        /// the constant is defined in the block's lexical scope, B, both times.
         /// </summary>
         public void ConstantCaching_Unqualified5() {
-#if TODO
             TestOutput(@"
 module A
  
@@ -383,22 +424,21 @@ end
 
 module B
   $q = Proc.new { X = 1 }
-  A.module_eval &$q
+  A.module_eval(&$q)
 end
 
 module C
-  module_eval &$q
+  module_eval(&$q)
 end
 
 p A.constants
 p B.constants
 p C.constants
 ", @"
-[:X]
 []
 [:X]
-");
-#endif
+[]
+", 0, 1);
         }
 
         /// <summary>
@@ -454,15 +494,24 @@ r + [c, c]
             Assert(ReferenceEquals(result[3], null));
         }
 
+        /// <summary>
+        /// The cached answer of defined? is a frozen string (MRI 3.0+), so a caller cannot change
+        /// what the next evaluation answers.
+        /// </summary>
         public void ConstantCaching_Unqualified_IsDefined1() {
             TestOutput(@"
 a = []
 2.times { a << defined?(Object) }
-a[0][0] = ?x
-puts a
+p a, a.map(&:frozen?)
+begin
+  a[0][0] = ?x
+rescue => e
+  p e.class
+end
 ", @"
-xonstant
-constant
+[""constant"", ""constant""]
+[true, true]
+FrozenError
 ");
         }
 
@@ -544,6 +593,10 @@ C::D
 ");
         }
 
+        /// <summary>
+        /// defined? of a constant path never calls const_missing, for a missing name in the middle of
+        /// the path either (MRI 1.9+): A::B::C is gone after the remove_const, and the path is undefined.
+        /// </summary>
         public void ConstantCaching_Qualified_IsDefined1() {
             TestOutput(@"
 module A
@@ -585,10 +638,8 @@ end
 ", @"
 
 
-missing: C
-constant
-missing: C
-constant
+
+
 constant
 constant
 ");
@@ -672,8 +723,6 @@ end
         }
 
         public void ConstantCaching_AutoUpdating1A() {
-            if (_driver.PartialTrust) return;
-
             var autoloaded = @"
 $C.const_set(:D, 1)
 $C.const_set(:E, 1)
@@ -711,8 +760,6 @@ end
         }
 
         public void ConstantCaching_AutoUpdating1B() {
-            if (_driver.PartialTrust) return;
-
             var autoloaded = @"
 class X
   D = 1

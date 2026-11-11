@@ -15,8 +15,6 @@
 
 using System;
 using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
-using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {
     [RubyClass("Binding", Extends = typeof(Binding))]
@@ -92,6 +90,17 @@ namespace IronRuby.Builtins {
         [RubyMethod("__ir_variable_name__", RubyMethodAttributes.PrivateInstance)]
         public static MutableString/*!*/ VariableName(ConversionStorage<MutableString>/*!*/ toStr, Binding/*!*/ self, object name) {
             return MutableString.Create(ToIdentifier(toStr, name), toStr.Context.GetIdentifierEncoding());
+        }
+
+        /// <summary>
+        /// The value of a local the binding can see, or nil. For a local no source text can
+        /// name - a keyword argument called `alias:` or `if:` is a local named alias or if,
+        /// which Binding#local_variable_get is the only way to read (fluentd's ConfigureProxy
+        /// reads its `alias:` that way). Whether it exists is #local_variables' answer.
+        /// </summary>
+        [RubyMethod("__ir_resolve_local__", RubyMethodAttributes.PrivateInstance)]
+        public static object ResolveLocal(ConversionStorage<MutableString>/*!*/ toStr, Binding/*!*/ self, object name) {
+            return self.LocalScope.ResolveLocalVariable(ToIdentifier(toStr, name));
         }
 
         internal static string/*!*/ ToIdentifier(ConversionStorage<MutableString>/*!*/ toStr, object name) {

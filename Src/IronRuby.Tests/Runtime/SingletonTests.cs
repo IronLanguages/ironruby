@@ -13,7 +13,6 @@
  *
  * ***************************************************************************/
 
-using IronRuby.Runtime;
 using System;
 namespace IronRuby.Tests {
     public partial class Tests {
@@ -377,8 +376,8 @@ $SM.c_c rescue p $!
 
 p $SM.c_m
 ", @"
-#<NameError: undefined method `c_c' for class `Class'>
-#<NoMethodError: undefined method `c_c' for class #<Class:M>>
+#<NameError: undefined method 'c_c' for class 'Class'>
+#<NoMethodError: undefined method 'c_c' for class #<Class:M>>
 :c_m
 ");
         }
@@ -394,7 +393,7 @@ class << C
   new rescue p $!
 end
 ", @"
-#<Method: #<Class:#<Class:C>>(Class)#new>
+#<Method: #<Class:#<Class:C>>(Class)#new(*)>
 #<TypeError: can't create instance of virtual class>
 ");
         }
@@ -441,16 +440,16 @@ C                                                  Object
 #<Class:#<Class:#<Class:C>>>                       #<Class:#<Class:#<Class:Object>>>
 #<Class:#<Class:#<Class:#<Class:C>>>>              #<Class:#<Class:#<Class:#<Class:Object>>>>
 
-undefined method `superclass' for module M
+undefined method 'superclass' for module M
 #<Class:M>                                         Module
 #<Class:#<Class:M>>                                #<Class:Module>
 #<Class:#<Class:#<Class:M>>>                       #<Class:#<Class:Module>>
 #<Class:#<Class:#<Class:#<Class:M>>>>              #<Class:#<Class:#<Class:Module>>>
 
-undefined method `superclass' for module #<MM:0x*>
-#<Class:#<MM:0x*>>                           MM
-#<Class:#<Class:#<MM:0x*>>>                  #<Class:MM>
-#<Class:#<Class:#<Class:#<MM:0x*>>>>         #<Class:#<Class:MM>>
+undefined method 'superclass' for module #<MM:0x*>
+#<Class:#<MM:0x*>>                  MM
+#<Class:#<Class:#<MM:0x*>>>         #<Class:MM>
+#<Class:#<Class:#<Class:#<MM:0x*>>>> #<Class:#<Class:MM>>
 #<Class:#<Class:#<Class:#<Class:#<MM:0x*>>>>> #<Class:#<Class:#<Class:MM>>>
 ", OutputFlags.Match);
         }

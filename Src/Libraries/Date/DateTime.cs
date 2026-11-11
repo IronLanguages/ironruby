@@ -14,7 +14,6 @@ using System.Globalization;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Runtime.Serialization;
-using System.Text;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;
@@ -28,11 +27,9 @@ namespace IronRuby.StandardLibrary.Date {
             : base(cls) {
         }
 
-#if FEATURE_SERIALIZATION
         protected RubyDateTime(SerializationInfo/*!*/ info, StreamingContext context)
             : base(info, context) {
         }
-#endif
 
         protected override RubyObject/*!*/ CreateInstance() {
             return new RubyDateTime(ImmediateClass.NominalClass);

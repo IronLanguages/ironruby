@@ -13,45 +13,23 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Reflection;
 using System.Text;
-using System.Runtime.CompilerServices;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
-using IronRuby.Runtime.Calls;
 using IronRuby.Runtime.Conversions;
 
 namespace IronRuby.Compiler.Ast {
     using Ast = MSA.Expression;
     using AstUtils = Microsoft.Scripting.Ast.Utils;
-    using AstExpressions = ReadOnlyCollectionBuilder<MSA.Expression>;
     using AstBlock = Microsoft.Scripting.Ast.BlockBuilder;
 
     public partial class CompoundLeftValue : LeftValue {
-        // TODO: 1.9
-        
-        /// <summary>
-        /// Empty LHS - used by blocks.
-        /// </summary>
-        internal static readonly CompoundLeftValue/*!*/ EmptyBlockSignature = new CompoundLeftValue(LeftValue.EmptyArray);
-
-        // TODO: 1.9
-
-        /// <summary>
-        /// Unspecified LHS - used by blocks.
-        /// </summary>
-        internal static readonly CompoundLeftValue/*!*/ UnspecifiedBlockSignature = new CompoundLeftValue(LeftValue.EmptyArray);
-
         /// <summary>
         /// List of l-values, possibly compound.
         /// </summary>
@@ -147,6 +125,11 @@ namespace IronRuby.Compiler.Ast {
         /// source order, and queues the temporaries for the write phase to use in the same order.
         /// </summary>
         private void EvaluateTargets(AstGenerator/*!*/ gen, AstBlock/*!*/ evaluation, Queue<MSA.Expression>/*!*/ targets) {
+            // Nested targets ((a, b), c) recurse through here (see StackGuard).
+            if (!IronRuby.Runtime.StackGuard.IsSufficient) {
+                IronRuby.Runtime.StackGuard.RunOnFreshStack(() => EvaluateTargets(gen, evaluation, targets));
+                return;
+            }
             foreach (var lvalue in _leftValues) {
                 var nested = lvalue as CompoundLeftValue;
                 if (nested != null) {
@@ -176,6 +159,10 @@ namespace IronRuby.Compiler.Ast {
 
             var nested = lvalue as CompoundLeftValue;
             if (nested != null) {
+                // (see EvaluateTargets)
+                if (!IronRuby.Runtime.StackGuard.IsSufficient) {
+                    return IronRuby.Runtime.StackGuard.RunOnFreshStack(() => nested.TransformWrite(gen, rightValue, true, targets));
+                }
                 return nested.TransformWrite(gen, rightValue, true, targets);
             }
             return targets != null

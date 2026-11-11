@@ -101,7 +101,8 @@ class IO
     mode.cc.setbyte(t::VMIN, 1)
     mode.cc.setbyte(t::VTIME, 0)
     mode.cc.setbyte(t::VMIN, min) if min
-    mode.cc.setbyte(t::VTIME, time) if time
+    # time: is in seconds and VTIME in tenths of one, as MRI converts it
+    mode.cc.setbyte(t::VTIME, (time * 10).to_i) if time
     if intr
       mode.iflag |= t::BRKINT
       mode.lflag |= t::ISIG
@@ -203,10 +204,12 @@ class IO
 
   # -------------------------------------------------------------------- size
 
-  # [rows, columns] of the terminal this IO is connected to.
+  # [rows, columns] of the terminal this IO is connected to.  Off one, MRI raises
+  # ENOTTY from ioctl, and on Windows EBADF - the error GetConsoleScreenBufferInfo
+  # leaves for a handle that is no console output, STDIN's included.
   def winsize
     size = ::Termios.winsize(self)
-    raise Errno::ENOTTY, __console_name__ unless size
+    raise (::Termios.supported? ? Errno::ENOTTY : Errno::EBADF), __console_name__ unless size
     size
   end
 
@@ -249,12 +252,13 @@ class IO
     wio.write(prompt) if prompt
     wio.flush
     begin
-      str = noecho { gets }
+      # a line is "\n"-terminated whatever $/ says, as MRI's rb_io_gets reads it
+      str = noecho { gets("\n") }
     ensure
       wio.print("\n")
       wio.flush
     end
-    str&.chomp
+    str&.chomp("\n")
   end
 
   # ------------------------------------------------------------------- cursor
@@ -353,7 +357,14 @@ class IO
 
     def __open_console__
       return nil unless ::Termios.supported?
-      io = File.open('/dev/tty', 'r+')
+      io = begin
+        File.open('/dev/tty', 'r+')
+      rescue SystemCallError
+        # A warm-start worker (Util/warm) has no controlling terminal of its own; it is told
+        # the name of its client's.
+        raise unless @__warm_console__
+        File.open(@__warm_console__, 'r+')
+      end
       return io if ::Termios.tty?(io)
       io.close
       nil

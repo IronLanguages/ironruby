@@ -52,7 +52,7 @@ y { |x0,x1,x2,x3,x4,x5,x6,x7,*z| print x0,x1,x2,x3,x4,x5,x6,x7,z[0],z[1]; }
         }
 
         public void RubyBlocks_Params3() {
-            XTestOutput(@"
+            TestOutput(@"
 l = lambda do |a,b=:b,*c,d,&e;f,g|
   p [a,b,c,d,e.class,f,g]
 end
@@ -125,7 +125,8 @@ end
         }
 
         public void RubyBlocks2() {
-            AssertExceptionThrown<MissingMethodException>(delegate() {
+            // NameError: undefined local variable or method 'z'
+            AssertExceptionThrown<MemberAccessException>(delegate() {
                 CompilerTest(@"
 3.times { |x| z = 1 }
 puts z # undef z
@@ -164,37 +165,11 @@ end
 
 C.new.foo { puts 'goo' }
 C.new.foo
-            ");
+            ", 0, 1);
             }, @"
 true
 false
             ");
-        }
-
-        /// <summary>
-        /// Return, yield and retry in a method.
-        /// </summary>
-        public void RubyBlocks6() {
-            TestOutputWithEval(@"
-def do_until(cond)
-  if cond then #<return#> end
-  #<yield#>
-  #<retry#>
-end
-
-i = 0
-do_until(i > 4) do
-  puts i
-  i = i + 1
-end
-", @"
-0
-1
-2
-3
-4
-"
-            );
         }
 
         /// <summary>
@@ -249,7 +224,7 @@ x = 5.times { |x|
   if i < 3 then next end
   puts 'bar'
 }
-");
+", 1, 0);
             }, @"
 0
 1
@@ -259,39 +234,6 @@ bar
 bar
 4
 bar
-");
-        }
-
-        /// <summary>
-        /// Retry in a block.
-        /// </summary>
-        public void RubyBlocks10A() {
-            AssertOutput(delegate() {
-                CompilerTest(@"
-i = 0
-3.times { |x| 
-  puts x
-  i = i + 1
-  if i == 2 then retry end
-}
-");
-            }, @"
-0
-1
-0
-1
-2
-");
-        }
-
-        /// <summary>
-        /// Retry in a block called via Proc#call.
-        /// </summary>
-        public void RubyBlocks10B() {
-            TestOutput(@"
-proc { retry rescue puts 'not caught here' }.call rescue p $!    # TODO: bug (should not be caught by the inner rescue)
-", @"
-not caught here
 ");
         }
 
@@ -357,7 +299,9 @@ foo { |a,b| puts a,b }
         /// Nested yielding.
         /// </summary>
         public void RubyBlocks14A() {
-            TestOutputWithEval(@"
+            // The eval variant (run first) gives foo no yield of its own: ruby -w warns that the
+            // block passed to it may be ignored, and the count is shared by both variants.
+            UsingEval((eval) => AssertOutput(() => CompilerTest(Eval(eval, @"
 def bar
   yield
   yield  # shouldn't be called
@@ -367,13 +311,13 @@ def foo
   bar {
     print 'x'
     #<yield#>
-  } 
+  }
 end
 
 foo { break }
-", @"
+"), 0, 1), @"
 x
-");
+"));
         }
 
         /// <summary>
@@ -400,7 +344,10 @@ breaking
         /// Covers RubyOps.YieldBlockBreak error path.
         /// </summary>
         public void RubyBlocks14C() {
-            TestOutputWithEval(@"
+            // With `eval %q{yield}` the method has no yield of its own, and ruby -w warns that the
+            // block passed to it may be ignored. The eval variant runs first and the warning count
+            // belongs to the runtime both variants share, so both see that one warning.
+            UsingEval((eval) => AssertOutput(() => CompilerTest(Eval(eval, @"
 def proc_conv(&b)
   $x = b
 end
@@ -415,43 +362,9 @@ def foo
 end
 
 foo
-", @"
+"), 0, 1), @"
 #<LocalJumpError: break from proc-closure>
-");
-        }
-
-        /// <summary>
-        /// Retry for-loop: for-loop should behave like x.each { } method call with a block, that is x is reevaluted on retry.
-        /// </summary>
-        public void RubyBlocks15() {
-            TestOutput(@"
-def foo x
-  puts ""foo(#{x})""
-  x * ($i + 1)
-end
-
-$i = 0
-
-for i in [foo(1), foo(2), foo(3)] do
-  puts ""i = #{i}""
-  
-  if $i == 0 then
-    $i = 1
-    retry
-  end  
-end
-", @"
-foo(1)
-foo(2)
-foo(3)
-i = 1
-foo(1)
-foo(2)
-foo(3)
-i = 2
-i = 4
-i = 6
-");
+"));
         }
 
         /// <summary>
@@ -484,46 +397,8 @@ x = foo do
     break 1
 end
 puts x
-");
+", 2, 0);
             }, @"1");
-        }
-
-        /// <summary>
-        /// Retry is propagated to the 'each' call.
-        /// </summary>
-        public void RubyBlocks17() {
-            TestOutputWithEval(@"
-def foo
-    for i in [1, 2, 3]
-        puts ""i = #{i}""
-        x = #<yield#>
-    end 
-    puts x
-end 
-
-def bar
-    $c = 0
-    foo do
-		puts $c
-        $c += 1
-        retry if $c < 3
-        'done'
-    end 
-end 
-
-bar
-", @"
-i = 1
-0
-i = 1
-1
-i = 1
-2
-i = 2
-3
-i = 3
-4
-done");
         }
 
         public void RubyBlocks18() {
@@ -574,7 +449,7 @@ end
 puts foo
 ", @"
 123
-");
+", 1);
             Assert(StackUnwinder.InstanceCount == 1);
         }
 
@@ -627,7 +502,7 @@ end
 puts f0
 ", @"
 123
-");
+", 0, 2);
             Assert(StackUnwinder.InstanceCount == 0);
         }
 
@@ -657,7 +532,7 @@ end
 puts f0
 ", @"
 123
-");
+", 0, 1);
             Assert(StackUnwinder.InstanceCount == 1);
         }
 
@@ -1644,21 +1519,20 @@ c6 = class C6
   new
 end
 
-#(c1[1] = 2) rescue p $!              # TODO: raise exception
-#(c1[1,*[]] = 2) rescue p $!          # TODO: raise exception
-#(c2[1,2] = 3) rescue p $!            # TODO: raise exception
-#(c2[*[1,2]] = 3) rescue p $!         # TODO: raise exception
+(c1[1] = 2) rescue p $!
+(c1[1,*[]] = 2) rescue p $!
+(c2[1,2] = 3) rescue p $!
+(c2[*[1,2]] = 3) rescue p $!
 c3[1,2,*[]] = 3
 c4[1,*[2,3]] = 4
 c5[1,2,*[3,4]] = 5
 c6[1,2] = 3
 c6[1,*[2,3,4,5,6]] = 7
-", 
-// #<ArgumentError: wrong number of arguments (given 2, expected 1)>
-// #<ArgumentError: wrong number of arguments (given 2, expected 1)>
-// #<ArgumentError: wrong number of arguments (given 3, expected 2)>
-// #<ArgumentError: wrong number of arguments (given 3, expected 2)>
-@"
+", @"
+#<ArgumentError: wrong number of arguments (given 2, expected 1)>
+#<ArgumentError: wrong number of arguments (given 2, expected 1)>
+#<ArgumentError: wrong number of arguments (given 3, expected 2)>
+#<ArgumentError: wrong number of arguments (given 3, expected 2)>
 [1, 2, 3]
 [1, 2, 3, 4]
 [1, 2, 3, 4, 5]
@@ -1695,7 +1569,7 @@ end
 baz { |a,b| p b }
 ", @"
 nil
-#<TypeError: can't convert C into Array (C#to_ary gives Integer)>
+#<TypeError: can't convert C to Array (C#to_ary gives Integer)>
 4
 ");
         }
@@ -1782,7 +1656,7 @@ end
 ");
             }, @"
 ok1
-can't convert C into Proc (C#to_proc gives Integer)
+can't convert C to Proc (C#to_proc gives Integer)
 ok2
 ");
         }
@@ -1799,11 +1673,14 @@ foo(&nil)
             }, @"nil");
         }
 
+        /// <summary>
+        /// &amp;obj calls a #to_proc the object defines without asking respond_to? (MRI's vm_to_proc);
+        /// an overridden respond_to? is only asked when there is no #to_proc.
+        /// </summary>
         public void RubyProcArgConversion4() {
-            AssertOutput(delegate() {
-                CompilerTest(@"
+            TestOutput(@"
 class C
-  def respond_to? name
+  def respond_to? name, include_all = false
     puts name
     $has_to_proc
   end
@@ -1813,19 +1690,27 @@ class C
   end
 end
 
+class D
+  def respond_to? name, include_all = false
+    puts name
+    false
+  end
+end
+
 c = C.new
 
 $has_to_proc = false
-1.times(&c) rescue puts 'error'
+1.times(&c)
 
 $has_to_proc = true
 1.times(&c)
-");
-            }, @"
-to_proc
-error
-to_proc
+
+1.times(&D.new) rescue p $!
+", @"
 ok
+ok
+to_proc
+#<TypeError: no implicit conversion of D into Proc>
 ");
         }
 
@@ -1847,7 +1732,7 @@ rescue ArgumentError => e
 end
 ", @"
 tried to create Proc object without a block
-");
+", 0, 1);
         }
 
         public void ProcNew2() {
@@ -1867,44 +1752,7 @@ rescue ArgumentError => e
 end
 ", @"
 tried to create Proc object without a block
-");
-        }
-
-        public void ProcNew3() {
-            TestOutput(@"
-$x = 0
-
-class P < Proc
-  def initialize *args, &b
-    p args, b.class, self.class, block_given?
-    $x += 1
-    retry if $x < 2
-    123
-  end
-end
-
-def arg
-  puts 'arg'
-  []
-end
-
-def foo
-  P.new(*arg) { puts 2 }
-end
-
-foo { puts 1 }
-", @"
-arg
-[]
-Proc
-P
-true
-arg
-[]
-Proc
-P
-true
-");
+", 0, 1);
         }
 
         public void ProcNew4() {
@@ -1933,12 +1781,9 @@ end
 ", @"
 arg
 tried to create Proc object without a block
-");
+", 0, 1);
         }
         
-        /// <summary>
-        /// TODO: 1.9 actually doesn't allow proc.binding
-        /// </summary>
         public void MethodToProc1() {
             AssertOutput(() => CompilerTest(@"
 class C
@@ -1962,7 +1807,7 @@ p q[] rescue p $!
 eval('puts x, self', q.binding)
 
 p D.new.instance_eval(&q)
-"), @"
+", 1, 0), @"
 #<C:0x*>
 1
 :b
@@ -2013,10 +1858,9 @@ D");
         /// define_method and class_eval change owner of the method definition.
         /// </summary>
         public void DefineMethod2() {
-            // TODO:
             TestOutput(@"
 module M
-  $p = lambda {    
+  $p = proc {    
     def goo
       def bar
         puts 'bar'
@@ -2038,18 +1882,52 @@ d = D.new
 
 d.goo
 c.foo
-c.goo
+c.goo rescue p $!.class
 
 p M.instance_methods(false).sort
 p C.instance_methods(false).sort
 p D.instance_methods(false).sort
 ", @"
-#<NoMethodError: undefined method `goo' for #<C:0x24c5a00>>
+NoMethodError
 [:goo]
 [:foo]
 [:bar, :goo]
 ");
+        }
 
+        /// <summary>
+        /// A call of a define_method method is the frame a break from its literal block ends, wherever the
+        /// body passes the block on to - as a def method's call is - on the first calls and on later ones.
+        /// </summary>
+        public void DefineMethodBlockBreak1() {
+            TestOutput(@"
+class Object; def yielder; yield 1; :done; end; end
+o = Object.new
+o.define_singleton_method(:each) { |&b| yielder(&b); :after }
+r = []
+4.times { |i| r << o.each { |x| break x * 10 + i } }
+p r
+class C; define_method(:each) { |&b| [1].each(&b); :after }; end
+p C.new.each { |x| break 20 }
+o.define_singleton_method(:call_it) { |&b| b.call(1); :after }
+p o.call_it { |x| break 30 }
+o.define_singleton_method(:ens) { |&b| begin; yielder(&b); ensure; puts 'ensure'; end; :after }
+p o.ens { break 40 }
+o.define_singleton_method(:keep) { |&b| $saved = b; :kept }
+p o.keep { break 50 }
+$saved.call rescue p $!.class
+p o.send(:each) { break 60 }, o.method(:each).call { break 70 }
+", @"
+[10, 11, 12, 13]
+20
+30
+ensure
+40
+:kept
+LocalJumpError
+60
+70
+");
         }
 
         public void ProcPosition1() {
@@ -2064,14 +1942,18 @@ end
 foo { }                         # line 9
 p lambda {}                     
 p Proc.new {}                   
-p method(:foo).to_proc          # TODO: source info not available
+p method(:foo).to_proc          # no location, as in MRI; #source_location still has it
+p [method(:foo).to_proc, method(:puts).to_proc].map { |x| x.inspect.include?('.rb') }
+p method(:foo).to_proc.source_location[1]
 p C.new {}                      
 "), @"
 #<Proc:0x* *ProcPosition1.rb:9>
 #<Proc:0x* *ProcPosition1.rb:10 (lambda)>
 #<Proc:0x* *ProcPosition1.rb:11>
 #<Proc:0x* (lambda)>
-#<C:0x* *ProcPosition1.rb:13>
+[false, false]
+2
+#<C:0x* *ProcPosition1.rb:15>
 ", OutputFlags.Match);
         }
 
@@ -2205,50 +2087,6 @@ lambda { |a,b,c,d,e,f,*g,&q| p [a,b,c,d,e,f,g,q.class] }.(1,2,3,4,5,6,7)
 ");
         }
 
-        public void EvalBreak1() {
-            AssertOutput(() => CompilerTest(@"
-x = 10.times do
-  puts 'in 1st loop'
-  eval('break 1') 
-end
-p x 
-
-x = while true
-  puts 'in 2nd loop'   
-  eval('break 2')
-end
-p x
-
-x = Array.new(10) do
-  eval('break 3')
-end
-p x
-
-class C
-  define_method(:foo) do
-    eval('break 4')
-  end
-end
-p C.new.foo
-
-x = Kernel.module_eval do
-  eval('break 5')
-end
-p x
-
-p 10.times { break eval('while true do eval(""break 6""); end') }
-"), @"
-in 1st loop
-1
-in 2nd loop
-2
-3
-4
-5
-6
-");
-        }
-
         /// <summary>
         /// Break from a block called via Proc#call.
         /// </summary>
@@ -2259,240 +2097,6 @@ def f(&b)
 end
 p f { break 123 }
 ", @"
-123
-");
-        }
-
-        public void EvalBreak3() {
-            AssertOutput(() => CompilerTest(@"
-def foo
-  eval('break')
-rescue 
-  p $!.class
-end
-
-foo
-
-class C
-  eval('break')
-rescue 
-  p $!.class
-end
-
-begin
-  eval('break')
-rescue 
-  p $!.class
-end
-"), @"
-LocalJumpError
-LocalJumpError
-LocalJumpError
-");
-        }
-
-        /// <summary>
-        /// Block needs to set InLoop and InRescue flags on RFC to "false".
-        /// </summary>
-        public void EvalRetry1() {
-            AssertOutput(() => CompilerTest(@"
-def foo &p
-  p[]
-end
-
-$x = 0
-
-begin
-  begin
-    puts 'in body'
-    raise
-  rescue
-    foo do
-      puts 'in block'
-      eval('retry') if ($x += 1) < 3    
-    end
-  end
-rescue 
-  p $!
-end
-"), @"
-in body
-in block
-#<LocalJumpError: retry from proc-closure>
-");
-        }
-
-        public void EvalRetry2() {
-            // retry in block:
-            AssertOutput(() => CompilerTest(@"
-$x = 0
-1.times do |i|
-  puts 'in block'
-  module M
-    eval('retry') if ($x += 1) < 2  
-  end  
-end
-"), @"
-in block
-in block
-");
-
-            // retry in rescue:
-            AssertOutput(() => CompilerTest(@"
-$x = 0
-1.times do
-  begin
-    raise
-  rescue 
-    puts 'in rescue'
-    module M
-      eval('retry') if ($x += 1) < 2
-    end
-  end
-end
-"), @"
-in rescue
-in rescue
-");
-            // TODO:
-            // retry in a define_method block:
-            AssertOutput(() => CompilerTest(@"
-$x = 0
-class C
-  define_method :foo do
-    puts 'define_method'
-    begin
-      eval('module M; retry; end') if ($x += 1) < 3 
-
-# TODO: should not catch here
-#   rescue
-#     p 'unreachable'
-    end
-  end
-end
-
-begin
-  C.new.foo
-rescue
-  p $!
-end"), @"
-define_method
-#<LocalJumpError: retry from proc-closure>
-");
-
-            // retry in a method taking a block:
-            AssertOutput(() => CompilerTest(@"
-$x = 0
-def foo *a
-  yield
-  eval('module M; retry; end') if ($x += 1) < 2 
-end
-
-foo(puts('in arg')) { puts 'in block' }
-"), @"
-in arg
-in block
-in arg
-in block
-");
-        }
-
-        public void EvalRedo1() {
-            // redo in loop:
-            AssertOutput(() => CompilerTest(@"
-$x = 0
-while (puts('in condition'); true)
-  puts 'in loop'
-  eval('module M; redo; end') if ($x += 1) < 2
-  break
-end
-"), @"
-in condition
-in loop
-in loop
-");
-
-            // redo in block:
-            AssertOutput(() => CompilerTest(@"
-$x = 0
-2.times do |i|
-  puts 'in block ' + i.to_s
-  eval('module M; redo; end') if ($x += 1) < 2
-end
-"), @"
-in block 0
-in block 0
-in block 1
-");
-
-            // redo in define_method block:
-            AssertOutput(() => CompilerTest(@"
-$x = 0
-class C
-  define_method :foo do
-    puts 'in block'
-    eval('module M; redo; end') if ($x += 1) < 2
-  end
-end
-C.new.foo
-"), @"
-in block
-in block
-");
-        }
-
-        public void EvalNext1() {
-            // next in loop:
-            AssertOutput(() => CompilerTest(@"
-$x = 0
-while (puts('in condition'); true)
-  puts 'in loop'
-  eval('module M; next; end') if ($x += 1) < 2
-  break
-end
-"), @"
-in condition
-in loop
-in condition
-in loop
-");
-
-            // next in block:
-            AssertOutput(() => CompilerTest(@"
-$x = 0
-2.times do |i|
-  puts 'in block ' + i.to_s
-  eval('module M; next; end') if ($x += 1) < 2
-end
-"), @"
-in block 0
-in block 1
-");
-
-            // next in define_method block:
-            AssertOutput(() => CompilerTest(@"
-$x = 0
-class C
-  define_method :foo do
-    puts 'in block'
-    eval('module M; next; end') if ($x += 1) < 2
-    puts 'unreachable'
-  end
-end
-C.new.foo
-"), @"
-in block
-");
-            // next returning a value:
-            AssertOutput(() => CompilerTest(@"
-class C
-  define_method :foo do
-    eval('next 123')
-  end
-end
-
-p C.new.foo
-"), @"
 123
 ");
         }
@@ -2583,6 +2187,10 @@ puts foo
 ");
         }
 
+        /// <summary>
+        /// A BEGIN block shares the top-level scope (MRI 1.9+): x is already a local there, nil
+        /// until the assignment after BEGIN has run, and the block's binding sees it afterwards.
+        /// </summary>
         public void BEGIN1() {
             TestOutput(@"
 x = 1
@@ -2590,16 +2198,16 @@ BEGIN {
   p x rescue p $!
   y = 1
   z = 2
-  1.times { p y + z }  
+  1.times { p y + z }
   $binding = binding
 }
 
 p eval('x', $binding) rescue p $!
 p eval('y+z', $binding)
 ", @"
-#<NoMethodError: undefined method `x' for main>
+nil
 3
-#<NoMethodError: undefined method `x' for main>
+1
 3
 ");
         }
@@ -2630,52 +2238,6 @@ puts '7'
 ");
         }
 
-#if OBSOLETE
-        [Options(Compatibility = RubyCompatibility.Ruby186)]
-        public void BEGIN3() {
-            TestOutput(@"
-def f1
-end
-
-BEGIN {
-  def f2
-  end
-}
-
-class C
-  private
-  while true
-    eval <<-END
-      BEGIN {
-        def f3
-        end
-      
-        private
-      
-        break
-        puts 'unreachable'
-      } 
-    END
-  end
-  
-  def f4
-  end
-end
-
-p self.private_methods(false).include?('f1')
-p self.public_methods(false).include?('f2')
-
-p C.public_instance_methods(false).include?('f3')
-p C.private_instance_methods(false).include?('f4')
-", @"
-true
-true
-true
-true
-");
-        }
-#endif
-
         public void SymbolToProc1() {
             TestOutput(@"
 class C
@@ -2695,12 +2257,48 @@ p n.call(nil)
 n.call() rescue p $!
 p n.call([1,2])
 ", @"
-#<NoMethodError: private method `foo' called for an instance of C>
+#<NoMethodError: private method 'foo' called for an instance of C>
 true
 #<ArgumentError: no receiver given>
 false
 ");
         }
+    
+        /// <summary>
+        /// A call site that forwards a block argument (&amp;b) is first bound with b nil, which
+        /// picks a library overload without a block. The rule has to test for that, or the same
+        /// site keeps ignoring the block once a real one arrives - x.count(&amp;b) counted every
+        /// element whatever the block said.
+        /// </summary>
+        public void BlockArgument_NilThenProc1() {
+            TestOutput(@"
+def c(x, &b)
+  x.count(&b)
+end
+p c([1, 2, 3])
+p(c([1, 2, 3]) { |v| v > 1 })
+def e(x, &b)
+  x.each(&b)
+end
+p e([1]).class
+p(e([1]) { |v| }.class)
+def i(x, &b)
+  x.inject(&b)
+end
+p((i([1, 2]) rescue :no_block))
+p(i([1, 2]) { |s, v| s + v })
+p((1..10).count)
+p((1..3).count { |v| v > 1 })
+", @"
+3
+2
+Enumerator
+Array
+:no_block
+3
+10
+2
+");
+        }
     }
 }
-

@@ -23,7 +23,6 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Reflection.Emit;
@@ -31,7 +30,6 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.StandardLibrary.Fiddle {
@@ -203,6 +201,8 @@ namespace IronRuby.StandardLibrary.Fiddle {
                     }
                     return NativeCall.ToLong(result);
                 } catch (Exception e) {
+                    // thrown again from Fiddle::Function#call, which starts its CLR trace over:
+                    RubyExceptionData.GetInstance(e).CaptureExceptionTrace(self._context);
                     _pendingCallbackError = e;
                     return NativeCall.IsFloating(self._returnType) ? (object)0.0 : (object)0L;
                 }

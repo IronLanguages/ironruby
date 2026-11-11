@@ -1,22 +1,66 @@
 <Project>
-  <!-- Modern (net8.0+) build scaffolding. The legacy Build/*.proj system is unused. -->
+  <!-- Modern (net10.0+) build scaffolding. The legacy Build/*.proj system is unused. -->
   <PropertyGroup>
     <LangVersion>latest</LangVersion>
 
     <!-- Every IronRuby project builds for both runtimes from one tree; the shared DLR
-         checkout already multi-targets net462;netstandard2.0;net8.0;net9.0;net10.0.
-         net8.0 stays first, so it is what a single-TFM consumer (and every script that
-         hardcodes a bin path) picks up by default; `IR_TFM=net10.0` selects the other in
+         checkout multi-targets net462;netstandard2.0;net8.0;net9.0;net10.0, and the net11.0
+         build references its net10.0 assemblies (the nearest framework it has).
+         net10.0 (LTS) stays first, so it is what a single-TFM consumer (and every script that
+         hardcodes a bin path) picks up by default; `IR_TFM=net11.0` selects the other in
          ir.sh / Util/*.sh, the same way IR_CONFIG=Release selects the other configuration.
-         Building one TFM only: -p:IronRubyTargetFrameworks=net10.0. -->
-    <IronRubyTargetFrameworks Condition="'$(IronRubyTargetFrameworks)' == ''">net8.0;net10.0</IronRubyTargetFrameworks>
-    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+         Building one TFM only: -p:IronRubyTargetFrameworks=net11.0. -->
+    <IronRubyTargetFrameworks Condition="'$(IronRubyTargetFrameworks)' == ''">net10.0;net11.0</IronRubyTargetFrameworks>
+    <!-- The projects' Properties/AssemblyInfo.cs carry title, company and so on; the SDK
+         generates only the version attributes, read from Src/Ruby/CurrentVersion.cs so that
+         file stays the one place a release changes. -->
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <GenerateAssemblyTitleAttribute>false</GenerateAssemblyTitleAttribute>
+    <GenerateAssemblyDescriptionAttribute>false</GenerateAssemblyDescriptionAttribute>
+    <GenerateAssemblyConfigurationAttribute>false</GenerateAssemblyConfigurationAttribute>
+    <GenerateAssemblyCompanyAttribute>false</GenerateAssemblyCompanyAttribute>
+    <GenerateAssemblyProductAttribute>false</GenerateAssemblyProductAttribute>
+    <GenerateAssemblyCopyrightAttribute>false</GenerateAssemblyCopyrightAttribute>
+    <GenerateAssemblyTrademarkAttribute>false</GenerateAssemblyTrademarkAttribute>
+    <GenerateNeutralResourcesLanguageAttribute>false</GenerateNeutralResourcesLanguageAttribute>
+    <IronRubyCurrentVersion>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)Src/Ruby/CurrentVersion.cs'))</IronRubyCurrentVersion>
+    <AssemblyVersion>$([System.Text.RegularExpressions.Regex]::Match($(IronRubyCurrentVersion), 'AssemblyVersion = "([^"]+)"').Groups[1].Value)</AssemblyVersion>
+    <FileVersion>$([System.Text.RegularExpressions.Regex]::Match($(IronRubyCurrentVersion), 'AssemblyFileVersion = "([^"]+)"').Groups[1].Value)</FileVersion>
+    <Version>$([System.Text.RegularExpressions.Regex]::Match($(IronRubyCurrentVersion), 'DisplayVersion = "([^"]+)"').Groups[1].Value)</Version>
+    <!-- Version+<git commit>: RubyContext.MakeRevisionString reads the commit back out as
+         RUBY_REVISION, the full hash as CRuby's is. -->
+    <IncludeSourceRevisionInInformationalVersion>true</IncludeSourceRevisionInInformationalVersion>
     <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
     <DlrSourceDir>$(MSBuildThisFileDirectory)..\dlr\src\core</DlrSourceDir>
 
-    <!-- Feature set mirroring the DLR's net8.0.props, minus platform-dead features
+    <!-- Feature set mirroring the DLR's net10.0.props, minus platform-dead features
          (COM, remoting, PDB emit for dynamic code, BinaryFormatter serialization). -->
     <Features>FEATURE_CORE_DLR;FEATURE_ENCODING;FEATURE_FILESYSTEM;FEATURE_THREAD;FEATURE_PROCESS;FEATURE_STACK_TRACE;FEATURE_REFEMIT;FEATURE_EXCEPTION_STATE;FEATURE_ASSEMBLY_RESOLVE;FEATURE_CUSTOM_TYPE_DESCRIPTOR;FEATURE_FULL_CONSOLE;FEATURE_SYNC_SOCKETS;FEATURE_CRYPTOGRAPHY;FEATURE_SERIALIZATION</Features>
     <DefineConstants>$(DefineConstants);$(Features)</DefineConstants>
   </PropertyGroup>
+
+  <!-- Without SourceLink nothing sets SourceRevisionId; ask git, and leave it empty (so
+       RUBY_REVISION is "") when building outside a checkout - and when this tree is not the
+       top of one, as a source tarball unpacked inside some other repository is not: git's
+       HEAD there is that repository's. ConsoleOutput takes stderr as well as stdout, so
+       git's stderr goes to the null device, or a warning would join the revision. -->
+  <Target Name="IronRubySourceRevision" BeforeTargets="GetAssemblyVersion;AddSourceRevisionToInformationalVersion" Condition="'$(SourceRevisionId)' == ''">
+    <PropertyGroup>
+      <_IronRubyNullDevice Condition="'$(OS)' == 'Windows_NT'">nul</_IronRubyNullDevice>
+      <_IronRubyNullDevice Condition="'$(OS)' != 'Windows_NT'">/dev/null</_IronRubyNullDevice>
+    </PropertyGroup>
+    <!-- the path of this directory below the work tree's top: empty only at the top -->
+    <Exec Command="git rev-parse --show-prefix 2&gt;$(_IronRubyNullDevice)" WorkingDirectory="$(MSBuildThisFileDirectory)" ConsoleToMSBuild="true" IgnoreExitCode="true" StandardErrorImportance="low" StandardOutputImportance="low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_IronRubyGitPrefix" />
+      <Output TaskParameter="ExitCode" PropertyName="_IronRubyGitPrefixExit" />
+    </Exec>
+    <Exec Command="git rev-parse --verify -q HEAD 2&gt;$(_IronRubyNullDevice)" WorkingDirectory="$(MSBuildThisFileDirectory)" ConsoleToMSBuild="true" IgnoreExitCode="true" StandardErrorImportance="low" StandardOutputImportance="low"
+          Condition="'$(_IronRubyGitPrefixExit)' == '0' and '$(_IronRubyGitPrefix.Trim())' == ''">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_IronRubyGitHead" />
+      <Output TaskParameter="ExitCode" PropertyName="_IronRubyGitExit" />
+    </Exec>
+    <PropertyGroup Condition="'$(_IronRubyGitExit)' == '0' and $([System.Text.RegularExpressions.Regex]::IsMatch($(_IronRubyGitHead.Trim()), '^[0-9a-f]{40}([0-9a-f]{24})?$'))">
+      <SourceRevisionId>$(_IronRubyGitHead.Trim())</SourceRevisionId>
+    </PropertyGroup>
+  </Target>
 </Project>

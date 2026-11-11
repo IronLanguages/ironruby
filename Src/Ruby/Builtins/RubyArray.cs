@@ -22,9 +22,7 @@ using System.Diagnostics;
 using IronRuby.Runtime;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
-using IronRuby.Runtime.Calls;
 using IronRuby.Runtime.Conversions;
-using System.Runtime.Serialization;
 
 namespace IronRuby.Builtins {
 
@@ -42,8 +40,6 @@ namespace IronRuby.Builtins {
 
         private uint _flags;
         private const uint IsFrozenFlag = 1;
-        private const uint IsTaintedFlag = 2;
-        private const uint IsUntrustedFlag = 4;
 
         [Conditional("DEBUG")]
         private void ObjectInvariant() {
@@ -163,26 +159,6 @@ namespace IronRuby.Builtins {
             RequireNotFrozen();
         }
 
-        public bool IsTainted {
-            get {
-                return (_flags & IsTaintedFlag) != 0;
-            }
-            set {
-                Mutate();
-                _flags = (_flags & ~IsTaintedFlag) | (value ? IsTaintedFlag : 0);
-            }
-        }
-
-        public bool IsUntrusted {
-            get {
-                return (_flags & IsUntrustedFlag) != 0;
-            }
-            set {
-                Mutate();
-                _flags = (_flags & ~IsUntrustedFlag) | (value ? IsUntrustedFlag : 0);
-            }
-        }
-
         public bool IsFrozen {
             get {
                 return (_flags & IsFrozenFlag) != 0;
@@ -281,12 +257,20 @@ namespace IronRuby.Builtins {
         /// <returns>The index of the first slot that will contain the new elements.</returns>
         private int ResizeForAppend(int additionalCount, bool clear) {
             int oldCount = _count;
+            if (additionalCount < 0 || additionalCount > Int32.MaxValue - oldCount) {
+                // the count would overflow: no such array can be allocated (Ruby: NoMemoryError)
+                throw new OutOfMemoryException();
+            }
             _count += additionalCount;
 
             if (_start + oldCount > _content.Length - additionalCount) {
-                // not enough space for additional items:
+                // not enough space for additional items. Sliding the elements back to the front of
+                // the buffer costs a copy of all of them, so it is only worth it when that frees a
+                // good part of it: an array used as a queue (push at the end, shift at the front)
+                // has one free slot in front after each shift, and sliding for every push made
+                // each push O(n). Below half, the buffer grows as if it were full.
                 object[] newContent;
-                if (_count > _content.Length) {
+                if (_count > _content.Length || _start < oldCount / 2) {
                     newContent = new object[Utils.GetExpandedSize(_content, _count)];
                 } else {
                     newContent = _content;
@@ -347,10 +331,7 @@ namespace IronRuby.Builtins {
             Mutate();
             if (value != null) {
                 int start = ResizeForAppend(count, false);
-                int end = start + count;
-                for (int i = start; i < end; i++) {
-                    _content[i] = value;
-                }
+                Utils.Fill(_content, start, value, count);
             } else {
                 ResizeForAppend(count, true);
             }
@@ -427,12 +408,18 @@ namespace IronRuby.Builtins {
 
         private int ResizeForInsertion(int index, int size) {
             if (_count + size > _content.Length) {
-                object[] newContent = new object[Utils.GetExpandedSize(_content, _count + size)];
-                Array.Copy(_content, _start, newContent, 0, index);
-                Array.Copy(_content, _start + index, newContent, index + size, _count - index);
-                _count += size;
+                int newCount = _count + size;
+                object[] newContent = new object[Utils.GetExpandedSize(_content, newCount)];
+                // An insertion near the front (unshift) gets the free space in front of the
+                // elements, where the next one will want it, so a run of unshifts costs a copy per
+                // doubling rather than a copy of the whole array each; anything else gets it behind.
+                int newStart = (index < _count / 2) ? newContent.Length - newCount : 0;
+                Array.Copy(_content, _start, newContent, newStart, index);
+                Array.Copy(_content, _start + index, newContent, newStart + index + size, _count - index);
                 _content = newContent;
-                return index;
+                _start = newStart;
+                _count = newCount;
+                return newStart + index;
             }
 
             int rindex = _start + index;
@@ -547,9 +534,11 @@ namespace IronRuby.Builtins {
             int length = _content.Length;
             
             int newLength = 2 * newCount - 1;
-            if (newLength <= length / 2) {
-                // resize:
-                object[] newContent = new object[Math.Max(Utils.MinListSize, newLength)];
+            int newSize = Math.Max(Utils.MinListSize, newLength);
+            if (newLength <= length / 2 && newSize < length) {
+                // resize - only when that shrinks the storage: a small array emptied by pop or shift
+                // would otherwise be reallocated at the same minimal size on every removal:
+                object[] newContent = new object[newSize];
                 Array.Copy(_content, _start, newContent, 0, index);
                 Array.Copy(_content, _start + index + size, newContent, index, newCount - index);
                 _content = newContent;
@@ -739,6 +728,17 @@ namespace IronRuby.Builtins {
                 }
                 _content[_start + index] = value;
             }
+        }
+
+        /// <summary>
+        /// Overwrites count elements from index on with value: the elements must exist.
+        /// </summary>
+        public void Fill(object value, int index, int count) {
+            Mutate();
+            if (index < 0 || count < 0 || index > _count - count) {
+                throw new ArgumentOutOfRangeException("index");
+            }
+            Utils.Fill(_content, _start + index, value, count);
         }
 
         public void Reverse() {

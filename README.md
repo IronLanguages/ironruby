@@ -6,22 +6,44 @@
 ![IronRuby 4.0: Ruby 4.0 on .NET 8 and 10. IronRuby is back.](media/social/twitter-card.png)
 
 A fork of [IronRuby](https://github.com/IronLanguages/ironruby) — Ruby on the .NET CLR —
-brought back to life: it **builds and runs on .NET 8 and 10**, and it parses Ruby with
+brought back to life: it **builds and runs on .NET 10 and 11**, and it parses Ruby with
 **[prism](https://github.com/ruby/prism), CRuby's own parser**, instead of the hand-ported
 Ruby 1.9 grammar it shipped with in 2011.
 
-**IronRuby 4.0 is the first stable release since 1.1.3 in 2011**, and 4.0.1 is its latest.
+**IronRuby 4.0 is the first stable release since 1.1.3 in 2011**, and 4.0.5 is its latest.
 The downloads are self-contained: unpack one and run it, there is no .NET to install.
 
-| | Download | |
-|---|---|---|
-| **Windows** x64 | [ironruby-4.0.1-win-x64.zip](https://github.com/Largo/ironruby/releases/download/v4.0.1/ironruby-4.0.1-win-x64.zip) | with Windows Forms, WPF and the Notepad sample |
-| **Linux** x64 | [ironruby-4.0.1-linux-x64.tar.gz](https://github.com/Largo/ironruby/releases/download/v4.0.1/ironruby-4.0.1-linux-x64.tar.gz) | |
-| **macOS** arm64 | [ironruby-4.0.1-osx-arm64.tar.gz](https://github.com/Largo/ironruby/releases/download/v4.0.1/ironruby-4.0.1-osx-arm64.tar.gz) | built in CI, not tested there |
+**The compatibility target is Ruby 4.0.** IronRuby aims to run what CRuby 4.0 runs, with
+the same results: the language, the core classes and the standard library are checked
+against [ruby/spec](#status) and against CRuby 4.0 itself, and where IronRuby's behaviour
+differs from CRuby 4.0's, that is a bug in IronRuby. Ruby 3.x behaviour that 4.0 changed
+(`Set` as a core class, `Hash#inspect`, frozen string literals, the error messages) is
+not kept.
 
-[SHA256SUMS](https://github.com/Largo/ironruby/releases/download/v4.0.1/SHA256SUMS) ·
-[release notes](https://github.com/Largo/ironruby/releases/tag/v4.0.1) ·
+| | Download (.NET 10) | |
+|---|---|---|
+| **Windows** x64 | [ironruby-4.0.5-win-x64-setup.exe](https://github.com/Largo/ironruby/releases/download/v4.0.5/ironruby-4.0.5-win-x64-setup.exe) | the installer: the zip below, installed and put on the PATH |
+| **Windows** x64 | [ironruby-4.0.5-win-x64.zip](https://github.com/Largo/ironruby/releases/download/v4.0.5/ironruby-4.0.5-win-x64.zip) | with Windows Forms, WPF and the Notepad sample |
+| **Linux** x64 | [ironruby-4.0.5-linux-x64.tar.gz](https://github.com/Largo/ironruby/releases/download/v4.0.5/ironruby-4.0.5-linux-x64.tar.gz) | |
+| **macOS** arm64 | [ironruby-4.0.5-osx-arm64.tar.gz](https://github.com/Largo/ironruby/releases/download/v4.0.5/ironruby-4.0.5-osx-arm64.tar.gz) | built in CI, not tested there |
+
+The same on .NET 11:
+[ironruby-4.0.5-net11-win-x64.zip](https://github.com/Largo/ironruby/releases/download/v4.0.5/ironruby-4.0.5-net11-win-x64.zip) ·
+[ironruby-4.0.5-net11-linux-x64.tar.gz](https://github.com/Largo/ironruby/releases/download/v4.0.5/ironruby-4.0.5-net11-linux-x64.tar.gz) ·
+[ironruby-4.0.5-net11-osx-arm64.tar.gz](https://github.com/Largo/ironruby/releases/download/v4.0.5/ironruby-4.0.5-net11-osx-arm64.tar.gz)
+(no installer).
+
+[SHA256SUMS](https://github.com/Largo/ironruby/releases/download/v4.0.5/SHA256SUMS) ·
+[release notes](https://github.com/Largo/ironruby/releases/tag/v4.0.5) ·
 [all releases](https://github.com/Largo/ironruby/releases) · [getting started](#binary-releases)
+
+> **Each release is built for .NET 10 and for .NET 11.** The downloads in the table carry
+> the .NET 10 runtime, an LTS release supported until November 2028, and stay the default;
+> the `-net11-` archives carry .NET 11's. On .NET 11.0.0, multiplying and dividing big
+> Integers is several times slower than on .NET 10, so a program that does a lot of that
+> (pidigits, say) runs slower on the .NET 11 download; most other code runs a few percent
+> faster there. 4.0.4 was the last release for .NET 8.
+> [More in the 4.0.5 release notes](https://github.com/Largo/ironruby/releases/tag/v4.0.5).
 
 [![IronRuby 4.0 launch video: the title, an irb session, Windows Forms and the Notepad sample](media/launch/teaser.webp)](https://github.com/Largo/ironruby/releases/download/v4.0.0/ironruby-4-launch.mp4)
 
@@ -31,15 +53,16 @@ The downloads are self-contained: unpack one and run it, there is no .NET to ins
 
 - **Ruby 4.0, parsed by prism**: pattern matching, endless methods, `it`, keyword
   arguments, `...` forwarding — the syntax CRuby 4.0 accepts, read by CRuby's own parser.
-- **[ruby/spec](#status) at CRuby 4.0.6**: `spec/language` (2,934 examples) and
-  `spec/library` (6,398) pass with **0 failures**; `spec/core` has 21 of 23,136, 20 of them
-  `ObjectSpace.each_object`.
+- **[ruby/spec](#status)**: `spec/library` (6,011 examples), `spec/command_line` and
+  `spec/security` pass with **0 failures**, `spec/language` has 1 of 2,935 and `spec/core`
+  44 of 23,130 - 20 of them `ObjectSpace.each_object`, 24 a newer error wording than CRuby 4.0's.
 - **[A method JIT and OSR](#performance)**, on by default: integer and float loops, `fib`
   and `mandelbrot` run in **0.27–0.74×** CRuby's time. Over all 50 benchmarks the geomean
   is 3.25×; calls, strings and arrays are where the work is.
-- **irb 1.16 + reline**, **RubyGems 4.0.16 and Bundler** over real TLS, and Ruby 4.0's
+- **irb 1.18 + reline**, **RubyGems 4.0.20 and Bundler** over real TLS, and Ruby 4.0's
   standard library and bundled gems.
-- **[Rails 8.1 boots](#rails)** and serves requests through Rack (with nokogiri stubbed).
+- **[Rails 8.1 runs](#rails)**: `rails new`, a scaffold on SQLite, served by Puma, with
+  IronRuby's own sqlite3, nokogiri and puma in place of the C extensions.
 - **.NET is right there**: `require "System.Windows.Forms"`, and Windows Forms and WPF load
   from the Windows download. [`irubyc`](#packaging-an-application-irubyc) turns a Ruby
   program into one executable, or into a plugin DLL for a .NET host.
@@ -55,9 +78,9 @@ drives it in CI with nobody at the keyboard.*
 ## A first look
 
 ```console
-$ ./irb.sh
+$ ./iirb.sh
 irb(main):001> RUBY_DESCRIPTION
-=> "IronRuby 4.0.1 (4.0.0) on .NET 8.0.31 [x86_64-linux]"
+=> "IronRuby 4.0.5 (4.0.0) on .NET 10.0.12 [x86_64-linux]"
 irb(main):002> def fib(n) = n < 2 ? n : fib(n - 1) + fib(n - 2)
 => :fib
 irb(main):003> (1..10).map { fib(_1) }
@@ -76,22 +99,32 @@ irb(main):010> 1 / 0
         from (irb):10:in '<main>'
 ```
 
-That is **irb 1.16.0 and reline 0.6.3**, the same ones CRuby 4.0 ships — with syntax
-highlighting, auto-indent, Tab completion, history and `ls`/`show_source` — running on
+That is **irb 1.18.0 and reline 0.6.3** - reline as CRuby 4.0 ships it, irb the newer release
+with its startup banner - with syntax highlighting, auto-indent, Tab completion, history and
+`ls`/`show_source`, running on
 IronRuby. `io/console` is a C extension in CRuby, so IronRuby implements it over termios.
 
 Scripts run the same way, and gems install with real TLS:
 
 ```console
-$ ./ir.sh script.rb          # prism front end, vendored stdlib, JIT and OSR on
-$ ./igem.sh install rack     # or: ./ir.sh -S gem install rack
-$ ./ir.sh -S bundle install
+$ ./ironruby script.rb       # prism front end, vendored stdlib, JIT and OSR on
+$ ./igem.sh install rack     # or: ./ironruby -S gem install rack
+$ ./ironruby -S bundle install
 ```
 
-`ir` / `igem` / `iirb` / `irubyc` are the i-prefixed names IronRuby has used since 1.x, so
-they can sit on `PATH` beside CRuby's `ruby` and `gem` — the same reason JRuby ships
-`jruby`, `jgem`, `jirb` and `jrubyc`. The unprefixed `gem`, `irb`, `bundle`, `bundler` and
-`irubyc` live in `Src/StdLib/bin` and are what `ir -S <name>` finds.
+The interpreter is `ironruby` (`ironruby.cmd` on Windows), as JRuby's is `jruby`: it is
+RbConfig's `ruby_install_name`, so the binstubs Bundler and Rails write start
+`#!/usr/bin/env ironruby` - a `#!` line with "ruby" in it, which Ruby runs as Ruby. (Those
+RubyGems writes for an installed gem name the launcher by its path instead, `#!<root>/ironruby`,
+so they only work where that path still does.) `ir.sh` and `ir.cmd` are its short name, the
+one IronRuby has used since 1.x, and run the same thing.
+`igem` / `iirb` / `irubyc` keep the i-prefix so they can sit on `PATH` beside CRuby's `gem`
+and `irb`, as JRuby's `jgem`, `jirb` and `jrubyc` do; IronRuby has no launcher named `irb` or
+`gem`, so those stay CRuby's. The unprefixed `gem`, `irb`, `bundle`, `bundler` and `irubyc`
+live in `Src/StdLib/bin`, which is not on the PATH, and are what `ironruby -S <name>` finds.
+On Windows the build also has `ironrubyw.exe` next to `ir.exe`, as CRuby has `rubyw.exe` and
+JRuby `jrubyw.exe`: the same interpreter as a Windows GUI program, which gets no console
+window - for Windows Forms and WPF programs; `Samples\Notepad\notepad.cmd` starts it.
 
 ```ruby
 # all of this runs today
@@ -105,6 +138,74 @@ def connect(host:, port: 5432, **opts) = Client.new(host, port, **opts)
 users&.filter_map { it.name if it.active? }
 ```
 
+## Calling .NET
+
+The interop IronRuby always had still works: CLR namespaces are modules, `List[String]`
+instantiates a generic, `Method#of` a generic method, `include ILivingCreature` implements an
+interface, a Ruby subclass overrides virtual members, out parameters come back with the result.
+On top of that, .NET APIs now take the Ruby you would write today:
+
+```ruby
+System::Console.WriteLine "hi"     # platform assemblies load on demand, no load_assembly
+
+list = System::Collections::Generic::List[Integer].new([3, 1, 4])   # an Array for IEnumerable<int>
+list.Sort { |a, b| b <=> a }       # a block goes to the trailing delegate parameter
+list.ForEach { |x| break if x < 3 } # break ends the CLR call, as it does a Ruby one
+
+using System::Linq                  # extension methods for the rest of the file, as C#'s `using`
+list.where { it > 1 }.order_by { -it }.to_a      # => [4, 3]
+list.select { it * 2 }.to_a        # => [8, 6, 2], LINQ's Select ahead of Enumerable#select
+[3, 1].select { it > 1 }           # => [3], an Array keeps Array#select and gets no LINQ
+
+Widget.new(title: "Hi", width: 300) # keywords bind parameters by name, or set properties
+Greeter.greet("Ann", greeting: "Hello", times: 2)
+
+func = Funcs.Doubler               # a Func<int, int>
+[1, 2].map(&func)                  # delegates are callable like lambdas: call, to_proc, >>, curry
+ok, n = System::Int32.TryParse("42")
+
+case Point.new(1, 2)               # a C# record
+in {x: 1, y:} then y               # members by their Ruby or CLR name
+end
+min, max = Stats.MinMax(values)    # a ValueTuple destructures like an Array
+System::Threading::Tasks::Task.Run { 6 * 7 }.value   # => 42
+System::Runtime::CompilerServices::RuntimeHelpers.GetSubArray(array, 1..-2)  # a Ruby range for System.Range
+
+class Doctor < Human                # a CLR class without a parameterless constructor
+  def initialize(name)
+    super("Dr. #{name}")            # super runs the CLR base constructor
+  end
+end
+System::Math::PI                    # const and static readonly fields are constants
+command.Parameters.AddWithValue("$name", "Ann")   # a Ruby String for an Object parameter is a System.String
+```
+
+`using` a CLR namespace works like C#'s `using` directive and like a refinement: its extension
+methods are visible from that point to the end of the file, class body or eval string, and
+nowhere else. `using System::Linq::Enumerable` brings in one static class's (C#'s `using static`).
+Inside it, calls resolve as they did under the older `using_clr_extensions`, which activates a
+namespace for the whole runtime and is deprecated: an extension method of a CLR type comes ahead
+of the Ruby methods the type picks up from `Enumerable` (`list.select` is LINQ's), a CLR method
+group gets them as more overloads (`list.count(pred)`, the instance member winning an exact tie),
+and a Ruby object such as an Array, whose ancestors don't include `IEnumerable[T]`, gets none.
+Moving from one to the other means changing that one line.
+
+Also: a `Method` converts to a delegate, `IComparable<T>` types are `Comparable`, a Ruby class
+that includes `Comparable` or `Enumerable` is an `IComparable` or `IEnumerable` to .NET code,
+`IAsyncEnumerable<T>` is `Enumerable`, C# 8 default interface methods are callable and run for
+Ruby implementations, `include System::IComparable` works although the name is also a generic,
+and `Method#parameters` names a CLR method's parameters. An Int32, Int64 or BigInteger value is an
+`Integer`, yet `System::Int64` and `System::Numerics::BigInteger` still name their CLR types
+(`List[System::Int64]` is a `List<long>`, `System::Int64.MaxValue` is 2**63-1), and such an
+Integer has its own type's CLR members (`(2**70).is_even`, `5.to_string("X")`). An Array passed
+where overloads take different collections goes to the one its items fit, as a C# collection's
+static type would: `String.Join(",", [1, 2])` takes the `object[]`, `Enumerable.Sum([1.5, 2])`
+the `IEnumerable<double>`; a bignum takes a `double` parameter over narrower ones. See
+[`Src/IronRuby.Tests/Runtime/ClrBinderTests.cs`](Src/IronRuby.Tests/Runtime/ClrBinderTests.cs),
+[`ClrProtocolTests.cs`](Src/IronRuby.Tests/Runtime/ClrProtocolTests.cs) and
+[`ClrRuntimeInteropTests.cs`](Src/IronRuby.Tests/Runtime/ClrRuntimeInteropTests.cs) for the
+exact behaviour.
+
 ## Version numbers
 
 IronRuby's version follows the Ruby version it implements: **IronRuby 4.0 is Ruby 4.0**,
@@ -113,7 +214,7 @@ releases for that Ruby version (4.0.0, 4.0.1, ...) and is not CRuby's patch leve
 release notes say which CRuby release the specs were checked against. The last release of
 the original project was 1.1.3, for Ruby 1.9.2, in 2011.
 
-`IRONRUBY_VERSION` is the full version (`4.0.1`, or `4.0.0-preview1` for a pre-release),
+`IRONRUBY_VERSION` is the full version (`4.0.5`, or `4.0.0-preview1` for a pre-release),
 `RUBY_ENGINE_VERSION` the same without the pre-release suffix, and `RUBY_VERSION` the Ruby
 version (`4.0.0`).
 
@@ -121,21 +222,22 @@ version (`4.0.0`).
 
 | | before | after |
 |---|---|---|
-| Runtime | .NET Framework 4 | **.NET 8** (Linux, macOS, Windows) |
+| Runtime | .NET Framework 4 | **.NET 10 and 11** (Linux, macOS, Windows) |
 | Build | legacy msbuild, 12 configurations | SDK-style `dotnet build` |
 | Parser | hand-ported 1.9 grammar (~13k lines) | **prism** — the parser CRuby uses |
 | `RUBY_VERSION` | `1.9.2` | `4.0.0` |
 | Big integers | `Microsoft.Scripting.Math` | `System.Numerics` |
 | Integer | Int32, then BigInteger | Int32 → **Int64** → BigInteger |
 | Execution | DLR interpreter, then IL | + a **method JIT and OSR** that specialize on observed types |
-| REPL | irb from 2011 | **irb 1.16.0 + reline**, on a termios `io/console` |
-| Gems | RubyGems 1.3.7 (2010) | **RubyGems 4.0.16 + Bundler**, installing over real TLS; `gem install rails` resolves without compiling C |
+| REPL | irb from 2011 | **irb 1.18.0 + reline**, on a termios `io/console` |
+| Gems | RubyGems 1.3.7 (2010) | **RubyGems 4.0.20 + Bundler**, installing over real TLS; `gem install rails` resolves without compiling C |
 
 ## The prism front end
 
 Ruby source is parsed by `libprism.so` through P/Invoke, decoded from prism's binary
 serialization by a **generated** C# loader, and mapped onto IronRuby's existing AST — so the
-whole AstGenerator/DLR compilation pipeline works unchanged. This is the same architecture
+whole AstGenerator/DLR compilation pipeline works unchanged. It is the only parser: the
+hand-ported 1.9 grammar and its lexer have been removed. This is the same architecture
 JRuby uses for its Java loader:
 
 ```
@@ -160,29 +262,49 @@ See [`Src/Prism/README.md`](Src/Prism/README.md) for the details and the known g
 
 ## Status
 
-Measured with [ruby/spec](https://github.com/ruby/spec) at CRuby 4.0.6, `Util/parallel-sweep.sh`:
+Measured on 2026-11-06 with [ruby/spec](https://github.com/ruby/spec) `dda28d04` (2026-10-24,
+"Update to latest CRuby releases") and [mspec](https://github.com/ruby/mspec) `b79c65ed` - the
+`SPEC_REF`/`MSPEC_REF` CI pins - on Linux x64, .NET 10, Debug build, `LANG=C.UTF-8`, with
+`Util/parallel-sweep.sh`:
 
 | suite | examples | failing |
 |---|---|---|
-| `spec/language` | 2934 | **0** |
+| `spec/language` | 2935 | **1** — error wording (below) |
 | `spec/command_line` | 175 | **0** |
 | `spec/security` | 34 | **0** |
-| `spec/library` | 6398 | **0** |
-| `spec/core` | 23136 | **21** — 20 of them `ObjectSpace.each_object`, which needs `-X:ObjectSpace` |
-| IronRuby's own C# test suite | ~1470 | 19 known |
+| `spec/library` | 6011 | **0** |
+| `spec/core` | 23130 | **44** — 20 `ObjectSpace.each_object`, 24 error wording (below) |
+| IronRuby's own C# test suite | ~1000 | **0** |
 
-CRuby 4.0.6 is the oracle: where a spec and IronRuby disagree, the behaviour is checked
-against `ruby` and IronRuby is changed, not the spec.
+What the failing examples are:
+
+- **`ObjectSpace.each_object` (20)**: walking the heap needs `-X:ObjectSpace`, which the
+  sweep does not pass (see below).
+- **Error wording (25: 24 in core, 1 in language)**: these specs expect the wording of
+  CRuby's development branch for a conversion method returning the wrong type, "can't
+  convert X **into** Y (X#to_y gives Z)". CRuby 4.0 says "can't convert X **to** Y" and so
+  does IronRuby; mspec's `raise_consistent_error` checks the message only on
+  implementations other than CRuby.
+- `Mutex#lock` "does not raise deadlock if a fiber's attempt to lock was interrupted" fails in
+  some runs: a `Thread#raise` that arrives just as a thread resumes a fiber can land in the
+  resuming thread instead of the fiber.
+
+CRuby 4.0.9 is the oracle: where a spec and IronRuby disagree, the behaviour is checked
+against `ruby` and IronRuby is changed, not the spec. The aim is Ruby 4.0 compatibility
+rather than compatibility with any earlier Ruby: a difference from CRuby 4.0 that a
+program can observe is a bug worth a report, specs or not.
 
 The same tree **runs on Windows**, where `spec/language` and `spec/security` are also at
 zero; see [Windows](#windows) for how to build it and what is still missing there.
 
-The **Ruby 4.0 standard library is vendored** in `Src/StdLib/ruby/4.0` and comes first on the
-load path; the 1.9 tree sits behind it for the libraries 4.0 gemified or implements as C
-extensions. A compatibility prelude
+The **Ruby 4.0 standard library is vendored** in `Src/StdLib/ruby/4.0`; `Src/StdLib/ironruby`
+holds what CRuby implements as C extensions, written in C# (`Src/Libraries`) or Ruby, and is
+the only other library directory on the load path. A compatibility prelude
 ([`Src/StdLib/ironruby/ruby4.rb`](Src/StdLib/ironruby/ruby4.rb)) supplies what MRI provides
-natively — `Process.clock_gettime`, `Random`, `ObjectSpace::WeakMap`, `ruby2_keywords`,
-pattern-matching support classes and core methods from Ruby 2.x-4.x. `Ripper` is implemented
+natively and is simplest written in Ruby — `Fiber` (over C# mailboxes), `Random` (over a C#
+MT19937), `ruby2_keywords` and core methods from Ruby 2.x-4.x; `Pathname` is CRuby 4.0's own
+`pathname_builtin.rb`. `Rational` and `Complex` are C# (`RubyRational`, `RubyComplex`),
+following CRuby 4.0's `rational.c` and `complex.c`. `Ripper` is implemented
 on prism, the way CRuby 4.0 implements it, and `io/console` over termios, so the current
 **irb** and **reline** run unmodified.
 
@@ -207,37 +329,109 @@ reason.  The versions in the table are checked against the running interpreter's
 CRuby 4.0's pure-Ruby **bundled gems** - `rake`, `rexml`, `minitest`, `test-unit`, `csv`,
 `logger`, `matrix`, `net-imap`/`-smtp`/`-pop`/`-ftp`, `drb`, `racc`, `ostruct` and the rest -
 ship as real installed gems in IronRuby's own gem home, `Src/StdLib/ruby/gems/4.0.0`, at the
-versions CRuby 4.0.6 bundles, so `require "rexml/document"` and `ir -S rake` work the same on
+versions CRuby 4.0.9 bundles, so `require "rexml/document"` and `ir -S rake` work the same on
 every machine, with or without a CRuby next to IronRuby.
 [`Util/install-bundled-gems.rb`](Util/install-bundled-gems.rb) installs them from a CRuby
 source tarball's `gems/*.gem` and lists the ones left out and why (the C extensions IronRuby
-implements itself, and the ones that need `rbs`).  A host CRuby 4.0's gem directory is still
-offered for third-party gems, but never for a gem IronRuby ships;
-`IRONRUBY_NO_HOST_GEMS=1` turns it off entirely.
+implements itself, `typeprof` and `debug`).  Two come at another version than CRuby's, from
+rubygems.org and pinned by SHA-256: `rbs` 4.0.0.dev.5, the release IronRuby's `rbs_extension`
+is built from (below), and `repl_type_completor` 0.1.16, since releases before 0.1.14 refuse rbs 4 -
+so irb completes with its `TypeCompletor`, as on CRuby.  IronRuby never uses the gems of a CRuby
+installed on the same machine: a gem it needs is installed for IronRuby, with `igem install`
+or Bundler.
 
-A C extension is never built: there is no `ruby.h` to compile against, and the gem whose
-extension is missing is often in a read-only host CRuby tree.  Such a gem is left alone -
+A C extension is never built: there is no `ruby.h` to compile against.  Such a gem is left alone -
 its `.rb` files load, a real `require` of the `.so` raises `LoadError`, and the pure-Ruby
-fallback most of them carry is used instead.
+fallback most of them carry is used instead.  For the popular gems that have no fallback,
+IronRuby ships the C half itself, in C# or over a .NET library, as JRuby ships `-java` gems:
+`sqlite3`, `nokogiri` (over AngleSharp), `puma`, `nio4r`, `bcrypt`, `msgpack`, `oj`, `ffi`,
+`websocket-driver` and `markly`.  All but `markly` are default gems, so Bundler resolves a
+lockfile that names them without compiling anything.
+
+**rbs** (Ruby's type signatures, which ruby-lsp, steep and rdoc 8 load) has no such fallback,
+so IronRuby provides its extension, `rbs_extension`: the installed gem's own Ruby loads on top
+of the rbs C parser itself - the gem's `src/`, built unmodified into `librbs` by
+[`Util/build-librbs.sh`](Util/build-librbs.sh) - with the glue that builds the Ruby objects in
+C# (`Src/Libraries/Rbs`).  The parser is tied to one rbs release, currently 4.0.0.dev.5, and
+`require "rbs"` under any other version raises a `LoadError` saying so.
+
+### Ractor
+
+`Ractor` has Ruby 4.0's API ([`RactorOps.cs`](Src/Libraries/Builtins/RactorOps.cs)): `Ractor.new`
+(with `name:`), `#join` and `#value`, `Ractor::Port` (`#send`/`<<` with `move:`, `#receive`,
+`#close`, `#closed?`), `Ractor.receive`, `#send`, `Ractor.select` over ports and Ractors,
+`#monitor`/`#unmonitor`, `Ractor.current`/`.main`/`.main?`/`.count`, Ractor-local storage
+(`Ractor[]`, `Ractor[]=`, `Ractor.store_if_absent`), `Ractor.shareable?`,
+`Ractor.make_shareable` (with `copy:`), `Ractor.shareable_proc`/`shareable_lambda`, and the
+error classes (`Ractor::RemoteError` with its `cause` and `ractor`, `IsolationError`,
+`MovedError`, `ClosedError`, `Ractor::MovedObject`).  A Ractor is a CLR thread - a Ruby
+thread in its own `ThreadGroup`, whose threads all answer the same `Ractor.current` - so
+Ractors really run in parallel.
+
+What crosses between Ractors behaves as in CRuby: a message is shared when it is shareable
+(frozen all the way down, or made so by `make_shareable`), deep-copied otherwise (cycles and
+shared references kept, `TypeError`/`Ractor::Error` for what CRuby cannot copy), and with
+`move: true` every object copied becomes a `Ractor::MovedObject`, whose every method raises
+`Ractor::MovedError`.  The block of `Ractor.new` is checked when it is created: one that reads
+or assigns a local variable of an enclosing scope raises `ArgumentError` ("can not isolate a
+Proc because it accesses outer variables (a)."), from the variables the compiler records
+for every block; `make_shareable` and `shareable_proc` check those variables' values.
+
+The Ractors are isolated from each other as in CRuby ([`RactorIsolation.cs`](Src/Ruby/Runtime/RactorIsolation.cs)).
+A non-main Ractor gets `Ractor::IsolationError` for a global variable other than the
+Ractor-local ones (`$stdin`, `$stdout`, `$stderr` - IO objects of its own over the standard
+streams - `$VERBOSE`, `$DEBUG` and their aliases, which it inherits from its creator, and the
+per-thread or per-scope ones such as `$~`, `$_` and `$!`), for `global_variables` and
+`alias $a $b`, for any class variable, for an unshareable value of an instance variable of a
+class or module or any write to one, for the instance variables of a shareable object such as a
+Ractor, and for a constant that holds an unshareable value, read or set.  The block of
+`Ractor.new` and a shareable Proc are isolated: `eval` in them cannot use the locals around
+them (`SyntaxError`), `Proc#binding` refuses, and `Ractor.shareable_proc`/`make_shareable`
+refuse an outer variable the code assigns more than once ("may be reassigned").  A method
+`define_method` made of an unshareable block runs only in the Ractor that defined it, `trap` in
+a non-main Ractor isolates its block, and `require` there has the main Ractor load the file
+(`Ractor._require`; the prelude prepends Kernel with the delegating `#require` when the first
+Ractor starts, as CRuby does).  The core library written in Ruby (`ruby4.rb` and the other
+files `RubyStackTraceBuilder.IsInternalFile` names) stands in for CRuby's C code and is exempt.
+
+None of this costs the main Ractor anything until a Ractor is started: each check is a test of
+one field of the runtime (`RubyContext.RactorsStarted`), and a constant site's cached read of an
+object is unchanged.  Once a Ractor has run, a global variable or class-level instance variable
+access first asks which Ractor the thread is in, and a cached read of a constant holding an
+unshareable object does too (about 20 ns more per access in the main Ractor, measured on a loop
+of them).
+
+Not enforced: a shareable Proc still reads its outer variables live rather than from a copy
+taken when it was made (the "may be reassigned" check makes the difference unobservable for
+the variables it lets through); a moved String, Array or Hash raises `Ractor::MovedError` when
+it is sent a method, but a built-in method handed it as an argument (`[].concat(moved)`) still
+reads it; `ObjectSpace.each_object` without a module still needs `-X:ObjectSpace` (CRuby's
+non-main Ractor sees only the shareable objects) and `ObjectSpace._id2ref` cannot tell an
+unshareable object's id.  CRuby's own `bootstraptest/test_ractor.rb` passes 146 of its 153
+output checks: the misses are those, the 1000-Ractor `define_method` check that is correct but
+slower than the harness's 40 seconds (each of its million calls raises), and a `make_shareable`
+of a `Rational` with a `Numeric` subclass numerator.
 
 ### Rails
 
-A Rails 8.1 application boots and serves HTTP requests through Rack:
+A Rails 8.1 application runs the way it does on CRuby, from an untouched default Gemfile:
 
 ```
-RAILS GET /hello       -> 200 "Hello world from Rails 8.1.3.1 on ironruby 4.0.0"
-RAILS GET /hello/Iron  -> 200 "Hello IronRuby from Rails 8.1.3.1 on ironruby 4.0.0"
+igem install rails
+rails new blog && cd blog && bundle install
+bin/rails generate scaffold Post title:string body:text published:boolean
+bin/rails db:migrate
+bin/rails server
 ```
 
-ActiveSupport, ActiveModel, ActionDispatch, ActionController, ActionView (ERB templates
-through the real resolver), ActiveJob, ActiveRecord and railties all install and load.
-Two things stop a *complete* Rails app, and neither is a Ruby-level bug:
+The scaffold is served by Puma against SQLite, with Turbo and Stimulus through importmap:
+index, new, create (with its CSRF token), show, JSON, edit, update, destroy and the
+development error pages answer as on CRuby. `sqlite3`, `nokogiri` and `puma` are IronRuby's
+own (see [bundled gems](#bundled-gems)). [`Docs/rails-on-windows.md`](Docs/rails-on-windows.md)
+has the walkthrough and what had to be fixed for it.
 
-- **nokogiri** is a C extension (libxml2 + gumbo) and a hard dependency of
-  `rails-html-sanitizer` -> `loofah` -> `actionview`, and of `rails-dom-testing` ->
-  `actionpack`.  Everything above was measured with a load-only stub in its place; the
-  sanitize helpers, the dom assertions and the HTML error page need a real implementation.
-- **ActiveRecord has no adapter**: `sqlite3`, `pg`, `mysql2` and `trilogy` are all native.
+Not there yet: ActiveRecord adapters for PostgreSQL and MySQL (`pg`, `mysql2` and `trilogy`
+are native), and Puma's cluster mode (no `fork`).
 
 ## Performance
 
@@ -267,6 +461,11 @@ guess:
 Build with `-c Release` and run with `IR_CONFIG=Release ./ir.sh`: the optimized build is
 ~1.8x faster than the default Debug build across the whole suite. See
 [`Util/bench/README.md`](Util/bench/README.md).
+
+`IRONRUBY_STARTUP_TRACE=1` prints, when the process exits, where its startup went: milestones
+since the process started, and for the Ruby files it loaded the time spent parsing them
+(prism), transforming them to the DLR tree, compiling them for the interpreter and running
+their own code, the 15 slowest files first (`IRONRUBY_STARTUP_TRACE=all`: every file).
 
 ## Packaging an application (`irubyc`)
 
@@ -414,12 +613,12 @@ which skips RubyGems); later runs of the activity take a few milliseconds.
 ## Platforms
 
 Linux is the primary target and the one the numbers above are measured on. **Windows works**:
-`ir.cmd` and `irb.cmd` run, and `spec/language` (2920 examples) and `spec/security` pass with
+`ir.cmd` and `iirb.cmd` run, and `spec/language` (2920 examples) and `spec/security` pass with
 **0 failures**. `spec/core` and `spec/library` are rougher there — symlinks/chmod/umask in
-`core/file`, fork and signals in `core/process`, and `IO.select`/`IO#wait` on pipes (which is
-`poll(2)`, so `core/io` and the socket suites hang rather than fail). `zlib`, Win32OLE and
-readline are not implemented on Windows; `IO.console` is nil, so irb falls back to its ANSI
-input path. Windows Forms and WPF (`require "System.Windows.Forms"`, `"PresentationFramework"`)
+`core/file`, and fork and signals in `core/process`. Pipes are `WindowsPipeStream`s: there is
+no `poll(2)`, so `IO.select`/`IO#wait` get a pipe's readiness from `PeekNamedPipe`. Win32OLE is not
+implemented on Windows. `readline` is the readline gem over Reline, as on CRuby 4.0;
+`IO.console` is nil, so irb and Reline fall back to their ANSI input path. Windows Forms and WPF (`require "System.Windows.Forms"`, `"PresentationFramework"`)
 come from the Windows Desktop runtime, which `ir` references whenever it is built for Windows
 (`-p:IronRubyWindowsDesktop=false` leaves it out); on Linux and macOS they do not exist.
 [`Samples/Notepad`](Samples/Notepad/notepad.rb) is Windows Notepad written that way, in Ruby
@@ -431,39 +630,89 @@ processes, socket addresses and Puma were fixed there in 4.0.1 (#12, #13).
 
 [Releases](https://github.com/Largo/ironruby/releases) carry a ready-to-run IronRuby for
 Linux x64, Windows x64 and macOS arm64 (not tested in CI); the [table at the top](#ironruby-modernized)
-links the ones for 4.0.1. They are self-contained, so no .NET has to be installed. Unpack
-one and run the launchers in it:
+links the ones for 4.0.5. They are self-contained, so no .NET has to be installed: from
+4.0.5 on, each is built twice, on .NET 10 (`ironruby-<version>-<rid>`, the default) and on
+.NET 11 (`ironruby-<version>-net11-<rid>`), and carries that runtime; 4.0.4 and earlier
+carry .NET 8's. Unpack one and run the launchers in it:
 
 ```console
-$ tar xzf ironruby-4.0.1-linux-x64.tar.gz && cd ironruby-4.0.1-linux-x64
-$ ./ir.sh -e 'puts RUBY_DESCRIPTION'
-$ ./irb.sh
+$ tar xzf ironruby-4.0.5-linux-x64.tar.gz && cd ironruby-4.0.5-linux-x64
+$ ./ironruby -e 'puts RUBY_DESCRIPTION'
+$ ./iirb.sh
 $ ./igem.sh install rack
 ```
 
-On Windows, unzip it and use `ir.cmd`, `irb.cmd` and `igem.cmd`, or double-click
-`Samples\Notepad\notepad.cmd`. The archive has the same layout as a checkout, with the
-Release build in `Src/Console/bin/Release/net8.0`, so everything above applies to it
-unchanged. `irubyc` works too, but it still needs the .NET SDK to compile the application.
+From 4.0.2 on, the archives have `ironruby` and `ironruby.cmd` (see above), and `ir.sh` /
+`ir.cmd` keep working; 4.0.1 and earlier have only those.
+On Windows, unzip it and use `ironruby.cmd`, `iirb.cmd` and `igem.cmd`, or double-click
+`Samples\Notepad\notepad.cmd`. From 4.0.3 on there is also an installer,
+`ironruby-<version>-win-x64-setup.exe`, in the style of RubyInstaller: it installs the same
+tree into `C:\IronRuby40-x64` (or a directory you choose), for you or for all users, puts
+that directory first on your PATH so `ironruby`, `ir`, `iirb` and `igem` work from a new
+terminal, and its uninstaller removes it all again, installed gems included. It needs no
+admin rights for you alone, and keeps the default path free of spaces, which Bundler, the
+Rails templates and mspec do not handle. Nothing in that directory is named like a CRuby
+launcher, so CRuby's `ruby`, `irb` and `gem` are not affected. `Util/installer/build-installer.sh` makes
+it from the zip with [Inno Setup](https://jrsoftware.org/isinfo.php), from
+`Util/installer/ironruby.iss`. The archive has the same layout as a checkout, with the
+Release build in `Src/Console/bin/Release/net10.0` (`net11.0` in a `-net11-` archive, whose
+launchers run that one by default; `net8.0` in 4.0.4 and earlier), so everything above
+applies to it unchanged. `irubyc` works too, but it still needs the .NET SDK to compile the application.
 The Windows archive also carries the Windows Desktop runtime, for Windows Forms and WPF, and
 `Samples/`. `License/` holds IronRuby's licenses and, for each .NET framework an archive
 bundles, Microsoft's license and third-party notices.
 
-`Util/package-release.sh <rid>` builds such an archive from a checkout, and
-`.github/workflows/release.yml` builds all three, renders the [launch video](media/launch)
-and publishes them when a `v*` tag is pushed.
+`Util/package-release.sh <rid>` builds such an archive from a checkout (on `net10.0`;
+`IR_TFM=net11.0` builds the `-net11-` one), and `.github/workflows/release.yml` builds all
+three on both frameworks, and the Windows installer from the .NET 10 zip,
+installs and uninstalls it once for the current user and once for all users, and
+publishes them when a `v*` tag is pushed - but only once CI's full test set has passed
+for that tag on both .NET 10 and .NET 11. (Pull requests test .NET 11 only; the release PR,
+from a `release/*` branch, tests .NET 10 as well, and so does a run of the CI workflow by hand.) The [launch video](media/launch) is rendered and
+added by hand.
+
+Releases from 4.0.2 on carry a signed [build provenance attestation](https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds)
+for each archive (from 4.0.3 on, the installer too) and for `SHA256SUMS`, made by GitHub's `actions/attest` in the job that
+built the file. It says
+which workflow built the file, from which commit, in which run, and that the file is
+the one it built. Check one with the GitHub CLI:
+
+```console
+$ gh attestation verify ironruby-<version>-linux-x64.tar.gz --repo Largo/ironruby
+```
+
+What is in an archive comes from these places, none of them a binary in this repository:
+IronRuby, the DLR and prism (libprism too) are compiled in the job from source, at the
+revisions `release.yml` pins; the NuGet packages the projects name, at the versions they
+pin - AngleSharp, AngleSharp.Xml, Microsoft.Data.Sqlite and SQLitePCLRaw.bundle_e_sqlite3
+(4.0.4 and earlier also System.Text.Encoding.CodePages) - SQLitePCLRaw's native `e_sqlite3`
+being SQLite as that package builds it on Windows and macOS; on Linux, SQLite's own amalgamation source, downloaded
+from sqlite.org and checked against the SHA-256 `Util/build-e_sqlite3.sh` pins, which
+that script compiles in the job instead (the package's library crashes beside another
+SQLite); and the .NET runtime. The repository itself holds no programs - no `.exe`,
+`.dll`, `.so` or any other binary that runs - and CI keeps it so with
+`Util/check-no-executables.rb`, which looks at what each tracked file is, not at its name.
 
 ## Building
 
-Requires the .NET SDK, plus Ruby and a C compiler to build prism.
+Requires the .NET 11 SDK (it builds both `net10.0` and `net11.0`; the .NET 10 SDK builds
+`-p:IronRubyTargetFrameworks=net10.0` alone), plus Ruby and a C compiler to build prism.
+Running the `net10.0` build needs the .NET 10 runtime, the `net11.0` build .NET 11's;
+`IR_TFM=net11.0` makes `ir.sh` and the other launchers run the latter (`net10.0` is the default).
 
 ```console
 $ git clone https://github.com/IronLanguages/dlr ../dlr          # modern DLR, referenced as source
+$ git -C ../dlr checkout <DLR_REF from .github/workflows/ci.yml>
+$ for p in Build/dlr-patches/*.patch; do git -C ../dlr apply "$PWD/$p"; done
 $ git clone https://github.com/ruby/prism ../prism
 $ (cd ../prism && ruby templates/template.rb && make shared)     # libprism.so
 $ (cd Src/Prism && ruby generate.rb)                             # C# nodes + loader
 $ dotnet build Src/Console/Ruby.Console.csproj
 ```
+
+Once the DLR and prism are in place, `make`, `make test` (IronRuby's own C# tests) and
+`make spec` (ruby/spec's language suite) run the same `dotnet build` and test commands CI
+does; the [`Makefile`](Makefile) lists them.
 
 The prism revision is pinned: `Generated/` is produced from a particular `config.yml`, and
 a `libprism` built from a different one deserializes into the wrong fields. See
@@ -475,7 +724,7 @@ Running the conformance suite:
 $ git clone https://github.com/ruby/spec && git clone https://github.com/ruby/mspec
 $ RUBY_EXE=./ir.sh ./ir.sh -Imspec/lib mspec/bin/mspec-run spec/language
 $ Util/parallel-sweep.sh out            # all five suites, 8 at a time, ~8 minutes
-$ Util/run-tests.sh                     # IronRuby's own C# tests
+$ make test                            # IronRuby's own C# tests
 $ Util/bench/run.sh                     # benchmarks against CRuby
 $ Util/gems/run.sh                      # default/bundled gems, each with its own suite
 ```
@@ -483,13 +732,13 @@ $ Util/gems/run.sh                      # default/bundled gems, each with its ow
 ### Windows
 
 Windows needs `prism.dll` instead of `libprism.so`, and nothing else: `ir.exe` is an
-ordinary framework-dependent .NET 8 app, so it can be published from Linux and run on a box
+ordinary framework-dependent .NET app, so it can be published from Linux and run on a box
 that has only the **runtime** installed. Build prism with the RubyInstaller DevKit's MinGW
 (`make shared` names its output after RbConfig's `SOEXT`, so there it is `libprism.dll`):
 
 ```
 C:\> git clone https://github.com/ruby/prism C:\prism
-C:\> cd C:\prism && git checkout 531cd5e~1
+C:\> cd C:\prism && git checkout 30a25553
 C:\prism> ruby templates\template.rb
 C:\prism> ridk exec make shared -j4          :: -> C:\prism\build\libprism.dll
 ```
@@ -502,15 +751,15 @@ Windows; `IronRuby.Prism.csproj` ships whichever shared libraries are there and
 $ dotnet build Src/Console/Ruby.Console.csproj -c Release -r win-x64 --self-contained false
 ```
 
-Copy `Src/Console/bin/Release/net8.0/win-x64/`, `Src/StdLib/`, `ir.cmd` and `irb.cmd` to the
+Copy `Src/Console/bin/Release/net10.0/win-x64/`, `Src/StdLib/`, `ironruby.cmd`, `ir.cmd` and `iirb.cmd` to the
 Windows machine, keeping the same relative layout (`ir.cmd` finds the binaries under
-`Src\Console\bin\%IR_CONFIG%\net8.0\`, with or without a `win-x64` level). Then:
+`Src\Console\bin\%IR_CONFIG%\%IR_TFM%\` (`net10.0` by default), with or without a `win-x64` level). Then:
 
 ```
 C:\ir> set IR_CONFIG=Release
 C:\ir> ir.cmd -e "puts RUBY_DESCRIPTION"
-IronRuby 4.0.1 (4.0.0) on .NET 8.0.31 [x64-mswin64]
-C:\ir> irb.cmd
+IronRuby 4.0.5 (4.0.0) on .NET 10.0.12 [x64-mswin64]
+C:\ir> iirb.cmd
 C:\ir> set RUBY_EXE=C:\ir\ir.cmd
 C:\ir> ir.cmd -Imspec/lib mspec/bin/mspec-run spec/language
 ```
@@ -519,8 +768,9 @@ C:\ir> ir.cmd -Imspec/lib mspec/bin/mspec-run spec/language
 separator, so its argument is `;`-separated on Windows (a `:`-separated list would be cut
 apart at every drive letter).
 
-Conformance on Windows 11 x64 (.NET 8.0.31), same ruby/spec revision as the Linux table
-above. Some suites are run a directory at a time there because three of them hang (see
+Conformance on Windows 11 x64 (.NET 8.0.31), measured in September 2026 against an earlier
+ruby/spec revision than the [Status](#status) table, with the Linux numbers of that time
+beside it. Some suites are run a directory at a time there because three of them hang (see
 below), which the whole-suite numbers on Linux do not need:
 
 | suite | examples | Windows | Linux |
@@ -533,18 +783,24 @@ below), which the whole-suite numbers on Linux do not need:
 
 Where the Windows errors are: `core/file` (113) and `core/filetest` (8) are symlinks,
 `chmod`/`umask` and the other Unix file metadata; `core/process` (36 failures, 15 errors) is
-`fork`, process groups, uid/gid and signals; `library/win32ole` (114) and `library/readline`
-(25) are libraries IronRuby does not implement and whose specs only run on Windows;
-`library/zlib` (42) is the `LoadError` below. `core/objectspace` needs `-X:ObjectSpace`, as
-on Linux.
+`fork`, process groups, uid/gid and signals; `library/win32ole` (114) is a library IronRuby
+does not implement and whose specs only run on Windows; `library/readline` (25) was the
+old rb-readline, since replaced by the Reline-based readline gem CRuby ships, whose specs
+are skipped there as they are on CRuby;
+`library/zlib` (3 errors, and 2 failures on .NET 10) is the zlib below. `core/objectspace` needs
+`-X:ObjectSpace`, as on Linux.
 
-What Windows does not have yet: **`zlib`** (`require "zlib"` is a clean `LoadError` — there
-is no libz to bind to, and the `z_stream` binding is laid out for an LP64 C compiler, so a
-stray `zlib1.dll` would be read through the wrong struct), **`io/console`** (`IO.console` is
+**`zlib`** on Windows runs on the zlib inside .NET itself (`System.IO.Compression.Native`:
+zlib-ng), since there is no libz to bind to. It
+inflates and deflates, gzip included, but its compressed bytes are that compressor's: zlib-ng's
+differ from classic zlib's (the 2 `library/zlib` failures on .NET 10 compare exact bytes), and what .NET does not
+export raises `NotImplementedError`: `set_dictionary`, `Deflate#params` once data has gone in,
+and `Inflate#sync_point?` (the 3 errors).
+
+What Windows does not have yet: **`io/console`** (`IO.console` is
 `nil`, the termios binding being Unix-only by construction; irb and reline fall back to
 their ANSI path and start fine — `Src/Libraries/Termios` would need a Win32 console-API
-twin), **`IO#wait`/`IO.select` on a pipe** (they are `poll(2)`, which is why `io-wait`,
-`socket` and `core/io` hang rather than fail), redirection of **descriptors above 2** in
+twin), redirection of **descriptors above 2** in
 `Process.spawn`/`exec` options (Windows hands a child three handles, not a descriptor
 table, so such a redirection is refused with `EINVAL`), and the Unix-only half of
 `Src/Libraries/Builtins/PosixProcess.cs` (`setsid`, `getpriority`, `setrlimit`, …).
@@ -552,4 +808,3 @@ table, so such a redirection is refused with `EINVAL`), and the Unix-only half o
 ## License
 
 Apache License 2.0, as the original. See [`Src/Public`](Src/Public/LICENSE.APACHE.html).
-The original content description is preserved in [`README.txt`](README.txt).

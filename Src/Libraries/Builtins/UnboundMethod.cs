@@ -14,8 +14,8 @@
  * ***************************************************************************/
 
 using System;
+using System.Text;
 using System.Runtime.CompilerServices;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
@@ -91,7 +91,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("arity")]
         public static int GetArity(UnboundMethod/*!*/ self) {
-            return self._isMethodMissing ? -1 : self.Info.GetArity();
+            return self._isMethodMissing ? -1 : MethodReflection.GetArity(self.Info, self.Name);
         }
 
         /// <summary>
@@ -107,7 +107,7 @@ namespace IronRuby.Builtins {
 
             if (constraint.IsClass && !context.IsKindOf(target, constraint)) {
                 throw RubyExceptions.CreateTypeError(
-                    "bind argument must be an instance of {0}", constraint.GetName(context)
+                    "bind argument must be an instance of {0}", constraint.GetNonNullName(context)
                 );
             }
             
@@ -143,6 +143,7 @@ namespace IronRuby.Builtins {
         /// turned unrelated failures into "undefined method `bind_call'" noise.
         /// </summary>
         [RubyMethod("bind_call")]
+        [ReceivesKeywords]
         public static object BindCall(RubyScope/*!*/ scope, BlockParam block, UnboundMethod/*!*/ self, object target,
             params object[]/*!*/ args) {
 
@@ -217,9 +218,19 @@ namespace IronRuby.Builtins {
             if (targetModule != null && declaringSingleton != null && declaringSingleton.IsSingletonClass) {
                 var attached = declaringSingleton.SingletonClassOf;
                 var attachedModule = attached as RubyModule;
-                result.Append(attachedModule != null
-                    ? attachedModule.GetDisplayName(context, false)
-                    : context.Inspect(attached));
+                // a class method looked up on a subclass: Sub(Base).cm
+                var targetSingleton = targetModule as RubyClass;
+                var targetAttached = (targetSingleton != null && targetSingleton.IsSingletonClass) ? targetSingleton.SingletonClassOf as RubyModule : null;
+                if (attachedModule != null && targetAttached != null && !ReferenceEquals(targetAttached, attachedModule)) {
+                    result.Append(targetAttached.GetDisplayName(context, false));
+                    result.Append('(');
+                    result.Append(attachedModule.GetDisplayName(context, false));
+                    result.Append(')');
+                } else {
+                    result.Append(attachedModule != null
+                        ? attachedModule.GetDisplayName(context, false)
+                        : context.Inspect(attached));
+                }
                 result.Append('.');
             } else {
                 RubyModule origin = targetModule ?? declaringModule;
@@ -245,11 +256,11 @@ namespace IronRuby.Builtins {
                 result.Append(')');
             }
 
-            var signature = isMissingMethod ? null : info.GetParameterSignature();
             if (isMissingMethod) {
                 result.Append("(*)");
-            } else if (signature != null) {
-                result.Append(signature.ToParameterListString());
+            } else {
+                // a core method or an attribute accessor: MRI prints the parameter list from #parameters
+                result.Append(MethodReflection.FormatParameters(context, info, methodName) ?? info.GetParameterSignature().ToParameterListString());
             }
 
             var location = isMissingMethod ? null : GetSourceLocation(info);
@@ -294,16 +305,22 @@ namespace IronRuby.Builtins {
             if (self._isMethodMissing) {
                 return new RubyArray(1) { new RubyArray(1) { context.CreateAsciiSymbol("rest") } };
             }
-            return self.Info.GetRubyParameterArray();
+            return MethodReflection.GetParameters(context, self.Info, self.Name);
         }
 
         internal static RubyArray GetSourceLocation(RubyMemberInfo/*!*/ info) {
             RubyMethodInfo rubyInfo = info as RubyMethodInfo;
             if (rubyInfo != null) {
                 string file = rubyInfo.Document.FileName;
-                // a core method written in Ruby is where MRI's are: <internal:kernel> and the like
-                if (RubyStackTraceBuilder.IsInternalFile(file) && rubyInfo.DeclaringModule.Name != null) {
-                    file = "<internal:" + rubyInfo.DeclaringModule.Name.ToLowerInvariant() + ">";
+                // A core method IronRuby writes in Ruby is located where MRI's is when MRI writes it
+                // in Ruby too (<internal:kernel> for Kernel#tap); where MRI's is C, it has no
+                // location at all, as a C method has none - method_source and pry rely on that.
+                if (RubyStackTraceBuilder.IsInternalFile(file)) {
+                    string mriFile;
+                    if (!InternalMethods.SourceFiles.TryGetValue(MethodReflection.GetInternalMethodKey(rubyInfo.DeclaringModule, rubyInfo.DefinitionName), out mriFile)) {
+                        return null;
+                    }
+                    file = mriFile;
                 }
                 return new RubyArray(2) {
                     rubyInfo.DeclaringModule.Context.EncodePath(file),
@@ -312,8 +329,9 @@ namespace IronRuby.Builtins {
             }
 
             // a method define_method made out of a block is located where the block was written
+            // (unless that is the prelude, which stands in for C)
             var lambdaInfo = info as RubyLambdaMethodInfo;
-            if (lambdaInfo != null && lambdaInfo.Lambda.Dispatcher.SourcePath != null) {
+            if (lambdaInfo != null && lambdaInfo.Lambda.Dispatcher.SourcePath != null && !MethodReflection.IsPreludeMethod(lambdaInfo)) {
                 return new RubyArray(2) {
                     lambdaInfo.Context.EncodePath(lambdaInfo.Lambda.Dispatcher.SourcePath),
                     lambdaInfo.Lambda.Dispatcher.SourceLine

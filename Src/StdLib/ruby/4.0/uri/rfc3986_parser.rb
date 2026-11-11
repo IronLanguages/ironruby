@@ -31,6 +31,10 @@ module URI
     | #{IPV4ADDRESS}
     | (?<reg-name>(?:%\h\h|[!$&-.0-9;=A-Z_a-z~])*+)
     ]x
+    # IronRuby: the copies above were all they were for; upstream has no such constants
+    remove_const(:DEC_OCTET)
+    remove_const(:IPV4ADDRESS)
+    remove_const(:LS32)
 
     USERINFO = /(?:%\h\h|[!$&-.0-9:;=A-Z_a-z~])*+/
 

@@ -17,17 +17,11 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Dynamic;
-using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Text;
-using IronRuby.Compiler;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using IronRuby.Runtime.Conversions;
-using Microsoft.Scripting.Actions;
-using Microsoft.Scripting.Generation;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Numerics;
@@ -42,6 +36,13 @@ namespace IronRuby.Builtins {
     public static class ArrayOps {
 
         #region Constructors
+
+        // MRI defines new on the class itself (String.singleton_methods(false) includes it); it
+        // does exactly what Class#new does.
+        [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
+        public static RuleGenerator/*!*/ New() {
+            return new RuleGenerator(RuleGenerators.InstanceConstructor);
+        }
 
         [RubyConstructor]
         public static RubyArray/*!*/ CreateArray(BlockParam block, RubyClass/*!*/ self) {
@@ -154,6 +155,17 @@ namespace IronRuby.Builtins {
             return self;
         }
 
+        // Array.new(nil) is a size that is not an Integer, not a missing array.
+        [RubyConstructor]
+        public static RubyArray/*!*/ CreateArray(RubyClass/*!*/ self, DynamicNull size) {
+            throw RubyExceptions.CreateImplicitConversionError("nil", "Integer");
+        }
+
+        [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        public static RubyArray/*!*/ Reinitialize(RubyArray/*!*/ self, DynamicNull size) {
+            throw RubyExceptions.CreateImplicitConversionError("nil", "Integer");
+        }
+
         [RubyConstructor]
         public static RubyArray/*!*/ CreateArray(RubyClass/*!*/ self, [DefaultProtocol]int size, object value) {
             CheckArraySize(size); 
@@ -257,16 +269,28 @@ namespace IronRuby.Builtins {
             ConversionStorage<MutableString>/*!*/ stringCast,
             ConversionStorage<MutableString>/*!*/ tosConversion,
             RubyArray/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ format,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+
+            RubyContext context = integerConversion.Context;
+            if (!format.Encoding.IsAsciiIdentity) {
+                throw RubyExceptions.CreateArgumentError("ASCII incompatible encoding: {0}", format.Encoding.Name);
+            }
 
             MutableString buffer = null;
             if (options != null) {
-                object value;
-                if (options.TryGetValue(integerConversion.Context.CreateAsciiSymbol("buffer"), out value)) {
-                    buffer = value as MutableString;
+                foreach (var option in options) {
+                    var key = option.Key as RubySymbol;
+                    if (key == null || key.ToString() != "buffer") {
+                        throw RubyExceptions.CreateArgumentError("unknown keyword: {0}", context.Inspect(option.Key));
+                    }
+                    // buffer: nil is no buffer
+                    if (option.Value == null) {
+                        continue;
+                    }
+                    buffer = option.Value as MutableString;
                     if (buffer == null) {
                         throw RubyExceptions.CreateTypeError("buffer must be String, not {0}",
-                            integerConversion.Context.GetClassDisplayName(value));
+                            context.GetClassDisplayName(option.Value));
                     }
                     buffer.RequireNotFrozen();
                 }
@@ -363,17 +387,24 @@ namespace IronRuby.Builtins {
             if (first != null && first.GetType() == typeof(MutableString)) {
                 var stringClass = context.GetClass(typeof(MutableString));
                 var keys = new StringKey[count];
+                bool allAscii = true;
                 for (int i = 0; i < count; i++) {
                     object item = self[i];
                     if (item == null || item.GetType() != typeof(MutableString) || context.GetImmediateClassOf(item) != stringClass) {
                         return false;
                     }
-                    keys[i] = new StringKey((MutableString)item);
+                    var str = (MutableString)item;
+                    keys[i] = new StringKey(str);
+                    allAscii = allAscii && str.IsAscii();
                 }
                 if (!HasBuiltinComparison(stringClass)) {
                     return false;
                 }
-                SortByKeys(self, keys);
+                if (allAscii && TryMakeAsciiKeys(self, out AsciiStringKey[] asciiKeys)) {
+                    SortByKeys(self, asciiKeys);
+                } else {
+                    SortByKeys(self, keys);
+                }
                 return true;
             }
 
@@ -414,6 +445,41 @@ namespace IronRuby.Builtins {
 
         // A struct, so that the generic sort below is compiled for it and calls MutableString.CompareTo
         // directly; over the class itself it would share one body and dispatch every comparison.
+        // The most characters the keys below copy, all elements together: past it the copy is not
+        // worth what it saves, and the general comparison (which copies nothing) is used.
+        private const long MaxAsciiKeyChars = 16 * 1024 * 1024;
+
+        /// <summary>
+        /// Two ASCII strings compare by their bytes whatever their encodings (String#<=>,
+        /// MutableString.CompareTo), and their bytes are their UTF-16 code units: an ordinal compare
+        /// of the CLR strings - vectorized, no encoding checks per pair - is that compare. Each
+        /// element is copied, an element the array holds many times once per occurrence, so the copies
+        /// are capped in total (MaxAsciiKeyChars): 1000 references to one 1 MB string sort the general way.
+        /// </summary>
+        private static bool TryMakeAsciiKeys(RubyArray/*!*/ self, out AsciiStringKey[] keys) {
+            int count = self.Count;
+            long total = 0;
+            for (int i = 0; i < count; i++) {
+                total += ((MutableString)self[i]).GetLength(); // chars or bytes: the same for ASCII
+                if (total > MaxAsciiKeyChars) {
+                    keys = null;
+                    return false;
+                }
+            }
+
+            keys = new AsciiStringKey[count];
+            for (int i = 0; i < count; i++) {
+                keys[i] = new AsciiStringKey(((MutableString)self[i]).ToString());
+            }
+            return true;
+        }
+
+        private struct AsciiStringKey : IComparable<AsciiStringKey> {
+            private readonly string/*!*/ _value;
+            public AsciiStringKey(string/*!*/ value) { _value = value; }
+            public int CompareTo(AsciiStringKey other) { return String.CompareOrdinal(_value, other._value); }
+        }
+
         private struct StringKey : IComparable<StringKey> {
             private readonly MutableString/*!*/ _value;
             public StringKey(MutableString/*!*/ value) { _value = value; }
@@ -521,9 +587,10 @@ namespace IronRuby.Builtins {
             int left = start, right = start + half, target = start;
             int leftEnd = start + half, rightEnd = start + length;
             while (left < leftEnd && right < rightEnd) {
-                // Take from the right only when it is strictly smaller, which keeps equal
-                // elements in their original order.
-                buffer[target++] = comparison(items[right], items[left]) < 0 ? items[right++] : items[left++];
+                // Take from the left unless the right is strictly smaller, which keeps equal
+                // elements in their original order. The earlier element is the receiver of
+                // the comparison, as in MRI: [1, "a"].sort asks 1 <=> "a", not "a" <=> 1.
+                buffer[target++] = comparison(items[left], items[right]) <= 0 ? items[left++] : items[right++];
             }
             while (left < leftEnd) {
                 buffer[target++] = items[left++];
@@ -542,6 +609,135 @@ namespace IronRuby.Builtins {
         public static RubyArray/*!*/ InPlaceReverse(RubyContext/*!*/ context, RubyArray/*!*/ self) {
             self.Reverse();
             return self;
+        }
+
+        #endregion
+
+        #region sum
+
+        /// <summary>
+        /// Array#sum (no block) of an Array of Integers and Floats, starting from an Integer or Float,
+        /// as the prelude's Enumerable#sum computes it - the plain fold until the first Float, then
+        /// Kahan-Babuska compensated summation - in one pass over the storage instead of a block call
+        /// per element. Answers nil, having changed nothing, when an element or the initial value is
+        /// anything else, or when Integer#+ or Float#+ is not the built-in one: the prelude then
+        /// does the whole sum.
+        /// </summary>
+        [RubyMethod("__numeric_sum__", RubyMethodAttributes.PrivateInstance)]
+        public static object NumericSum(RubyContext/*!*/ context, IList/*!*/ self, object init) {
+            if (!IsNumericSummand(init)) {
+                return null;
+            }
+            if (!IListOps.IsBuiltinMethod(context.IntegerClass, "+") || !IListOps.IsBuiltinMethod(context.GetClass(typeof(double)), "+")) {
+                return null;
+            }
+
+            int count = self.Count;
+            int i = 0;
+            double sum;
+
+            if (!(init is double)) {
+                // The Integer fold, in a long for as long as it fits: boxing every partial sum was
+                // most of the cost.
+                long total = (init is int) ? (int)init : (init is long) ? (long)init : 0;
+                BigInteger bigTotal = (init is BigInteger) ? (BigInteger)init : BigInteger.Zero;
+                bool big = init is BigInteger;
+                for (; i < count; i++) {
+                    object x = self[i];
+                    if (x is int || x is long) {
+                        long value = (x is int) ? (int)x : (long)x;
+                        if (big) {
+                            bigTotal += value;
+                        } else {
+                            long r = unchecked(total + value);
+                            if (((total ^ r) & (value ^ r)) < 0) {
+                                bigTotal = (BigInteger)total + value;
+                                big = true;
+                            } else {
+                                total = r;
+                            }
+                        }
+                    } else if (x is BigInteger) {
+                        if (!big) {
+                            bigTotal = total;
+                            big = true;
+                        }
+                        bigTotal += (BigInteger)x;
+                    } else if (x is double) {
+                        break;
+                    } else {
+                        return null;
+                    }
+                }
+                object acc = big ? Protocols.Normalize(bigTotal) : Protocols.Normalize(total);
+                if (i == count) {
+                    return acc;
+                }
+                // a Float: compensated summation from here on
+                sum = SummandToDouble(acc);
+            } else {
+                // A Float to start with: Float + Integer is the plain fold until the first Float.
+                sum = (double)init;
+                for (; i < count; i++) {
+                    object x = self[i];
+                    if (x is double) {
+                        break;
+                    } else if (!IsNumericSummand(x)) {
+                        return null;
+                    }
+                    sum += SummandToDouble(x);
+                }
+                if (i == count) {
+                    return sum;
+                }
+            }
+
+            double compensation = 0.0;
+            for (; i < count; i++) {
+                object x = self[i];
+                if (!IsNumericSummand(x)) {
+                    return null;
+                }
+
+                double value = SummandToDouble(x);
+                // Nothing infinite can be compensated (see Enumerable#sum in the prelude): a NaN
+                // stays, an infinity swallows the sum unless the sum is the other infinity, and a
+                // finite number adds nothing to an infinite sum.
+                if (Double.IsNaN(sum)) {
+                    continue;
+                } else if (Double.IsNaN(value)) {
+                    sum = value;
+                    compensation = 0.0;
+                    continue;
+                } else if (Double.IsInfinity(value)) {
+                    sum = (Double.IsInfinity(sum) && Math.Sign(sum) == -Math.Sign(value)) ? Double.NaN : value;
+                    compensation = 0.0;
+                    continue;
+                } else if (Double.IsInfinity(sum)) {
+                    continue;
+                }
+
+                double t = sum + value;
+                compensation += Math.Abs(sum) >= Math.Abs(value) ? (sum - t) + value : (value - t) + sum;
+                sum = t;
+            }
+            return sum + compensation;
+        }
+
+        private static bool IsNumericSummand(object x) {
+            return x is int || x is double || x is BigInteger || x is long;
+        }
+
+        private static double SummandToDouble(object x) {
+            if (x is int) {
+                return (int)x;
+            } else if (x is double) {
+                return (double)x;
+            } else if (x is long) {
+                return Protocols.ToDouble(new BigInteger((long)x));
+            } else {
+                return Protocols.ToDouble((BigInteger)x);
+            }
         }
 
         #endregion

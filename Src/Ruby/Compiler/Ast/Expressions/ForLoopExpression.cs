@@ -13,24 +13,15 @@
  *
  * ***************************************************************************/
 
-using System;
-using System.Collections.Generic;
-using System.Dynamic;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime.Calls;
 using IronRuby.Builtins;
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
-using AstUtils = Microsoft.Scripting.Ast.Utils;
     
 namespace IronRuby.Compiler.Ast {
-    using Ast = Expression;
 
     public partial class ForLoopExpression : Expression {
         //	for variables in list 
@@ -56,7 +47,7 @@ namespace IronRuby.Compiler.Ast {
             _list = list;
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             Assert.NotNull(gen);
 
             MSA.Expression transformedBlock = _block.Transform(gen);

@@ -14,7 +14,6 @@
  * ***************************************************************************/
 
 using System;
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
 using IronRuby.Builtins;
@@ -25,8 +24,15 @@ namespace IronRuby.StandardLibrary.Threading {
     /// <summary>
     /// Thread::SizedQueue - a Queue with an upper bound; #push blocks while the queue is full.
     /// </summary>
-    [RubyClass]
+    [RubyClass(DefineIn = typeof(ThreadOps))]
     public class SizedQueue : RubyQueue {
+
+        /// <summary>MRI's #&lt;Thread::SizedQueue:0x...&gt;, rather than the CLR type name.</summary>
+        [RubyMethod("inspect")]
+        [RubyMethod("to_s")]
+        public static MutableString/*!*/ Inspect(RubyContext/*!*/ context, SizedQueue/*!*/ self) {
+            return RubyUtils.ObjectToMutableString(context, self);
+        }
         private int _limit = 1;
 
         public SizedQueue([DefaultProtocol]int limit) {
@@ -50,11 +56,13 @@ namespace IronRuby.StandardLibrary.Threading {
                     while (_queue.Count >= _limit) {
                         bool signalled;
                         try {
-                            if (timeoutMilliseconds < 0) {
-                                signalled = Monitor.Wait(_queue);
-                            } else {
-                                int remaining = (int)(deadline - Environment.TickCount64);
-                                signalled = remaining > 0 && Monitor.Wait(_queue, remaining);
+                            using (RubyUtils.BlockingWait.Enter()) {
+                                if (timeoutMilliseconds < 0) {
+                                    signalled = Monitor.Wait(_queue);
+                                } else {
+                                    int remaining = (int)(deadline - Environment.TickCount64);
+                                    signalled = remaining > 0 && Monitor.Wait(_queue, remaining);
+                                }
                             }
                         } catch (ThreadInterruptedException) {
                             RubyUtils.TranslateThreadInterrupt();
@@ -118,7 +126,7 @@ namespace IronRuby.StandardLibrary.Threading {
         [RubyMethod("enq")]
         [RubyMethod("push")]
         [RubyMethod("<<")]
-        public static object Enqueue(RubyContext/*!*/ context, SizedQueue/*!*/ self, object value, [NotNull]Hash/*!*/ options) {
+        public static object Enqueue(RubyContext/*!*/ context, SizedQueue/*!*/ self, object value, [Keywords, NotNull]Hash/*!*/ options) {
             int ms = RubyQueue.GetTimeoutMilliseconds(context, RubyQueue.GetTimeoutOption(context, options));
             return self.Enqueue(value, ms) ? (object)self : null;
         }
@@ -127,7 +135,7 @@ namespace IronRuby.StandardLibrary.Threading {
         [RubyMethod("push")]
         [RubyMethod("<<")]
         public static object Enqueue(RubyContext/*!*/ context, SizedQueue/*!*/ self, object value, bool nonBlocking,
-            [NotNull]Hash/*!*/ options) {
+            [Keywords, NotNull]Hash/*!*/ options) {
 
             if (nonBlocking && options.Count > 0) {
                 throw RubyExceptions.CreateArgumentError("can't set a timeout if non_block is enabled");

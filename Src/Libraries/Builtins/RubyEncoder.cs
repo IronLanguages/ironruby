@@ -14,20 +14,16 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
-using System.Dynamic;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using IronRuby.Compiler;
 using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
 using IronRuby.Runtime.Conversions;
-using Microsoft.Scripting.Actions;
-using Microsoft.Scripting.Generation;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Numerics;
@@ -193,12 +189,13 @@ namespace IronRuby.Builtins {
 
         private static object ReadBer(MutableString/*!*/ data, ref int index) {
             int i = index;
-            try {
-                // skip initial zeroes:
-                while (data.GetByte(i) == 0x80) { i++; }
-                index = i;
-                while ((data.GetByte(i) & 0x80) != 0) { i++; }
-            } catch (IndexOutOfRangeException) {
+            int length = data.GetByteCount();
+            // skip initial zeroes:
+            while (i < length && data.GetByte(i) == 0x80) { i++; }
+            index = i;
+            while (i < length && (data.GetByte(i) & 0x80) != 0) { i++; }
+            if (i >= length) {
+                // the data ended before the last byte of the number (or before any number)
                 index = i;
                 return null;
             }
@@ -578,8 +575,6 @@ namespace IronRuby.Builtins {
 
         #region UU (Unix-Unix)
 
-        private const char UUEncodeZero = '`';
-
         private static void EncodeUU(byte[]/*!*/ input, int bytesPerLine, Stream/*!*/ output) {
             ContractUtils.RequiresNotNull(input, "input");
             ContractUtils.RequiresNotNull(output, "output");
@@ -877,16 +872,6 @@ namespace IronRuby.Builtins {
             }
         }
 
-        private static void Write(Stream/*!*/ stream, ushort n, bool swap) {
-            if (swap) {
-                stream.WriteByte((byte)((n >> 8) & 0xff));
-                stream.WriteByte((byte)(n & 0xff));
-            } else {
-                stream.WriteByte((byte)(n & 0xff));
-                stream.WriteByte((byte)((n >> 8) & 0xff));
-            }
-        }
-
         private static double Int64BitsToDouble(long value) {
             return BitConverter.Int64BitsToDouble(value);
         }
@@ -935,57 +920,13 @@ namespace IronRuby.Builtins {
             }
         }
 
-        private static void WriteUInt64(ConversionStorage<IntegerValue>/*!*/ integerConversion,
-            Stream/*!*/ stream, RubyArray/*!*/ self, int i, int count, bool swap) {
-
-            for (int j = 0; j < count; j++) {
-                object value = GetPackArg(self, i + j);
-                if (value == null) {
-                    throw RubyExceptions.CreateTypeError("no implicit conversion of nil into Integer");
-                }
-
-                IntegerValue integer = Protocols.CastToInteger(integerConversion, value);
-                ulong u;
-                if (integer.IsFixnum) {
-                    Write(stream, unchecked((ulong)integer.Fixnum), swap);
-                } else if (integer.Bignum.Abs().AsUInt64(out u)) {
-                    if (integer.Bignum.Sign < 0) {
-                        u = unchecked(~u + 1);
-                    }
-                    Write(stream, u, swap);
-                } else {
-                    throw RubyExceptions.CreateRangeError("bignum out of range (-2**64, 2**64)");
-                }
-            }
-        }
-
-        private static void WriteUInt32(ConversionStorage<IntegerValue>/*!*/ integerConversion,
-            Stream/*!*/ stream, RubyArray/*!*/ self, int i, int count, bool swap) {
-            for (int j = 0; j < count; j++) {
-                long value = Protocols.CastToInt64Unchecked(integerConversion, GetPackArg(self, i + j));
-                if (value <= -0x100000000L || value >= 0x100000000L) {
-                    throw RubyExceptions.CreateRangeError("bignum out of range (-2**32, 2**32)");
-                }
-                Write(stream, unchecked((uint)value), swap);
-            }
-        }
-
-        private static void WriteUInt16(ConversionStorage<IntegerValue>/*!*/ integerConversion,
-            Stream/*!*/ stream, RubyArray/*!*/ self, int i, int count, bool swap) {
-            for (int j = 0; j < count; j++) {
-                long value = Protocols.CastToInt64Unchecked(integerConversion, GetPackArg(self, i + j));
-                if (value <= -0x100000000L || value >= 0x100000000L) {
-                    throw RubyExceptions.CreateRangeError("bignum out of range (-2**32, 2**32)");
-                }
-                Write(stream, unchecked((ushort)value), swap);
-            }
-        }
-
         private static double ToPackFloat(ConversionStorage<double>/*!*/ floatConversion, object value) {
             if (value is MutableString) {
                 throw RubyExceptions.CreateTypeError("can't convert String into Float");
             }
-            return Protocols.CastToFloat(floatConversion, value);
+            double result = Protocols.CastToFloat(floatConversion, value);
+            // the CLR's NaN has its sign bit set; MRI packs the positive quiet NaN
+            return Double.IsNaN(result) ? BitConverter.Int64BitsToDouble(0x7FF8000000000000L) : result;
         }
         private static void WriteInteger(ConversionStorage<IntegerValue>/*!*/ integerConversion,
             Stream/*!*/ stream, RubyArray/*!*/ self, int i, int count, int width, bool swap) {
@@ -997,7 +938,8 @@ namespace IronRuby.Builtins {
                     throw RubyExceptions.CreateTypeError("no implicit conversion of nil into Integer");
                 }
 
-                IntegerValue integer = Protocols.CastToInteger(integerConversion, value);
+                // a Fixnum, by far the most common, without the conversion site
+                IntegerValue integer = (value is int fixnum) ? new IntegerValue(fixnum) : Protocols.CastToInteger(integerConversion, value);
                 if (integer.IsFixnum) {
                     long n = integer.Fixnum;
                     for (int b = 0; b < width; b++) {
@@ -1016,13 +958,11 @@ namespace IronRuby.Builtins {
                     }
                 }
 
+                // one write of the value: each WriteByte is a write into the string of its own
                 if (swap) {
-                    for (int b = width - 1; b >= 0; b--) {
-                        stream.WriteByte(buffer[b]);
-                    }
-                } else {
-                    stream.Write(buffer, 0, width);
+                    Array.Reverse(buffer, 0, width);
                 }
+                stream.Write(buffer, 0, width);
             }
         }
         private static void FromHex(Stream/*!*/ stream, MutableString/*!*/ str, int nibbleCount, bool swap) {
@@ -1187,6 +1127,42 @@ namespace IronRuby.Builtins {
                 return Enumerate(format, false);
             }
 
+            // Formats are almost always literals, parsed again on every call: a few hundred nanoseconds of a
+            // pack or unpack of a few values. The directives of the last ones seen are kept, per direction
+            // (a bare '@' means different things in the two).
+            private const int MaxCachedFormats = 256;
+            private const int MaxCachedFormatLength = 128;
+            private static readonly ConcurrentDictionary<string, ParsedFormat>/*!*/ _packFormats = new ConcurrentDictionary<string, ParsedFormat>();
+            private static readonly ConcurrentDictionary<string, ParsedFormat>/*!*/ _unpackFormats = new ConcurrentDictionary<string, ParsedFormat>();
+
+            internal static ParsedFormat/*!*/ Parse(string/*!*/ format, bool packing) {
+                var cache = packing ? _packFormats : _unpackFormats;
+                ParsedFormat parsed;
+                if (cache.TryGetValue(format, out parsed)) {
+                    return parsed;
+                }
+
+                var directives = new List<FormatDirective>();
+                bool invalid = false;
+                try {
+                    foreach (var directive in Enumerate(format, packing)) {
+                        directives.Add(directive);
+                    }
+                } catch (Exception e) when (e is ArgumentException || e is InvalidOperationException) {
+                    // ArgumentError, RangeError: raised again, afresh, where Enumerate raised it (see ThrowIfInvalid)
+                    invalid = true;
+                }
+
+                parsed = new ParsedFormat(directives.ToArray(), invalid);
+                if (format.Length <= MaxCachedFormatLength) {
+                    if (cache.Count >= MaxCachedFormats) {
+                        cache.Clear();
+                    }
+                    cache[format] = parsed;
+                }
+                return parsed;
+            }
+
             internal static IEnumerable<FormatDirective>/*!*/ Enumerate(string/*!*/ format, bool packing) {
                 for (int i = 0; i < format.Length; i++) {
                     char c = format[i];
@@ -1278,6 +1254,29 @@ namespace IronRuby.Builtins {
 
         #endregion
 
+        /// <summary>
+        /// The directives of a format, up to the first error in it if there is one. Packing and unpacking go
+        /// through the directives and then call <see cref="ThrowIfInvalid"/>: the error is raised after what
+        /// comes before it has been done, as it was when the format was read as the work went along (MRI
+        /// reads it so too: ["x"].pack("Cy") is a TypeError for the "x", not the unknown 'y').
+        /// </summary>
+        private sealed class ParsedFormat {
+            internal readonly FormatDirective[]/*!*/ Directives;
+            private readonly bool _invalid;
+
+            internal ParsedFormat(FormatDirective[]/*!*/ directives, bool invalid) {
+                Directives = directives;
+                _invalid = invalid;
+            }
+
+            internal void ThrowIfInvalid(string/*!*/ format, bool packing) {
+                if (_invalid) {
+                    foreach (var _ in FormatDirective.Enumerate(format, packing)) {
+                    }
+                }
+            }
+        }
+
         #region Pack
 
         public static MutableString/*!*/ Pack(
@@ -1300,7 +1299,9 @@ namespace IronRuby.Builtins {
                 // 1 = still ASCII, 2 = UTF-8, 0 = binary.
                 int encodingInfo = 1;
 
-                foreach (FormatDirective directive in FormatDirective.Enumerate(format.ConvertToString(), true)) {
+                string formatString = format.ConvertToString();
+                ParsedFormat parsed = FormatDirective.Parse(formatString, true);
+                foreach (FormatDirective directive in parsed.Directives) {
                     int count = directive.Count ?? self.Count - i;
 
                     switch (directive.Directive) {
@@ -1333,7 +1334,7 @@ namespace IronRuby.Builtins {
                         case 'a':
                         case 'Z':
                             count = 1;
-                            WriteString(stream, directive, ToMutableString(stringCast, stream, GetPackArg(self, i)));
+                            WriteString(stream, directive, ToMutableString(stringCast, GetPackArg(self, i)));
                             break;
 
                         case 'B':
@@ -1343,7 +1344,7 @@ namespace IronRuby.Builtins {
                                 stream,
                                 directive.Count,
                                 directive.Directive == 'b',
-                                str = GetPackArg(self, i) != null ? ToMutableString(stringCast, stream, GetPackArg(self, i)) : MutableString.FrozenEmpty
+                                str = GetPackArg(self, i) != null ? ToMutableString(stringCast, GetPackArg(self, i)) : MutableString.FrozenEmpty
                             );
                             break;
 
@@ -1379,7 +1380,7 @@ namespace IronRuby.Builtins {
                             // count still asks for that many nibbles, so the padding goes out.
                             object hexArg = GetPackArg(self, i);
                             if (hexArg != null) {
-                                str = ToMutableString(stringCast, stream, hexArg);
+                                str = ToMutableString(stringCast, hexArg);
                                 FromHex(stream, str, directive.Count ?? str.GetByteCount(), directive.Directive == 'h');
                             } else {
                                 FromHex(stream, MutableString.FrozenEmpty, directive.Count ?? 1, directive.Directive == 'h');
@@ -1429,7 +1430,7 @@ namespace IronRuby.Builtins {
                             if (GetPackArg(self, i) == null) {
                                 throw RubyExceptions.CreateImplicitConversionError("nil", "String");
                             }
-                            WriteBase64(stream, ToMutableString(stringCast, stream, GetPackArg(self, i)),
+                            WriteBase64(stream, ToMutableString(stringCast, GetPackArg(self, i)),
                                 // count 0 means a single unbroken line; 1 and 2 fall back to the default 45
                                 (directive.Count.HasValue && (directive.Count.Value > 2 || directive.Count.Value == 0)) ? directive.Count.Value : 45
                             );
@@ -1441,7 +1442,6 @@ namespace IronRuby.Builtins {
                             if (GetPackArg(self, i) != null) {
                                 var site = tosConversion.GetSite(ConvertToSAction.Make(tosConversion.Context));
                                 MutableString s = site.Target(site, GetPackArg(self, i));
-                                stream.String.TaintBy(s);
                                 WritePrintedQuotable(stream, s,
                                     (directive.Count.HasValue && directive.Count.Value >= 2) ? directive.Count.Value : 72
                                 );
@@ -1452,7 +1452,7 @@ namespace IronRuby.Builtins {
                             if (GetPackArg(self, i) == null) {
                                 throw RubyExceptions.CreateImplicitConversionError("nil", "String");
                             }
-                            RubyEncoder.EncodeUU(ToMutableString(stringCast, stream, GetPackArg(self, i)).ToByteArray(), 
+                            RubyEncoder.EncodeUU(ToMutableString(stringCast, GetPackArg(self, i)).ToByteArray(), 
                                 (directive.Count.HasValue && directive.Count.Value > 2) ? directive.Count.Value : 45, 
                                 stream
                             );
@@ -1471,7 +1471,9 @@ namespace IronRuby.Builtins {
                                 long scalar;
                                 if (codePoint.IsFixnum) {
                                     scalar = codePoint.Fixnum;
-                                } else if (!Int64.TryParse(codePoint.Bignum.ToString(), out scalar)) {
+                                } else if (codePoint.Bignum >= Int64.MinValue && codePoint.Bignum <= Int64.MaxValue) {
+                                    scalar = (long)codePoint.Bignum;
+                                } else {
                                     // MRI converts to long first, so a value that does not even fit
                                     // there is reported as a conversion failure, not a bad code point.
                                     throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
@@ -1479,7 +1481,7 @@ namespace IronRuby.Builtins {
                                 if (scalar < 0 || scalar > 0x7fffffff) {
                                     throw RubyExceptions.CreateRangeError("pack(U): value out of range");
                                 }
-                                RubyEncoder.WriteUtf8CodePoint(stream, codePoint.Fixnum);
+                                RubyEncoder.WriteUtf8CodePoint(stream, (int)scalar);
                             }
                             break;
 
@@ -1497,22 +1499,23 @@ namespace IronRuby.Builtins {
                         case 'P': {
                             // MRI writes the address of the string and remembers the string
                             // itself alongside the result, so that unpacking can find it again.
-                            // An address into a managed heap would mean nothing, so what goes
-                            // into the bytes is a one-based index into that list of strings.
-                            // The list travels as an instance variable, which is what makes it
-                            // survive #dup and not survive a round trip through a Symbol -
-                            // exactly the rule MRI's associated-object table follows.
+                            // The address is a real one, of a native block holding the string's
+                            // bytes (PackedPointers), so C can read and - through Fiddle - write
+                            // the string as it does in MRI. The list of strings travels as an
+                            // instance variable, which is what makes it survive #dup and not
+                            // survive a round trip through a Symbol - exactly the rule MRI's
+                            // associated-object table follows.
                             count = 1;
                             object pointerArg = GetPackArg(self, i);
                             long pointer = 0;
                             if (pointerArg != null) {
-                                MutableString target = ToMutableString(stringCast, stream, pointerArg);
+                                MutableString target = ToMutableString(stringCast, pointerArg);
                                 if (target != null) {
                                     if (pointers == null) {
                                         pointers = new RubyArray();
                                     }
                                     pointers.Add(target);
-                                    pointer = pointers.Count;
+                                    pointer = PackedPointers.AddressOf(target);
                                 }
                             }
                             WritePointer(stream, pointer);
@@ -1533,8 +1536,9 @@ namespace IronRuby.Builtins {
 
                     i += count;
                 }
+                parsed.ThrowIfInvalid(formatString, true);
                 stream.SetLength(stream.Position);
-                MutableString result = stream.String.TaintBy(format);
+                MutableString result = stream.String;
                 if (pointers != null) {
                     stringCast.Context.SetInstanceVariable(result, PackedPointersVariable, pointers);
                 }
@@ -1550,7 +1554,7 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>Where a packed string keeps the strings its 'p' and 'P' pointers refer to.</summary>
-        private const string PackedPointersVariable = "@__packed_pointers__";
+        private static readonly string PackedPointersVariable = RubyUtils.GetCoreStateInstanceVariableName("@__packed_pointers__");
 
         private static void WritePointer(Stream/*!*/ stream, long pointer) {
             byte[] bytes = BitConverter.GetBytes(pointer);
@@ -1576,15 +1580,24 @@ namespace IronRuby.Builtins {
                 return null;
             }
 
+            // As MRI's: one of the strings packed into this one, the one whose bytes are at that
+            // address now - a string that has outgrown its block since is at another.
             object stored;
             RubyArray pointers;
-            if (!context.TryGetInstanceVariable(self, PackedPointersVariable, out stored) ||
-                (pointers = stored as RubyArray) == null ||
-                pointer < 1 || pointer > pointers.Count) {
+            MutableString target = null;
+            if (context.TryGetInstanceVariable(self, PackedPointersVariable, out stored) && (pointers = stored as RubyArray) != null) {
+                foreach (object candidate in pointers) {
+                    var str = candidate as MutableString;
+                    if (str != null && PackedPointers.IsAddressOf(str, pointer)) {
+                        target = str;
+                        break;
+                    }
+                }
+            }
+            if (target == null) {
                 throw RubyExceptions.CreateArgumentError("no associated pointer");
             }
 
-            var target = (MutableString)pointers[(int)pointer - 1];
             if (directive.Directive == 'p') {
                 return target.Clone();
             }
@@ -1595,13 +1608,9 @@ namespace IronRuby.Builtins {
             return target.GetSlice(0, Math.Min(count, target.GetCharCount()));
         }
 
-        private static MutableString ToMutableString(ConversionStorage<MutableString>/*!*/ stringCast, MutableStringStream/*!*/ stream, object value) {
+        private static MutableString ToMutableString(ConversionStorage<MutableString>/*!*/ stringCast, object value) {
             var site = stringCast.GetSite(ConvertToStrAction.Make(stringCast.Context));
-            var result = site.Target(site, value);
-            if (result != null) {
-                stream.String.TaintBy(result);
-            }
-            return result;
+            return site.Target(site, value);
         }
 
         private static object GetPackArg(RubyArray/*!*/ array, int index) {
@@ -1644,12 +1653,28 @@ namespace IronRuby.Builtins {
         }
 
         public static RubyArray/*!*/ Unpack(RubyContext/*!*/ context, MutableString/*!*/ self, [NotNull]MutableString/*!*/ format, int offset) {
-            RubyArray result = new RubyArray(1 + self.Length / 2);
+            return Unpack(context, self, format, offset, false);
+        }
+
+        /// <param name="firstOnly">
+        /// String#unpack1: stop after the first directive that yields a value, as MRI's UNPACK_1 does,
+        /// rather than decoding the rest of the format for values that would be thrown away.
+        /// </param>
+        public static RubyArray/*!*/ Unpack(RubyContext/*!*/ context, MutableString/*!*/ self, [NotNull]MutableString/*!*/ format, int offset,
+            bool firstOnly) {
+
+            // The array grows with what is unpacked. It used to start at half the receiver's length,
+            // which made every unpack of a large buffer - unpack1("E", offset: i) reading one double
+            // out of a 4 MB message, say - allocate megabytes, and a decoder doing that per field
+            // quadratic.
+            RubyArray result = new RubyArray(firstOnly ? 1 : Math.Min(1 + self.Length / 2, 16));
 
             // TODO: encodings
             int position = offset;
             int length = self.GetByteCount();
-            foreach (FormatDirective directive in FormatDirective.Enumerate(format.ToString())) {
+            string formatString = format.ToString();
+            ParsedFormat parsed = FormatDirective.Parse(formatString, false);
+            foreach (FormatDirective directive in parsed.Directives) {
                 int count, maxCount;
                 int nilCount = 0;
                 switch (directive.Directive) {
@@ -1884,7 +1909,11 @@ namespace IronRuby.Builtins {
                 for (int i = 0; i < nilCount; i++) {
                     result.Add(null);
                 }
+                if (firstOnly && result.Count > 0) {
+                    return result;
+                }
             }
+            parsed.ThrowIfInvalid(formatString, false);
             return result;
         }
 

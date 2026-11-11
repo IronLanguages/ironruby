@@ -82,13 +82,13 @@ namespace IronRuby.Builtins {
 
         [RubyConstructor]
         public static RubyDir/*!*/ Create(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object dirname,
-            [Optional]IDictionary<object, object> options) {
+            [Keywords, Optional]IDictionary<object, object> options) {
             return new RubyDir(self, Protocols.CastToPath(toPath, dirname), GetEncodingOption(self.Context, options));
         }
 
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
         public static RubyDir/*!*/ Reinitialize(ConversionStorage<MutableString>/*!*/ toPath, RubyDir/*!*/ self, object dirname,
-            [Optional]IDictionary<object, object> options) {
+            [Keywords, Optional]IDictionary<object, object> options) {
             self._encoding = GetEncodingOption(self.ImmediateClass.Context, options);
             return Reinitialize(self, Protocols.CastToPath(toPath, dirname));
         }
@@ -160,17 +160,24 @@ namespace IronRuby.Builtins {
             }
         }
 
+        // On Windows these four are MRI's rb_f_notimplement stubs (no chroot, fchdir, dirfd or
+        // fdopendir there): NotImplementedError, and #respond_to? denies them.
+        private static Exception/*!*/ Unimplemented(string/*!*/ function) {
+            return new NotImplementedError(function + "() function is unimplemented on this machine");
+        }
+
         [RubyMethod("chroot", RubyMethodAttributes.PublicSingleton)]
+        [RubyNotImplemented(OnWindowsOnly = true)]
         public static int ChangeRoot(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object dir) {
             if (!Posix.IsAvailable) {
-                throw new InvalidOperationException();
+                throw Unimplemented("chroot");
             }
             var path = Protocols.CastToPath(toPath, dir);
             string strPath = self.Context.DecodePath(path);
 
             int errno;
             if (Posix.ChRoot(strPath, out errno) != 0) {
-                throw Posix.Error(errno, strPath);
+                throw Posix.Error(errno, strPath, self.Context);
             }
             return 0;
         }
@@ -180,9 +187,10 @@ namespace IronRuby.Builtins {
         /// lasts for the block only, and the block's value is the result.
         /// </summary>
         [RubyMethod("fchdir", RubyMethodAttributes.PublicSingleton)]
+        [RubyNotImplemented(OnWindowsOnly = true)]
         public static object ChangeDirectoryToDescriptor(BlockParam block, RubyClass/*!*/ self, [DefaultProtocol]int fd) {
             if (!Posix.IsAvailable) {
-                throw new NotImplementedException("fchdir");
+                throw Unimplemented("fchdir");
             }
 
             var pal = self.Context.Platform;
@@ -232,19 +240,22 @@ namespace IronRuby.Builtins {
             }
         }
 
-#if FEATURE_FILESYSTEM
-        [RubyMethod("exist?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("exist?", RubyMethodAttributes.PublicSingleton)]
         // #exists? was deprecated in 2.1 and removed in 3.9.
         public static bool Exists(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return RubyFileOps.DirectoryExists(self.Context, Protocols.CastToPath(toPath, path));
         }
-#endif
 
         [RubyMethod("delete", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("rmdir", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("unlink", RubyMethodAttributes.PublicSingleton)]
         public static int RemoveDirectory(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object dirname) {
             string strDir = self.Context.DecodePath(Protocols.CastToPath(toPath, dirname));
+            // rmdir(2) does not follow a symbolic link: on a link to a directory it is ENOTDIR,
+            // where the BCL's delete removed the link.
+            if (GetEntryKind(strDir, false) == EntryKind.NotDirectory) {
+                throw CreateENOTDIR(strDir);
+            }
             try {
                 self.Context.Platform.DeleteDirectory(strDir, false);
             } catch (Exception ex) {
@@ -254,14 +265,14 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("entries", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray/*!*/ GetEntries(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object dirname, [Optional]IDictionary<object, object> options) {
+        public static RubyArray/*!*/ GetEntries(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object dirname, [Keywords, Optional]IDictionary<object, object> options) {
             return new RubyDir(self, Protocols.CastToPath(toPath, dirname), GetEncodingOption(self.Context, options))
                 .GetEntries(self.Context);
         }
 
         [RubyMethod("foreach", RubyMethodAttributes.PublicSingleton)]
         public static object ForEach(ConversionStorage<MutableString>/*!*/ toPath, BlockParam block, RubyClass/*!*/ self, object dirname,
-            [Optional]IDictionary<object, object> options) {
+            [Keywords, Optional]IDictionary<object, object> options) {
             return new RubyDir(self, Protocols.CastToPath(toPath, dirname), GetEncodingOption(self.Context, options))
                 .EnumerateEntries(self.Context, block, null);
         }
@@ -441,8 +452,13 @@ namespace IronRuby.Builtins {
             }
 
             string containingDir = platform.GetDirectoryName(strDir);
+            if (!String.IsNullOrEmpty(containingDir) && RunsThroughFile(containingDir)) {
+                // mkdir(2) of "file/sub" is ENOTDIR, not a missing parent
+                throw CreateENOTDIR(strDir);
+            }
             if (!String.IsNullOrEmpty(containingDir) && !platform.DirectoryExists(containingDir)) {
-                throw RubyExceptions.CreateENOENT("No such file or directory - {0}", containingDir);
+                // mkdir(2) reports the path it was given, not the missing parent
+                throw RubyExceptions.CreateENOENT("No such file or directory - {0}", strDir);
             }
                 
             // The permission argument is not decoration: Dir.mkdir(path, 01755) has to
@@ -451,7 +467,7 @@ namespace IronRuby.Builtins {
                 int mode = Protocols.CastToFixnum(fixnumCast, permissions);
                 int errno;
                 if (Posix.MkDir(strDir, mode, out errno) != 0) {
-                    throw Posix.Error(errno, strDir);
+                    throw Posix.Error(errno, strDir, self.Context);
                 }
                 return 0;
             }
@@ -466,7 +482,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("open", RubyMethodAttributes.PublicSingleton)]
         public static object Open(ConversionStorage<MutableString>/*!*/ toPath, BlockParam block, RubyClass/*!*/ self, object dirname,
-            [Optional]IDictionary<object, object> options) {
+            [Keywords, Optional]IDictionary<object, object> options) {
             RubyDir rd = new RubyDir(self, Protocols.CastToPath(toPath, dirname), GetEncodingOption(self.Context, options));
 
             try {
@@ -480,7 +496,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("open", RubyMethodAttributes.PublicSingleton)]
         public static RubyDir/*!*/ Open(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object dirname,
-            [Optional]IDictionary<object, object> options) {
+            [Keywords, Optional]IDictionary<object, object> options) {
             return new RubyDir(self, Protocols.CastToPath(toPath, dirname));
         }
 
@@ -499,15 +515,17 @@ namespace IronRuby.Builtins {
         /// is opened the first time it is asked for and closed with the Dir.
         /// </summary>
         [RubyMethod("fileno")]
+        [RubyNotImplemented(OnWindowsOnly = true)]
         public static int FileNo(RubyDir/*!*/ self) {
             self.ThrowIfClosed();
             return self.GetFileDescriptor();
         }
 
         [RubyMethod("for_fd", RubyMethodAttributes.PublicSingleton)]
+        [RubyNotImplemented(OnWindowsOnly = true)]
         public static RubyDir/*!*/ ForFileDescriptor(RubyClass/*!*/ self, [DefaultProtocol]int fd) {
             if (!Posix.IsAvailable) {
-                throw new NotImplementedException("Dir.for_fd");
+                throw Unimplemented("for_fd");
             }
 
             // There is no fdopendir here, so the descriptor is turned back into the path it
@@ -651,7 +669,7 @@ namespace IronRuby.Builtins {
                 return _fd;
             }
             if (!Posix.IsAvailable) {
-                throw new NotImplementedException("Dir#fileno");
+                throw Unimplemented("fileno");
             }
 
             string path = ImmediateClass.Context.DecodePath(_dirName);
@@ -659,7 +677,7 @@ namespace IronRuby.Builtins {
             // Close-on-exec is the default for every descriptor Ruby opens.
             int fd = Posix.Open(path, Posix.O_RDONLY | Posix.O_DIRECTORY | Posix.O_CLOEXEC, out errno);
             if (fd < 0) {
-                throw Posix.Error(errno, path);
+                throw Posix.Error(errno, path, ImmediateClass.Context);
             }
             _fd = fd;
             return fd;
@@ -755,7 +773,58 @@ namespace IronRuby.Builtins {
             return defaultResult;
         }
 
-        // TODO: to match the C-Ruby exception
+        /// <summary>
+        /// True if <paramref name="path"/> or one of its parents exists and is not a directory:
+        /// chdir(2), opendir(3), mkdir(2) and rmdir(2) all fail with ENOTDIR on "file" and on
+        /// "file/sub", where the BCL reports both as a directory that is not there.
+        ///
+        /// Each component is looked at as the kernel resolves it, through symbolic links - a
+        /// dangling link is a missing directory (ENOENT), not a file - except that rmdir(2) does
+        /// not follow the last one (<paramref name="followLast"/> false): there a link is ENOTDIR,
+        /// whatever it points at. A component that cannot be stat'd (missing, or EACCES) is not a
+        /// file, so the caller's ENOENT or EACCES stands.
+        /// </summary>
+        private static bool RunsThroughFile(string path, bool followLast = true) {
+            try {
+                bool last = true;
+                for (string p = path; !String.IsNullOrEmpty(p); p = Path.GetDirectoryName(p), last = false) {
+                    switch (GetEntryKind(p, !last || followLast)) {
+                        case EntryKind.NotDirectory: return true;
+                        case EntryKind.Directory: return false;
+                    }
+                }
+            } catch (Exception e) when (e is ArgumentException || e is PathTooLongException || e is NotSupportedException) {
+                // a path the BCL cannot take apart is not one we can say anything about
+            }
+            return false;
+        }
+
+        private enum EntryKind { None, Directory, NotDirectory }
+
+        private static EntryKind GetEntryKind(string/*!*/ path, bool followLinks) {
+            if (Posix.IsAvailable) {
+                Posix.StatData data;
+                int errno;
+                if (Posix.TryStat(path, followLinks, out data, out errno)) {
+                    return data.FileType == Posix.S_IFDIR ? EntryKind.Directory : EntryKind.NotDirectory;
+                }
+                if (errno != 0) {
+                    return EntryKind.None;
+                }
+                // no statx: fall back to the BCL
+            }
+            // File.Exists is also true for a dangling link on Unix; Windows has no fstatat to ask.
+            return Directory.Exists(path) ? EntryKind.Directory : File.Exists(path) ? EntryKind.NotDirectory : EntryKind.None;
+        }
+
+        private static Exception/*!*/ CreateENOTDIR(string path) {
+            // Errno::ENOTDIR is backed by DirectoryNotFoundException
+            return new DirectoryNotFoundException("Not a directory - " + path);
+        }
+
+        // Maps the BCL's exception to the Errno MRI raises for the same call. The messages leave
+        // out MRI's " @ function" (e.g. "@ dir_s_rmdir"), as the rest of IronRuby's Errno
+        // messages do.
         private static Exception ToRubyException(Exception/*!*/ ex, string path, DirectoryOperation op) {
             Assert.NotNull(ex);
             
@@ -763,14 +832,26 @@ namespace IronRuby.Builtins {
 
             switch (op) {
                 case DirectoryOperation.ChangeDir:
+                    if (RunsThroughFile(path)) {
+                        return CreateENOTDIR(path);
+                    }
                     // .NET reports a missing directory as DirectoryNotFoundException, which
                     // IronRuby's Errno table maps to ENOTDIR; MRI's chdir says ENOENT.
                     if (ex is DirectoryNotFoundException || ex is FileNotFoundException) {
                         return RubyExceptions.CreateENOENT("No such file or directory - {0}", path);
                     }
+                    if (ex is UnauthorizedAccessException) {
+                        break;
+                    }
                     return RubyExceptions.CreateEINVAL(path);
 
                 case DirectoryOperation.Open:
+                    if (RunsThroughFile(path)) {
+                        return CreateENOTDIR(path);
+                    }
+                    if (ex is UnauthorizedAccessException) {
+                        break;
+                    }
                     return RubyExceptions.CreateENOENT("No such file or directory - {0}", path);
 
                 case DirectoryOperation.Delete:
@@ -781,8 +862,8 @@ namespace IronRuby.Builtins {
                     // failure used to collapse into EACCES. rmdir(2) distinguishes them and
                     // so does MRI; the filesystem is the only thing that can tell them apart.
                     if (ex is IOException) {
-                        if (File.Exists(path)) {
-                            return new DirectoryNotFoundException("Not a directory - " + path);
+                        if (RunsThroughFile(path, false)) {
+                            return CreateENOTDIR(path);
                         }
                         if (!Directory.Exists(path)) {
                             return RubyExceptions.CreateENOENT("No such file or directory - {0}", path);
@@ -794,6 +875,13 @@ namespace IronRuby.Builtins {
                 case DirectoryOperation.Create:
                     if (ex is ArgumentException) {
                         return RubyExceptions.CreateEINVAL(path);
+                    }
+                    // A name too long for the file system is not one that exists: mkdir(2) says
+                    // ENAMETOOLONG, win32.c maps ERROR_FILENAME_EXCED_RANGE to ENOENT.
+                    if (ex is PathTooLongException) {
+                        return Path.DirectorySeparatorChar == '/'
+                            ? new Errno.NameTooLongError(path)
+                            : RubyExceptions.CreateENOENT("No such file or directory - {0}", path);
                     }
                     if (ex is IOException) {
                         return RubyExceptions.CreateEEXIST(path);

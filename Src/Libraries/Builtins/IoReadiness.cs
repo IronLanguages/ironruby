@@ -120,6 +120,23 @@ namespace IronRuby.Builtins {
     }
 
     /// <summary>
+    /// A layer that reads and writes an IO's stream itself, so that the kernel no longer knows
+    /// whether a read or a write of that layer would block: OpenSSL's TLS transport, whose
+    /// SslStream may already have drained the socket into a read that is still in flight, or
+    /// hold decrypted bytes the socket never shows. IO.select, IO#wait and NIO::Selector ask it
+    /// first, and it wakes their waiter when its answer changes.
+    /// </summary>
+    internal interface IReadinessHook {
+        /// <summary>
+        /// For IoReadiness.Read or Write: true or false when the hook knows, null to ask the
+        /// socket. Asking may start the I/O that answers it.
+        /// </summary>
+        bool? IsReady(int kind);
+        void AddWaiter(ReadinessWaiter/*!*/ waiter);
+        void RemoveWaiter(ReadinessWaiter/*!*/ waiter);
+    }
+
+    /// <summary>
     /// What IO.select, IO#wait and NIO::Selector#select have in common: watching a set of IOs and
     /// blocking until one of them might have become ready. Readiness itself is decided by the
     /// caller (IoOps.IsReady); this only knows how to sleep until it is worth asking again, in one
@@ -151,15 +168,28 @@ namespace IronRuby.Builtins {
             return io.GetStream().BaseStream as RubyPipe;
         }
 
-        #region Windows anonymous pipes
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<RubyIO, IReadinessHook>/*!*/ _hooks =
+            new System.Runtime.CompilerServices.ConditionalWeakTable<RubyIO, IReadinessHook>();
 
-        [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool PeekNamedPipe(Microsoft.Win32.SafeHandles.SafeFileHandle handle, IntPtr buffer, int size,
-            IntPtr bytesRead, out int bytesAvailable, IntPtr bytesLeft);
+        // No hook was ever set: the common case pays one read of a field.
+        private static volatile bool _anyHooks;
+
+        internal static void SetHook(RubyIO/*!*/ io, IReadinessHook/*!*/ hook) {
+            _hooks.AddOrUpdate(io, hook);
+            _anyHooks = true;
+        }
+
+        internal static IReadinessHook GetHook(RubyIO/*!*/ io) {
+            IReadinessHook hook;
+            return _anyHooks && _hooks.TryGetValue(io, out hook) ? hook : null;
+        }
+
+        #region Windows anonymous pipes
 
         [System.Runtime.InteropServices.DllImport("kernel32.dll")]
         private static extern int GetFileType(Microsoft.Win32.SafeHandles.SafeFileHandle handle);
 
+        private const int FILE_TYPE_DISK = 1;
         private const int FILE_TYPE_PIPE = 3;
 
         /// <summary>
@@ -189,21 +219,75 @@ namespace IronRuby.Builtins {
         /// writer has gone (PeekNamedPipe fails with ERROR_BROKEN_PIPE) and the read is EOF.
         /// </summary>
         internal static bool IsWindowsPipeReadable(System.IO.FileStream/*!*/ pipe) {
-            int available;
-            if (!PeekNamedPipe(pipe.SafeFileHandle, IntPtr.Zero, 0, IntPtr.Zero, out available, IntPtr.Zero)) {
-                return true;
-            }
-            return available > 0;
+            return WindowsPipeStream.IsReadable(pipe.SafeFileHandle);
+        }
+
+        /// <summary>
+        /// The room left in a Windows pipe for a write, in bytes: Int32.MaxValue when the pipe cannot
+        /// say (or its reader is gone, so the write fails at once with EPIPE rather than wait), 0 when
+        /// a write would wait for the reader. A write of no more than this completes without waiting
+        /// (WriteQuotaAvailable, as libuv asks it). Windows has no poll(2) to ask whether a pipe is
+        /// writable, and a blocking WriteFile on a full pipe waits until the reader takes the bytes.
+        /// </summary>
+        internal static int GetWindowsPipeRoom(Microsoft.Win32.SafeHandles.SafeFileHandle/*!*/ handle) {
+            bool readerGone;
+            int room = WindowsPipeStream.GetWriteRoom(handle, out readerGone);
+            return (room == 0 && readerGone) ? Int32.MaxValue : room;
+        }
+
+        /// <summary>Whether a write to a Windows pipe would go in at once (see GetWindowsPipeRoom).</summary>
+        internal static bool IsWindowsPipeWritable(System.IO.FileStream/*!*/ pipe) {
+            return GetWindowsPipeRoom(pipe.SafeFileHandle) > 0;
         }
 
         #endregion
 
         /// <summary>
-        /// Registers the waiter with every in-process pipe among <paramref name="ios"/>, and
-        /// answers those pipes - null if there were none - for Unregister to take it off again.
+        /// Whether a read from the IO's stream would return at once. Asked where a read already
+        /// has bytes in hand and must not risk blocking with them. poll(2) on Unix; on Windows,
+        /// where there is no libc to poll with, the socket, the pipe or the disk file is asked
+        /// itself - a disk file is always readable, as poll(2) says of a regular file.
         /// </summary>
-        internal static List<RubyPipe> Register(ReadinessWaiter/*!*/ waiter, IList<RubyIO>/*!*/ ios) {
-            List<RubyPipe> pipes = null;
+        internal static bool IsReadableNow(RubyIO/*!*/ io, System.IO.Stream/*!*/ baseStream) {
+            if (_isUnix) {
+                return DescriptorStream.IsReadableNow(RubyIO.DescriptorOf(baseStream));
+            }
+            var socketStream = baseStream as SocketStream;
+            if (socketStream != null) {
+                return socketStream.Socket.Poll(0, SelectMode.SelectRead);
+            }
+            var pipe = GetWindowsPipe(io);
+            if (pipe != null) {
+                return IsWindowsPipeReadable(pipe);
+            }
+            var file = baseStream as System.IO.FileStream;
+            try {
+                return file != null && GetFileType(file.SafeFileHandle) == FILE_TYPE_DISK;
+            } catch (Exception) {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Whether any of <paramref name="ios"/> can only tell the waiter about a change - an
+        /// in-process pipe, or an IO with a readiness hook - so that a wait needs one.
+        /// </summary>
+        internal static bool NeedsWaiter(IList<RubyIO>/*!*/ ios) {
+            for (int i = 0; i < ios.Count; i++) {
+                if (!ios[i].Closed && (GetPipe(ios[i]) != null || GetHook(ios[i]) != null)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Registers the waiter with every in-process pipe and readiness hook among
+        /// <paramref name="ios"/>, and answers them - null if there were none - for Unregister to
+        /// take it off again.
+        /// </summary>
+        internal static List<object> Register(ReadinessWaiter/*!*/ waiter, IList<RubyIO>/*!*/ ios) {
+            List<object> registered = null;
             for (int i = 0; i < ios.Count; i++) {
                 if (ios[i].Closed) {
                     continue;
@@ -211,16 +295,26 @@ namespace IronRuby.Builtins {
                 var pipe = GetPipe(ios[i]);
                 if (pipe != null) {
                     pipe.AddWaiter(waiter);
-                    (pipes ?? (pipes = new List<RubyPipe>())).Add(pipe);
+                    (registered ?? (registered = new List<object>())).Add(pipe);
+                }
+                var hook = GetHook(ios[i]);
+                if (hook != null) {
+                    hook.AddWaiter(waiter);
+                    (registered ?? (registered = new List<object>())).Add(hook);
                 }
             }
-            return pipes;
+            return registered;
         }
 
-        internal static void Unregister(ReadinessWaiter/*!*/ waiter, List<RubyPipe> pipes) {
-            if (pipes != null) {
-                foreach (var pipe in pipes) {
-                    pipe.RemoveWaiter(waiter);
+        internal static void Unregister(ReadinessWaiter/*!*/ waiter, List<object> registered) {
+            if (registered != null) {
+                foreach (var item in registered) {
+                    var pipe = item as RubyPipe;
+                    if (pipe != null) {
+                        pipe.RemoveWaiter(waiter);
+                    } else {
+                        ((IReadinessHook)item).RemoveWaiter(waiter);
+                    }
                 }
             }
         }
@@ -258,6 +352,9 @@ namespace IronRuby.Builtins {
                 if (io.Closed) {
                     return;
                 }
+
+                // A hook nobody can be woken by is only seen by asking it again, and soon.
+                unwatchedPipe |= (waiter == null && GetHook(io) != null);
 
                 int descriptor;
                 var socket = GetSocket(io);
@@ -300,6 +397,7 @@ namespace IronRuby.Builtins {
                 if (ios[i].Closed) {
                     return;
                 }
+                unwatchedPipe |= (waiter == null && GetHook(ios[i]) != null);
                 var socket = GetSocket(ios[i]);
                 if (socket == null) {
                     // A Windows pipe cannot sit in Socket.Select either: it is asked again soon.

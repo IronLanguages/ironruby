@@ -15,6 +15,7 @@ using System.Runtime.InteropServices;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;
+using Microsoft.Scripting.Utils;
 
 namespace IronRuby.StandardLibrary.Termios {
 
@@ -31,7 +32,8 @@ namespace IronRuby.StandardLibrary.Termios {
     ///
     /// The constants are Linux's (asm-generic/termbits.h, asm-generic/ioctls.h).  On a
     /// platform without termios <see cref="Supported"/> is false and every call returns nil
-    /// or false, which io/console.rb turns into the ENOTTY MRI raises off a non-terminal.
+    /// or false, which io/console.rb turns into the error MRI raises off a non-terminal -
+    /// except winsize, which Windows answers from the console API, as MRI does there.
     /// </summary>
     [RubyModule("Termios")]
     public static class TermiosOps {
@@ -181,10 +183,15 @@ namespace IronRuby.StandardLibrary.Termios {
         #region winsize
 
         /// <summary>
-        /// ioctl(TIOCGWINSZ) as [rows, columns], or nil when this is not a terminal.
+        /// ioctl(TIOCGWINSZ) as [rows, columns], or nil when this is not a terminal.  On Windows
+        /// it is the console window's size, from GetConsoleScreenBufferInfo, as MRI's
+        /// io/console answers it there - irb asks $stdout for it before it shows each result.
         /// </summary>
         [RubyMethod("winsize", RubyMethodAttributes.PublicSingleton)]
         public static object WinSize(RubyModule/*!*/ self, [NotNull]RubyIO/*!*/ io) {
+            if (!_supported) {
+                return WindowsWinSize(io);
+            }
             int fd = DescriptorOf(io);
             if (fd < 0) {
                 return null;
@@ -216,6 +223,52 @@ namespace IronRuby.StandardLibrary.Termios {
             BitConverter.GetBytes((ushort)rows).CopyTo(buffer, 0);
             BitConverter.GetBytes((ushort)columns).CopyTo(buffer, 2);
             return sys_ioctl(fd, TIOCSWINSZ, buffer) == 0;
+        }
+
+        private const int STD_INPUT_HANDLE = -10;
+        private const int STD_OUTPUT_HANDLE = -11;
+        private const int STD_ERROR_HANDLE = -12;
+
+        /// <summary>
+        /// CONSOLE_SCREEN_BUFFER_INFO: dwSize, dwCursorPosition (COORDs), wAttributes, then
+        /// srWindow - Left, Top, Right, Bottom as shorts at 10, 12, 14 and 16 - and
+        /// dwMaximumWindowSize.  22 bytes, laid out by hand like struct termios above.
+        /// </summary>
+        private const int ScreenBufferInfoSize = 22;
+
+        [DllImport("kernel32", SetLastError = true)]
+        private static extern IntPtr GetStdHandle(int nStdHandle);
+
+        [DllImport("kernel32", SetLastError = true)]
+        private static extern bool GetConsoleScreenBufferInfo(IntPtr hConsoleOutput, byte[] info);
+
+        /// <summary>
+        /// The visible window of the console a standard stream is attached to, as MRI computes
+        /// it: srWindow.Bottom - Top + 1 rows and Right - Left + 1 columns.  nil for an IO
+        /// that is no standard stream, and for one that is not a console - redirected, or
+        /// the input side, which has no screen buffer.
+        /// </summary>
+        private static object WindowsWinSize(RubyIO/*!*/ io) {
+            if (io.Closed) {
+                return null;
+            }
+            int std;
+            switch (io.ConsoleStreamType) {
+                case ConsoleStreamType.Input: std = STD_INPUT_HANDLE; break;
+                case ConsoleStreamType.Output: std = STD_OUTPUT_HANDLE; break;
+                case ConsoleStreamType.ErrorOutput: std = STD_ERROR_HANDLE; break;
+                default: return null;
+            }
+            byte[] info = new byte[ScreenBufferInfoSize];
+            if (!GetConsoleScreenBufferInfo(GetStdHandle(std), info)) {
+                return null;
+            }
+            short left = BitConverter.ToInt16(info, 10), top = BitConverter.ToInt16(info, 12);
+            short right = BitConverter.ToInt16(info, 14), bottom = BitConverter.ToInt16(info, 16);
+            var result = new RubyArray(2);
+            result.Add(bottom - top + 1);
+            result.Add(right - left + 1);
+            return result;
         }
 
         #endregion

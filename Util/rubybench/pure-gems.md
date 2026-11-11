@@ -2,44 +2,46 @@
 
 Status of the macro benchmarks in [ruby-bench](https://github.com/ruby/ruby-bench)
 that exercise a pure-Ruby gem, under IronRuby.  Reproduce with
-`Util/rubybench/pure-gems-run.sh <your ruby-bench copy>`; the numbers below were
-taken with `WARMUP_ITRS=1 MIN_BENCH_ITRS=3`, IronRuby in Release on .NET 8, and
+`Util/rubybench/pure-gems-run.sh <your ruby-bench copy>`; the numbers below
+(rerun 2026-10-29) were taken with `WARMUP_ITRS=1 MIN_BENCH_ITRS=3`, IronRuby in Release on .NET 8, and
 CRuby 4.0.6 as the oracle for both timing and output.  Per-iteration times, as
 the harness reports them ("Average of last 3, non-warmup iters").
 
 | Benchmark | Status | IronRuby | CRuby 4.0.6 | Ratio |
 |---|---|---:|---:|---:|
-| erubi | OK | 1192 ms | 332 ms | 3.6x |
-| etanni | OK | 1511 ms | 581 ms | 2.6x |
-| chunky-png | OK | 2284 ms | 1141 ms | 2.0x |
-| liquid-render | OK | 1807 ms | 225 ms | 8.0x |
-| liquid-compile | OK | 498 ms | 94 ms | 5.3x |
-| liquid-il | OK | 2710 ms | 449 ms | 6.0x |
+| erubi | OK | 953 ms | 251 ms | 3.8x |
+| etanni | OK | 1405 ms | 487 ms | 2.9x |
+| chunky-png | OK | 2081 ms | 966 ms | 2.2x |
+| liquid-render | OK | 1047 ms | 218 ms | 4.8x |
+| liquid-compile | OK | 386 ms | 76 ms | 5.1x |
+| liquid-il | OK | 1994 ms | 455 ms | 4.4x |
 | liquid-c | N/A | | | needs the liquid-c C extension (liquid_c.so); no CRuby ABI here, so it cannot be built or loaded |
-| psych-load | OK | 6036 ms | 2684 ms | 2.2x |
-| addressable-parse | OK | 1864 ms | 702 ms | 2.7x |
-| addressable-equality | OK | 5825 ms | 1963 ms | 3.0x |
-| addressable-getters | OK | 842 ms | 202 ms | 4.2x |
-| addressable-join | OK | 1985 ms | 1038 ms | 1.9x |
-| addressable-merge | OK | 984 ms | 215 ms | 4.6x |
-| addressable-new | OK | 648 ms | 109 ms | 5.9x |
-| addressable-normalize | OK | 2572 ms | 650 ms | 4.0x |
-| addressable-setters | OK | 1123 ms | 203 ms | 5.5x |
-| addressable-to-s | OK | 896 ms | 241 ms | 3.7x |
-| tinygql | OK | 180677 ms | 1496 ms | 120.8x |
-| protoboeuf | OK | 59598 ms | 237 ms | 251x |
-| protoboeuf-encode | OK | 5667 ms | 277 ms | 20.5x |
+| psych-load | N/A | | 2554 ms | its Gemfile asks for `psych ~> 4.0.0`; IronRuby provides psych 5.3.1 (psych 4's other releases are C), and Bundler.setup now says so. It used to run IronRuby's 5.3.1 silently |
+| addressable-parse | OK | 882 ms | 368 ms | 2.4x |
+| addressable-equality | OK | 2905 ms | 1118 ms | 2.6x |
+| addressable-getters | OK | 708 ms | 217 ms | 3.3x |
+| addressable-join | OK | 1337 ms | 531 ms | 2.5x |
+| addressable-merge | OK | 768 ms | 255 ms | 3.0x |
+| addressable-new | OK | 464 ms | 99 ms | 4.7x |
+| addressable-normalize | OK | 1712 ms | 627 ms | 2.7x |
+| addressable-setters | OK | 739 ms | 196 ms | 3.8x |
+| addressable-to-s | OK | 697 ms | 247 ms | 2.8x |
+| tinygql | OK | 2741 ms | 803 ms | 3.4x |
+| protoboeuf | OK | 42228 ms | 174 ms | 242.7x |
+| protoboeuf-encode | OK | 3647 ms | 315 ms | 11.6x |
 | json_parse_float | N/A | | | ractor-only benchmark (`ractor_only: true`): it needs harness-ractor, which needs Ractor. Under the default harness it fails the same way on CRuby (`undefined method 'zero?' for nil`) |
 | json_parse_string | N/A | | | same - ractor-only |
-| hexapdf | OK | 46989 ms | 4163 ms | 11.3x |
-| rubykon | OK | 5867 ms | 1802 ms | 3.3x |
-| rubyboy | OK | 79154 ms | 6596 ms | 12.0x |
-| optcarrot | OK | 82016 ms | 9343 ms | 8.8x |
-| graphql | OK | 20528 ms | 85 ms | 241x |
+| hexapdf | OK | 26965 ms | 2926 ms | 9.2x |
+| rubykon | OK | 3586 ms | 1250 ms | 2.9x |
+| rubyboy | OK | 43235 ms | 5910 ms | 7.3x |
+| optcarrot | OK | 29311 ms | 7294 ms | 4.0x |
+| graphql | OK | 669 ms | 86 ms | 7.8x |
 | graphql-native | N/A | | | needs graphql-c_parser's graphql/graphql_c_parser_ext.so |
 
-Every one of the 24 that run had to be fixed to get there - before this round the
+23 of them run now. Each had to be fixed to get there - before the first round the
 harness killed all of them (see bug 1) and half could not even `bundle install`.
+psych-load ran in that round but is N/A since 2026-10-29 (its row says why), so
+its entry under output equivalence below describes the earlier run.
 
 ## Output equivalence
 

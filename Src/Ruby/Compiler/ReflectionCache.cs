@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -35,13 +31,8 @@ namespace IronRuby.Compiler {
     using MSAst = Microsoft.Scripting.Ast;
     using AstUtils = Microsoft.Scripting.Ast.Utils;
     using AstExpressions = ReadOnlyCollectionBuilder<MSA.Expression>;
-    using Microsoft.Scripting.Interpreter;
 
     public static partial class Fields {
-        private static FieldInfo _StrongBox_Value;
-        
-        public static FieldInfo StrongBox_Value { get { return _StrongBox_Value ?? (_StrongBox_Value = GetField(typeof(StrongBox<object>), "Value")); } }
-        
         internal static FieldInfo/*!*/ GetField(Type/*!*/ type, string/*!*/ name) {
             var field = type.GetDeclaredField(name);
             Debug.Assert(field != null, type.Name + "::" + name);
@@ -52,6 +43,7 @@ namespace IronRuby.Compiler {
     public static partial class Methods {
         private static ConstructorInfo _RubyCallSignatureCtor;
         private static MethodInfo _WeakReference_get_Target, _IList_get_Item;
+        private static MethodInfo _RubyScope_get_Parent, _RubyMethodScope_get_DefinitionRefinementsValue;
 
         public static ConstructorInfo RubyCallSignatureCtor { get { return _RubyCallSignatureCtor ?? (_RubyCallSignatureCtor = GetConstructor(typeof(RubyCallSignature), typeof(uint))); } }
         
@@ -130,6 +122,15 @@ namespace IronRuby.Compiler {
         public static MethodInfo Stopwatch_GetTimestamp { get { return _Stopwatch_GetTimestamp ?? (_Stopwatch_GetTimestamp = GetMethod(typeof(Stopwatch), "GetTimestamp")); } }
         public static MethodInfo IList_get_Item { get { return _IList_get_Item ?? (_IList_get_Item = GetMethod(typeof(IList), "get_Item")); } }
         public static MethodInfo WeakReference_get_Target { get { return _WeakReference_get_Target ?? (_WeakReference_get_Target = GetMethod(typeof(WeakReference), "get_Target", BindingFlags.Instance, ReflectionUtils.EmptyTypes)); } }
+
+        // read by the rule of a refined call made in a method or a block in one (RubyCallAction.Resolve):
+        public static MethodInfo RubyScope_get_Parent { get { return _RubyScope_get_Parent ?? (_RubyScope_get_Parent = GetMethod(typeof(RubyScope), "get_Parent", BindingFlags.Instance, ReflectionUtils.EmptyTypes)); } }
+        public static MethodInfo RubyMethodScope_get_DefinitionRefinementsValue {
+            get {
+                return _RubyMethodScope_get_DefinitionRefinementsValue ?? (_RubyMethodScope_get_DefinitionRefinementsValue =
+                    GetMethod(typeof(RubyMethodScope), "get_DefinitionRefinementsValue", BindingFlags.Instance, ReflectionUtils.EmptyTypes));
+            }
+        }
 
         internal static ConstructorInfo/*!*/ GetConstructor(Type/*!*/ type, params Type/*!*/[]/*!*/ signature) {
             var ctor = type.GetConstructor(signature);

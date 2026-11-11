@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using Microsoft.Scripting;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
@@ -30,7 +26,8 @@ namespace IronRuby.Compiler.Ast {
             : base(arguments, location) {
         }
 
-        // see Ruby Language.doc/Runtime/Control Flow Implementation/Break
+        // break, by where it stands: in eval, in a while/until loop, in a block (it ends the call the block
+        // was given to) or in a method body; the runtime halves are in RubyOps.FlowControl.cs
         // a class body inside the loop has to be left first
         private static MSA.Expression/*!*/ LoopBreak(AstGenerator/*!*/ gen, MSA.Expression/*!*/ value) {
             var module = gen.GetModuleBodyToEscape(true);

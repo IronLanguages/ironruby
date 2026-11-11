@@ -20,7 +20,6 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.StandardLibrary.Zlib {
@@ -30,9 +29,44 @@ namespace IronRuby.StandardLibrary.Zlib {
     ///
     /// Compressed output has to be byte-for-byte what CRuby produces - the specs compare exact
     /// bytes - so the compressor itself is the system's, not a reimplementation.
+    ///
+    /// Windows has no libz; there the same entry points run on the zlib inside .NET itself
+    /// (<see cref="ClrZlib"/>), and the z_stream record below is only ever read by managed code.
     /// </summary>
     internal static class LibZ {
         private const string Lib = "libz";
+
+        internal static readonly bool UseClrZlib = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+
+        /// <summary>
+        /// What "libz" is called on disk. The runtime only tries libz.so / libz.dylib, the
+        /// unversioned names a zlib development package adds; a system with just the runtime
+        /// library (a slim container, say) has only the versioned soname, which is also the one
+        /// CRuby's zlib links against. The unversioned name still comes first, so a libz shipped
+        /// beside the application wins over the system's as it did before. Windows never calls
+        /// into libz.
+        /// </summary>
+        private static readonly string[] FileNames =
+            RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? new[] { "libz.dylib", "libz.1.dylib" } :
+            RuntimeInformation.IsOSPlatform(OSPlatform.Linux) ? new[] { "libz.so", "libz.so.1" } :
+            new string[0];
+
+        // An explicit static constructor, so the resolver is installed before the first
+        // P/Invoke below rather than whenever the runtime gets round to the field initializers.
+        static LibZ() {
+            if (UseClrZlib) return;
+            NativeLibrary.SetDllImportResolver(typeof(LibZ).Assembly, (name, assembly, searchPath) => {
+                if (name == Lib) {
+                    foreach (string fileName in FileNames) {
+                        if (NativeLibrary.TryLoad(fileName, assembly, searchPath, out IntPtr handle)) {
+                            return handle;
+                        }
+                    }
+                }
+                // Anything else, or a libz under another name (a BSD): the runtime's own probing.
+                return IntPtr.Zero;
+            });
+        }
 
         internal const int Z_NO_FLUSH = 0;
         internal const int Z_SYNC_FLUSH = 2;
@@ -84,7 +118,7 @@ namespace IronRuby.StandardLibrary.Zlib {
         internal static string Version {
             get {
                 if (_version == null) {
-                    _version = Marshal.PtrToStringAnsi(sys_zlibVersion()) ?? "1.2.11";
+                    _version = UseClrZlib ? ClrZlib.Version : (Marshal.PtrToStringAnsi(sys_zlibVersion()) ?? "1.2.11");
                 }
                 return _version;
             }
@@ -92,57 +126,148 @@ namespace IronRuby.StandardLibrary.Zlib {
 
         internal static readonly int StreamSize = Marshal.SizeOf(typeof(ZStreamRec));
 
+        internal static int deflateInit2_(IntPtr strm, int level, int method, int windowBits,
+            int memLevel, int strategy, string/*!*/ version, int stream_size) {
+            return UseClrZlib
+                ? ClrZlib.DeflateInit(strm, level, method, windowBits, memLevel, strategy)
+                : sys_deflateInit2_(strm, level, method, windowBits, memLevel, strategy, version, stream_size);
+        }
+
+        internal static int deflate(IntPtr strm, int flush) {
+            return UseClrZlib ? ClrZlib.Run(strm, flush) : sys_deflate(strm, flush);
+        }
+
+        internal static int deflateEnd(IntPtr strm) {
+            return UseClrZlib ? ClrZlib.End(strm) : sys_deflateEnd(strm);
+        }
+
+        internal static int deflateReset(IntPtr strm) {
+            return UseClrZlib ? ClrZlib.Reset(strm) : sys_deflateReset(strm);
+        }
+
+        internal static int deflateParams(IntPtr strm, int level, int strategy) {
+            return UseClrZlib ? ClrZlib.Params(strm, level, strategy) : sys_deflateParams(strm, level, strategy);
+        }
+
+        internal static int deflateSetDictionary(IntPtr strm, byte[]/*!*/ dictionary, uint dictLength) {
+            if (UseClrZlib) {
+                throw ClrZlib.Unavailable("Zlib::Deflate#set_dictionary", "deflateSetDictionary");
+            }
+            return sys_deflateSetDictionary(strm, dictionary, dictLength);
+        }
+
+        internal static int inflateInit2_(IntPtr strm, int windowBits, string/*!*/ version, int stream_size) {
+            return UseClrZlib ? ClrZlib.InflateInit(strm, windowBits) : sys_inflateInit2_(strm, windowBits, version, stream_size);
+        }
+
+        internal static int inflate(IntPtr strm, int flush) {
+            return UseClrZlib ? ClrZlib.Run(strm, flush) : sys_inflate(strm, flush);
+        }
+
+        internal static int inflateEnd(IntPtr strm) {
+            return UseClrZlib ? ClrZlib.End(strm) : sys_inflateEnd(strm);
+        }
+
+        internal static int inflateReset(IntPtr strm) {
+            return UseClrZlib ? ClrZlib.Reset(strm) : sys_inflateReset(strm);
+        }
+
+        internal static int inflateSetDictionary(IntPtr strm, byte[]/*!*/ dictionary, uint dictLength) {
+            if (UseClrZlib) {
+                throw ClrZlib.Unavailable("Zlib::Inflate#set_dictionary", "inflateSetDictionary");
+            }
+            return sys_inflateSetDictionary(strm, dictionary, dictLength);
+        }
+
+        internal static int inflateSyncPoint(IntPtr strm) {
+            if (UseClrZlib) {
+                throw ClrZlib.Unavailable("Zlib::Inflate#sync_point?", "inflateSyncPoint");
+            }
+            return sys_inflateSyncPoint(strm);
+        }
+
+        internal static UIntPtr adler32(UIntPtr adler, byte[] buf, uint len) {
+            return UseClrZlib ? (UIntPtr)Checksums.Adler32((uint)adler, buf, 0, (int)len) : sys_adler32(adler, buf, len);
+        }
+
+        internal static UIntPtr crc32(UIntPtr crc, byte[] buf, uint len) {
+            return UseClrZlib ? (UIntPtr)Checksums.Crc32((uint)crc, buf, 0, (int)len) : sys_crc32(crc, buf, len);
+        }
+
+        internal static UIntPtr adler32_combine(UIntPtr adler1, UIntPtr adler2, long len2) {
+            return UseClrZlib ? (UIntPtr)Checksums.Adler32Combine((uint)adler1, (uint)adler2, len2) : sys_adler32_combine(adler1, adler2, len2);
+        }
+
+        internal static UIntPtr crc32_combine(UIntPtr crc1, UIntPtr crc2, long len2) {
+            return UseClrZlib ? (UIntPtr)Checksums.Crc32Combine((uint)crc1, (uint)crc2, len2) : sys_crc32_combine(crc1, crc2, len2);
+        }
+
+        /// <summary>The 256 entries of zlib's CRC-32 table.</summary>
+        internal static uint[]/*!*/ GetCrcTable() {
+            if (UseClrZlib) {
+                return (uint[])Checksums.CrcTable.Clone();
+            }
+            // get_crc_table() hands back 256 z_crc_t (uint32 since zlib 1.2.7) entries.
+            var entries = new int[256];
+            Marshal.Copy(sys_get_crc_table(), entries, 0, 256);
+            var result = new uint[256];
+            for (int i = 0; i < entries.Length; i++) {
+                result[i] = unchecked((uint)entries[i]);
+            }
+            return result;
+        }
+
         [DllImport(Lib, EntryPoint = "deflateInit2_", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
-        internal static extern int deflateInit2_(IntPtr strm, int level, int method, int windowBits,
+        private static extern int sys_deflateInit2_(IntPtr strm, int level, int method, int windowBits,
             int memLevel, int strategy, string/*!*/ version, int stream_size);
 
         [DllImport(Lib, EntryPoint = "deflate", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int deflate(IntPtr strm, int flush);
+        private static extern int sys_deflate(IntPtr strm, int flush);
 
         [DllImport(Lib, EntryPoint = "deflateEnd", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int deflateEnd(IntPtr strm);
+        private static extern int sys_deflateEnd(IntPtr strm);
 
         [DllImport(Lib, EntryPoint = "deflateReset", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int deflateReset(IntPtr strm);
+        private static extern int sys_deflateReset(IntPtr strm);
 
         [DllImport(Lib, EntryPoint = "deflateParams", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int deflateParams(IntPtr strm, int level, int strategy);
+        private static extern int sys_deflateParams(IntPtr strm, int level, int strategy);
 
         [DllImport(Lib, EntryPoint = "deflateSetDictionary", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int deflateSetDictionary(IntPtr strm, byte[]/*!*/ dictionary, uint dictLength);
+        private static extern int sys_deflateSetDictionary(IntPtr strm, byte[]/*!*/ dictionary, uint dictLength);
 
         [DllImport(Lib, EntryPoint = "inflateInit2_", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
-        internal static extern int inflateInit2_(IntPtr strm, int windowBits, string/*!*/ version, int stream_size);
+        private static extern int sys_inflateInit2_(IntPtr strm, int windowBits, string/*!*/ version, int stream_size);
 
         [DllImport(Lib, EntryPoint = "inflate", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int inflate(IntPtr strm, int flush);
+        private static extern int sys_inflate(IntPtr strm, int flush);
 
         [DllImport(Lib, EntryPoint = "inflateEnd", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int inflateEnd(IntPtr strm);
+        private static extern int sys_inflateEnd(IntPtr strm);
 
         [DllImport(Lib, EntryPoint = "inflateReset", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int inflateReset(IntPtr strm);
+        private static extern int sys_inflateReset(IntPtr strm);
 
         [DllImport(Lib, EntryPoint = "inflateSetDictionary", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int inflateSetDictionary(IntPtr strm, byte[]/*!*/ dictionary, uint dictLength);
+        private static extern int sys_inflateSetDictionary(IntPtr strm, byte[]/*!*/ dictionary, uint dictLength);
 
         [DllImport(Lib, EntryPoint = "inflateSyncPoint", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int inflateSyncPoint(IntPtr strm);
+        private static extern int sys_inflateSyncPoint(IntPtr strm);
 
         [DllImport(Lib, EntryPoint = "adler32", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern UIntPtr adler32(UIntPtr adler, byte[] buf, uint len);
+        private static extern UIntPtr sys_adler32(UIntPtr adler, byte[] buf, uint len);
 
         [DllImport(Lib, EntryPoint = "crc32", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern UIntPtr crc32(UIntPtr crc, byte[] buf, uint len);
+        private static extern UIntPtr sys_crc32(UIntPtr crc, byte[] buf, uint len);
 
         [DllImport(Lib, EntryPoint = "adler32_combine", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern UIntPtr adler32_combine(UIntPtr adler1, UIntPtr adler2, long len2);
+        private static extern UIntPtr sys_adler32_combine(UIntPtr adler1, UIntPtr adler2, long len2);
 
         [DllImport(Lib, EntryPoint = "crc32_combine", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern UIntPtr crc32_combine(UIntPtr crc1, UIntPtr crc2, long len2);
+        private static extern UIntPtr sys_crc32_combine(UIntPtr crc1, UIntPtr crc2, long len2);
 
         [DllImport(Lib, EntryPoint = "get_crc_table", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern IntPtr get_crc_table();
+        private static extern IntPtr sys_get_crc_table();
     }
 
     [RubyModule("Zlib")]
@@ -163,11 +288,11 @@ namespace IronRuby.StandardLibrary.Zlib {
         public const int FINISH = 4;
 
         [RubyConstant("ZLIB_VERSION")]
-        public static string ZLIB_VERSION = LibZ.Version;
+        public static readonly MutableString ZLIB_VERSION = MutableString.CreateAscii(LibZ.Version).Freeze();
 
         // The version of the `zlib` gem whose API this implements, not libz's own version.
         [RubyConstant("VERSION")]
-        public static string VERSION = "3.2.3";
+        public static readonly MutableString VERSION = MutableString.CreateAscii("3.2.3").Freeze();
 
         [RubyConstant("MAXBITS")]
         public const int MAXBITS = 15;
@@ -355,13 +480,9 @@ namespace IronRuby.StandardLibrary.Zlib {
         [RubyMethod("crc_table", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("crc_table", RubyMethodAttributes.PrivateInstance)]
         public static RubyArray/*!*/ CrcTable(object self) {
-            // get_crc_table() hands back 256 z_crc_t (uint32 since zlib 1.2.7) entries.
-            IntPtr table = LibZ.get_crc_table();
             var result = new RubyArray(256);
-            var entries = new int[256];
-            Marshal.Copy(table, entries, 0, 256);
-            for (int i = 0; i < entries.Length; i++) {
-                result.Add(Protocols.Normalize(unchecked((uint)entries[i])));
+            foreach (uint entry in LibZ.GetCrcTable()) {
+                result.Add(Protocols.Normalize(entry));
             }
             return result;
         }
@@ -380,7 +501,7 @@ namespace IronRuby.StandardLibrary.Zlib {
 
         [RubyMethod("gzip", RubyMethodAttributes.PublicSingleton)]
         public static MutableString/*!*/ Gzip(ConversionStorage<int>/*!*/ fixnumCast, RubyModule/*!*/ self,
-            [DefaultProtocol, NotNull]MutableString/*!*/ str, [Optional]object options) {
+            [DefaultProtocol, NotNull]MutableString/*!*/ str, [Keywords, Optional]object options) {
 
             RubyContext context = fixnumCast.Context;
 
@@ -404,13 +525,7 @@ namespace IronRuby.StandardLibrary.Zlib {
             }
         }
 
-        [RubyMethod("gunzip", RubyMethodAttributes.PublicSingleton)]
-        public static MutableString/*!*/ Gunzip(RubyModule/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ str) {
-            using (var z = new Inflate(MAX_WBITS + 16)) {
-                z.Run(str.ToByteArray(), LibZ.Z_FINISH, null);
-                return z.TakeBuffer();
-            }
-        }
+        // Zlib.gunzip is in Src/StdLib/ironruby/zlib.rb, next to the GzipFile errors it raises.
 
         #endregion
 
@@ -550,10 +665,6 @@ namespace IronRuby.StandardLibrary.Zlib {
                 set { _finished = value; }
             }
 
-            internal bool IsEnded {
-                get { return _ended; }
-            }
-
             internal List<byte>/*!*/ Output {
                 get { return _output; }
             }
@@ -648,10 +759,14 @@ namespace IronRuby.StandardLibrary.Zlib {
                         if (z.avail_out > 0) {
                             break;
                         }
-                        if (z.avail_in == 0 && _isInflate) {
+                        if (z.avail_in == 0 && _isInflate && !LibZ.UseClrZlib) {
                             // inflate() answers Z_BUF_ERROR once it is out of input; deflate()
                             // can still have output pending in its own state, so only inflate
-                            // gets to stop here.
+                            // gets to stop here. Not on .NET's zlib: Intel's fork in .NET 8
+                            // reads all the input ahead into its bit buffer, so with the output
+                            // full and nothing left to read it can still have output to give.
+                            // It is asked again, and when it really is done it leaves the fresh
+                            // buffer untouched, which the avail_out check above ends on.
                             break;
                         }
                     }
@@ -1112,6 +1227,12 @@ namespace IronRuby.StandardLibrary.Zlib {
                 using (var z = new Inflate(MAX_WBITS)) {
                     bool broke;
                     object result = z.Run(str.ToByteArray(), LibZ.Z_SYNC_FLUSH, block, out broke);
+                    if (broke) {
+                        return result;
+                    }
+                    // MRI finishes the stream "for checking errors": input that stops short of
+                    // the end of the stream is a BufError, not the part that did inflate.
+                    result = z.Run(new byte[0], LibZ.Z_FINISH, block, out broke);
                     if (broke) {
                         return result;
                     }

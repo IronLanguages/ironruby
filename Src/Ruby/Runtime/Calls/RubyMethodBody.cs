@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -25,10 +21,7 @@ using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
 using IronRuby.Compiler.Ast;
-using IronRuby.Compiler.Generation;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
-using AstUtils = Microsoft.Scripting.Ast.Utils;
 using MethodDeclaration = IronRuby.Compiler.Ast.MethodDefinition;
 
 namespace IronRuby.Runtime.Calls {
@@ -60,10 +53,18 @@ namespace IronRuby.Runtime.Calls {
         // method's header (name, parameters, location), not its body.
         private readonly Func<RubyScope, RubyModule, Delegate> _precompiled;
 
+        // A precompiled method the JIT may specialize: its def's source, which the JIT's AST is parsed from (see Compile).
+        private readonly string _jitSource;
+
+        // The label the precompiled body's frames carry, which the compiler worked out from the lexical nesting (see Compile).
+        private readonly string _precompiledLabel;
+
         internal RubyMethodBody(MethodDeclaration/*!*/ header, MSA.SymbolDocumentInfo document, RubyEncoding/*!*/ encoding,
-            Func<RubyScope, RubyModule, Delegate>/*!*/ precompiled)
+            Func<RubyScope, RubyModule, Delegate>/*!*/ precompiled, string jitSource, string label)
             : this(header, document, encoding, (LineCoverage)null) {
             _precompiled = precompiled;
+            _jitSource = jitSource;
+            _precompiledLabel = label;
         }
 
         /// <summary>
@@ -72,6 +73,15 @@ namespace IronRuby.Runtime.Calls {
         /// method marks the aliases made of it, before or after.
         /// </summary>
         private bool _ruby2Keywords;
+
+        // What Method#== compares: the body itself, or the body of the method this one was made the same as
+        // (RubyMethodInfo.MakeEquivalentTo).
+        private RubyMethodBody _equivalenceKey;
+
+        internal RubyMethodBody/*!*/ EquivalenceKey {
+            get { return _equivalenceKey ?? this; }
+            set { _equivalenceKey = value; }
+        }
 
         public bool Ruby2Keywords {
             get { return _ruby2Keywords; }
@@ -231,6 +241,17 @@ namespace IronRuby.Runtime.Calls {
         // refinements, which is right for a `def' that ran before any refinement existed.
         private bool _compiledWithoutDefinitionRefinements;
 
+        // A `def' of this body ran while nothing had been refined (so it recorded nothing): a
+        // compilation for its module made after something has been must still see no refinements.
+        private bool _definedWithoutRefinements;
+
+        /// <summary>
+        /// A `def' of this body ran before anything was refined: no refinement is active where it was written.
+        /// </summary>
+        internal void SetDefinedWithoutRefinements() {
+            _definedWithoutRefinements = true;
+        }
+
         /// <summary>
         /// Records the refinements active at a `def' of this body for <paramref name="declaringModule"/>.
         /// </summary>
@@ -250,7 +271,21 @@ namespace IronRuby.Runtime.Calls {
                     _interpretedDispatchers = null;
                     _compiledFrom = _compiledTo = null;
                 }
-                GetDefinitionRefinementsNoLock(declaringModule).Value = refinements;
+
+                StrongBox<RefinementActivation> record;
+                if (_definitionRefinements != null && _definitionRefinements.TryGetValue(declaringModule, out record)) {
+                    if (!ReferenceEquals(record.Value, refinements)) {
+                        // The `def' ran again where other refinements are active, and the compiled body is shared: the
+                        // calls of it still running answer the new record from now on, the way new calls do. A scope
+                        // that memoized the old answer recomputes it, as it does after a `using', so that it agrees
+                        // with the rules that read the record (RubyCallAction.Resolve).
+                        declaringModule.Context.RefinementVersion++;
+                    }
+                } else {
+                    // nothing has been compiled against a record that did not exist
+                    record = GetDefinitionRefinementsNoLock(declaringModule);
+                }
+                record.Value = refinements;
             }
         }
 
@@ -277,10 +312,73 @@ namespace IronRuby.Runtime.Calls {
         }
 
         private Delegate/*!*/ Compile(RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
+            bool timed = PhaseTimer.Enter(_precompiled != null ? PhaseTimer.Precompiled : PhaseTimer.DefCompile);
+            try {
+                return CompileNoTiming(declaringScope, declaringModule);
+            } finally {
+                PhaseTimer.Exit(timed);
+            }
+        }
+
+        private Delegate/*!*/ CompileNoTiming(RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
             if (_precompiled != null) {
-                return _precompiled(declaringScope, declaringModule);
+                // The frame label of the compiled body was worked out from the lexical nesting. A def run for another module
+                // - the singleton copy module_function makes (or the instance one), a def in class_eval or in a block - is
+                // compiled from its source, as it is without the library, so that its frames are labelled after the module
+                // the runtime gives it ("FileUtils.mkdir_p" or "FileUtils#mkdir_p").
+                if (_precompiledLabel != null && _precompiledLabel != MethodDeclaration.QualifyFrameLabel(_ast.Name, declaringModule)) {
+                    var source = Precompiled.PrecompiledCode.ParseDefinition(declaringScope.RubyContext, _ast, _encoding,
+                        _document != null ? _document.FileName : null);
+                    if (source != null) {
+                        return CompileFromSyntaxTree(source, declaringScope, declaringModule);
+                    }
+                }
+                var compiled = _precompiled(declaringScope, declaringModule);
+                // -X:JIT, as below: from the def's AST, which the library keeps the source of for the methods it may specialize
+                var jitContext = declaringScope.RubyContext;
+                if (_jitSource != null && jitContext.RubyOptions.Jit) {
+                    var ast = Precompiled.PrecompiledCode.ParseJitSource(jitContext, _jitSource, _ast, _document != null ? _document.FileName : null);
+                    if (ast != null) {
+                        compiled = IronRuby.Runtime.Jit.JitStub.Wrap(compiled, ast, jitContext, declaringModule, declaringScope, null);
+                    }
+                }
+                return compiled;
             }
 
+            return CompileFromSyntaxTree(_ast, declaringScope, declaringModule);
+        }
+
+        /// <summary>
+        /// The definition-time refinement record a compilation of the body for <paramref name="declaringModule"/>
+        /// is made against; null when it is compiled as if nothing were refined.
+        /// </summary>
+        private StrongBox<RefinementActivation> GetDefinitionRefinements(RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
+            // Only a method defined where something is `using'd pays for the definition-time refinement
+            // record (a scope field written on every call): no call in any other body can see a
+            // refinement, so it is compiled as if nothing were refined.  Should the same `def' run
+            // again where a refinement is active, SetDefinitionRefinements drops this compilation.
+            StrongBox<RefinementActivation> definitionRefinements = null;
+            if (declaringScope.RubyContext.HasRefinements) {
+                lock (this) {
+                    definitionRefinements = GetDefinitionRefinementsNoLock(declaringModule);
+                    // With nothing recorded the scopes follow the declaring scope - what an imported refinement
+                    // method's copy needs (RubyModule.ImportMethod) - but a `def' that ran before anything was
+                    // refined saw nothing, whatever that scope `using's afterwards.
+                    if (definitionRefinements.Value == null && _definedWithoutRefinements && !declaringModule.IsRefinement) {
+                        definitionRefinements.Value = RefinementActivation.Empty;
+                    }
+                    if (definitionRefinements.Value != null && definitionRefinements.Value.IsEmpty) {
+                        definitionRefinements = null;
+                        _compiledWithoutDefinitionRefinements = true;
+                    }
+                }
+            } else {
+                _compiledWithoutDefinitionRefinements = true;
+            }
+            return definitionRefinements;
+        }
+
+        private Delegate/*!*/ CompileFromSyntaxTree(MethodDeclaration/*!*/ ast, RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
             // TODO: remove options
             AstGenerator gen = new AstGenerator(declaringScope.RubyContext, new RubyCompilerOptions(), _document, _encoding, false);
             gen.Coverage = _coverage;
@@ -288,25 +386,24 @@ namespace IronRuby.Runtime.Calls {
                 gen.MethodCoverage = _coverage.FindMethod(this, declaringModule);
             }
 
-            // Only programs that refine anything pay for the definition-time refinement record.
-            StrongBox<RefinementActivation> definitionRefinements = null;
-            if (declaringScope.RubyContext.HasRefinements) {
-                lock (this) {
-                    definitionRefinements = GetDefinitionRefinementsNoLock(declaringModule);
-                }
-            } else {
-                _compiledWithoutDefinitionRefinements = true;
-            }
+            StrongBox<RefinementActivation> definitionRefinements = GetDefinitionRefinements(declaringScope, declaringModule);
 
-            MSA.LambdaExpression lambda = _ast.TransformBody(gen, declaringScope, declaringModule, definitionRefinements);
+            MSA.LambdaExpression lambda;
+            bool timed = PhaseTimer.Enter(PhaseTimer.DefTransform);
+            try {
+                lambda = ast.TransformBody(gen, declaringScope, declaringModule, definitionRefinements);
+            } finally {
+                PhaseTimer.Exit(timed);
+            }
             var result = RubyScriptCode.CompileLambda(lambda, declaringScope.RubyContext);
 
             // -X:JIT: hand the generic body to the method JIT, which may put a profiling
             // trampoline of the same delegate type in front of it. Off by default, and this is
-            // the only place the rest of the runtime knows about it.
+            // the only place the rest of the runtime knows about it. A body that counts its lines
+            // for Coverage keeps them: a typed body has no line counters.
             var context = declaringScope.RubyContext;
-            if (context.RubyOptions.Jit) {
-                result = IronRuby.Runtime.Jit.JitStub.Wrap(result, _ast, context, declaringModule);
+            if (context.RubyOptions.Jit && _coverage == null) {
+                result = IronRuby.Runtime.Jit.JitStub.Wrap(result, ast, context, declaringModule, declaringScope, definitionRefinements, lambda.Name);
             }
             return result;
         }

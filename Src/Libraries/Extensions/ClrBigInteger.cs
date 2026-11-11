@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -14,8 +14,10 @@
  * ***************************************************************************/
 
 using System;
+using System.Runtime.CompilerServices;
 using System.Diagnostics;
 using IronRuby.Runtime;
+using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Generation;
 using System.Numerics;
 using Microsoft.Scripting.Runtime;
@@ -91,8 +93,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <returns>self + other as Float</returns>
         [RubyMethod("+")]
-        public static object Add(BigInteger/*!*/ self, double other) {
-            return self.ToFloat64() + other;
+        public static object Add(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
+            return Protocols.ConvertToDouble(context, self) + other;
         }
 
         /// <summary>
@@ -102,7 +104,25 @@ namespace IronRuby.Builtins {
         /// <remarks>Coerces self and other using other.coerce(self) then dynamically invokes +</remarks>
         [RubyMethod("+")]
         public static object Add(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, object/*!*/ self, object other) {
+            if (IsFixnumWithComplex(coercionStorage.Context, self, other)) {
+                var site = binaryOpSite.GetCallSite("+");
+                return site.Target(site, other, self);
+            }
             return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "+", self, other);
+        }
+
+        /// <summary>
+        /// numeric.c's fix_plus and fix_mul hand a Complex operand straight to Complex#+ and
+        /// Complex#* (with the Fixnum as the argument) instead of coercing, which keeps an exact
+        /// part exact: 7 * Complex(1/2r, 3) is ((7/2)+21i), where the coerced product
+        /// Complex(7, 0) * Complex(1/2r, 3) is ((7/2)+(21/1)*i). A Bignum coerces as usual.
+        /// </summary>
+        private static bool IsFixnumWithComplex(RubyContext/*!*/ context, object self, object other) {
+            const long FixnumMax = (1L << 62) - 1, FixnumMin = -(1L << 62);
+            if (other == null || !(self is int || (self is long && (long)self >= FixnumMin && (long)self <= FixnumMax))) {
+                return false;
+            }
+            return context.GetClassOf(other).Name == "Complex";
         }
 
         #endregion
@@ -134,8 +154,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <returns>self - other as Float</returns>
         [RubyMethod("-")]
-        public static object Subtract(BigInteger/*!*/ self, double other) {
-            return self.ToFloat64() - other;
+        public static object Subtract(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
+            return Protocols.ConvertToDouble(context, self) - other;
         }
 
         /// <summary>
@@ -177,8 +197,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <returns>self * other as Float</returns>
         [RubyMethod("*")]
-        public static object Multiply(BigInteger/*!*/ self, double other) {
-            return self.ToFloat64() * other;
+        public static object Multiply(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
+            return Protocols.ConvertToDouble(context, self) * other;
         }
 
         /// <summary>
@@ -188,6 +208,10 @@ namespace IronRuby.Builtins {
         /// <remarks>Coerces self and other using other.coerce(self) then dynamically invokes *</remarks>
         [RubyMethod("*")]
         public static object Multiply(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, object/*!*/ self, object other) {
+            if (IsFixnumWithComplex(coercionStorage.Context, self, other)) {
+                var site = binaryOpSite.GetCallSite("*");
+                return site.Target(site, other, self);
+            }
             return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "*", self, other);
         }
 
@@ -220,8 +244,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <returns>self / other as Float</returns>
         [RubyMethod("/")]
-        public static object DivideOp(BigInteger/*!*/ self, double other) {
-            return self.ToFloat64() / other;
+        public static object DivideOp(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
+            return Protocols.ConvertToDouble(context, self) / other;
         }
 
         /// <summary>
@@ -229,8 +253,12 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <returns>self divided by other as Float</returns>
         [RubyMethod("div")]
-        public static object Divide(BigInteger/*!*/ self, double other) {
-            return DivMod(self, other)[0];
+        public static object Divide(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
+            // rb_big_divide: the zero check comes before the conversion, so it does not warn.
+            if (other == 0.0) {
+                throw new DivideByZeroException("divided by 0");
+            }
+            return ClrFloat.Floor(Protocols.ConvertToDouble(context, self) / other);
         }
 
         /// <summary>
@@ -253,6 +281,9 @@ namespace IronRuby.Builtins {
             return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "div", self, other);
         }
 
+        // MRI's Fixnum range, 62 bits
+        private static readonly BigInteger FixnumMax = (BigInteger.One << 62) - 1, FixnumMin = -(BigInteger.One << 62);
+
         /// <summary>
         /// Converting each side to a double first overflows to Infinity for anything past
         /// Float::MAX, and Infinity/Infinity is NaN - so a division whose answer is an ordinary
@@ -260,7 +291,7 @@ namespace IronRuby.Builtins {
         /// that the quotient lands in double's range with bits to spare, and put the shift back
         /// afterwards.
         /// </summary>
-        [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("fdiv")]
         public static double FDiv(BigInteger/*!*/ self, [NotNull]BigInteger/*!*/ other) {
             if (other.IsZero()) {
                 // Dividing by zero answers what a Float would: a signed infinity, or NaN for 0/0.
@@ -268,6 +299,26 @@ namespace IronRuby.Builtins {
             }
             if (self.IsZero()) {
                 return (other.Sign > 0) ? 0.0 : -0.0;
+            }
+
+            // MRI's rb_int_fdiv_double reduces the two by their gcd first, and two that are then
+            // Fixnums divide as Fixnums do (see FDivExact): (x * 10**20).fdiv(y * 10**20) is x.fdiv(y).
+            BigInteger gcd = BigInteger.GreatestCommonDivisor(self, other);
+            if (!gcd.IsOne) {
+                self /= gcd;
+                other /= gcd;
+                if (self >= FixnumMin && self <= FixnumMax && other >= FixnumMin && other <= FixnumMax) {
+                    return FDivExact((long)self, (long)other);
+                }
+            }
+
+            // rb_big_fdiv_double: a Bignum over a Fixnum is the two as doubles, divided - unless the
+            // Bignum is too large for a double, which the division below handles.
+            if (other >= FixnumMin && other <= FixnumMax && (self < FixnumMin || self > FixnumMax)) {
+                double dividend = Protocols.ToDouble(self);
+                if (!Double.IsInfinity(dividend)) {
+                    return dividend / (double)(long)other;
+                }
             }
 
             long magnitude = (long)self.GetBitLength() - (long)other.GetBitLength();
@@ -306,50 +357,6 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region quo
-
-        /// <summary>
-        /// Returns the floating point result of dividing self by other, where other is Bignum or Fixnum. 
-        /// </summary>
-        /// <returns>self divided by other as Float</returns>
-        /// <remarks>Converts self and other to Float and then divides.</remarks>
-        [RubyMethod("quo")]
-        public static object Quotient(BigInteger/*!*/ self, [NotNull]BigInteger/*!*/ other) {
-            return Quotient(self, other.ToFloat64());
-        }
-
-        /// <summary>
-        /// Returns the floating point result of dividing self by other, where other is Bignum or Fixnum. 
-        /// </summary>
-        /// <returns>self divided by other as Float</returns>
-        /// <remarks>Converts self and other to Float and then divides.</remarks>
-        [RubyMethod("quo")]
-        public static object Quotient(BigInteger/*!*/ self, int other) {
-            return Quotient(self, (double)other);
-        }
-
-        /// <summary>
-        /// Returns the floating point result of dividing self by other, where other is Float. 
-        /// </summary>
-        /// <returns>self divided by other as Float</returns>
-        /// <remarks>Converts self to Float and then divides.</remarks>
-        [RubyMethod("quo")]
-        public static object Quotient(BigInteger/*!*/ self, double other) {
-            return self.ToFloat64() / other;
-        }
-
-        /// <summary>
-        /// Returns the floating point result of dividing self by other, where other is not Bignum, Fixnum or Float. 
-        /// </summary>
-        /// <returns>self divided by other as Float</returns>
-        /// <remarks>Coerces self and other using other.coerce(self) then dynamically invokes quo</remarks>
-        [RubyMethod("quo")]
-        public static object Quotient(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, object/*!*/ self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "quo", self, other);
-        }
-
-        #endregion
-
         #region **
 
         /// <summary>
@@ -357,9 +364,11 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <returns>self ** exponent as Bignum/Fixnum if exponent &gt;= 0, Float otherwise</returns>
         [RubyMethod("**")]
-        public static object Power(RubyContext/*!*/ context, BigInteger/*!*/ self, [NotNull]BigInteger/*!*/ exponent) {
+        public static object Power(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow, RubyContext/*!*/ context,
+            BigInteger/*!*/ self, [NotNull]BigInteger/*!*/ exponent) {
             if (exponent.Sign < 0) {
-                return Math.Pow(self.ToFloat64(), exponent.ToFloat64());
+                return ClrInteger.PowerSlow(slow, Protocols.Normalize(self), exponent,
+                    () => Math.Pow(Protocols.ToDouble(self), Protocols.ToDouble(exponent)));
             }
             return PowerNonNegative(self, exponent);
         }
@@ -373,28 +382,31 @@ namespace IronRuby.Builtins {
         /// Returns Float if exponent &lt; 0
         /// </remarks>
         [RubyMethod("**")]
-        public static object Power(BigInteger/*!*/ self, int exponent) {
-            // BigInteger doesn't handle negative exponents.
+        public static object Power(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow, BigInteger/*!*/ self, int exponent) {
+            // a negative exponent makes a Rational (rational.rb)
             if (exponent < 0) {
-                return Power(self, (double)exponent);
+                return ClrInteger.PowerSlow(slow, self, exponent, () => Math.Pow(Protocols.ToDouble(self), exponent));
             }
             return PowerNonNegative(self, exponent);
         }
 
         /// <summary>
-        /// The most bits MRI 3.4+ is willing to produce from Integer#** before it gives up with
-        /// an ArgumentError (16 GiB). Anything past <see cref="Int32.MaxValue"/> bits is out of
-        /// reach for System.Numerics.BigInteger anyway, so that is the effective ceiling here.
+        /// MRI's rb_big_pow refuses a power when the bit length of its base times the exponent is
+        /// past 2**34 (BIGLEN_LIMIT on a 64-bit build): "exponent is too large".
         /// </summary>
-        private const long PowerResultBitLimit = 16L * 1024 * 1024 * 1024;
+        private const long PowerBitLimit = 1L << 34;
+
+        // MRI's Fixnum range (62 bits and a sign): a base and an exponent in it go through int_pow
+        private const long MriFixnumMax = (1L << 62) - 1;
 
         /// <summary>
         /// self ** exponent for exponent &gt;= 0.
         ///
-        /// Refuses absurd result sizes up front the way MRI 3.4+ does, rather than spending
-        /// minutes and gigabytes on a value nobody can use, and shifts instead of multiplying
-        /// when |self| is a power of two - BigInteger.Pow multiplies in quadratic time, which
-        /// makes even a legal result like 2 ** 40_000_000 effectively a hang.
+        /// Refuses what MRI refuses ("exponent is too large", <see cref="PowerIsTooLarge"/>) and
+        /// computes everything else, as MRI does: 2 ** (2**31) is a 2**31+1-bit Integer. A power of
+        /// two is a shift, linear instead of quadratic, so even 2 ** 40_000_000 is quick. .NET caps a
+        /// BigInteger at about 2**31 bits; a larger result is the failed
+        /// allocation MRI reports (NoMemoryError), as it is for a shift (<see cref="ShiftLeftOrFail"/>).
         /// </summary>
         internal static object/*!*/ PowerNonNegative(BigInteger/*!*/ self, BigInteger/*!*/ exponent) {
             Debug.Assert(exponent.Sign >= 0);
@@ -409,27 +421,106 @@ namespace IronRuby.Builtins {
                 return ScriptingRuntimeHelpers.Int32ToObject(exponent.IsEven ? 1 : -1);
             }
 
-            // |self| >= 2 from here on, so the result needs at least
-            // (bitLength(|self|) - 1) * exponent + 1 bits.
-            BigInteger magnitude = BigInteger.Abs(self);
-            long magnitudeBits = magnitude.GetBitLength();
-            BigInteger resultBits = (BigInteger)(magnitudeBits - 1) * exponent + BigInteger.One;
-            if (resultBits > PowerResultBitLimit || resultBits > Int32.MaxValue) {
+            if (PowerIsTooLarge(self, exponent)) {
                 throw RubyExceptions.CreateArgumentError("exponent is too large");
             }
 
+            // |self| >= 2, so from here on the exponent is below 2**34
+            BigInteger magnitude = BigInteger.Abs(self);
+            long magnitudeBits = magnitude.GetBitLength();
             bool negateResult = self.Sign < 0 && !exponent.IsEven;
-            int exp = (int)exponent;
+            long exp = (long)exponent;
+
+            // the result has at least (magnitudeBits - 1) * exp + 1 bits: past the largest BigInteger it is
+            // NoMemoryError up front, rather than after computing it (and .NET 11's Pow may not check)
+            if ((magnitudeBits - 1) * exp + 1 > ClrInteger.MaxBigIntegerBits) {
+                throw new OutOfMemoryException("failed to allocate memory");
+            }
 
             BigInteger result;
-            if ((magnitude & (magnitude - BigInteger.One)).IsZero) {
-                // |self| == 2 ** (magnitudeBits - 1): a shift, linear instead of quadratic
-                result = BigInteger.One << (int)((magnitudeBits - 1) * exp);
-            } else {
-                result = BigInteger.Pow(magnitude, exp);
+            try {
+                if ((magnitude & (magnitude - BigInteger.One)).IsZero) {
+                    // |self| == 2 ** (magnitudeBits - 1): a shift, linear instead of quadratic, in
+                    // Int32 steps (BigInteger shifts by an Int32)
+                    long shift = (magnitudeBits - 1) * exp;
+                    result = BigInteger.One;
+                    while (shift > Int32.MaxValue) {
+                        result = ShiftLeftOrFail(result, Int32.MaxValue);
+                        shift -= Int32.MaxValue;
+                    }
+                    result = ShiftLeftOrFail(result, (int)shift);
+                } else if (exp <= Int32.MaxValue) {
+                    result = BigInteger.Pow(magnitude, (int)exp);
+                } else {
+                    // BigInteger.Pow takes an Int32 exponent: raise to the exponent's high bits,
+                    // then square and multiply for the low ones
+                    int low = 0;
+                    while ((exp >> low) > Int32.MaxValue) {
+                        low++;
+                    }
+                    result = BigInteger.Pow(magnitude, (int)(exp >> low));
+                    for (int bit = low - 1; bit >= 0; bit--) {
+                        result *= result;
+                        if (((exp >> bit) & 1) != 0) {
+                            result *= magnitude;
+                        }
+                    }
+                }
+            } catch (OverflowException) {
+                // past the largest BigInteger
+                throw new OutOfMemoryException("failed to allocate memory");
             }
 
             return Protocols.Normalize(negateResult ? -result : result);
+        }
+
+        /// <summary>
+        /// MRI's test for "exponent is too large", for |self| &gt;= 2 and exponent &gt;= 1. A Bignum
+        /// base goes straight to rb_big_pow, which refuses bits(|self|) * exponent &gt; 2**34, and so
+        /// does any base to a Bignum power. A Fixnum base to a Fixnum power goes through int_pow
+        /// first, which squares the base in a long while it can and hands rb_big_pow the base and
+        /// exponent it has reached by then, so the test is made on those: 2 ** (2**33) is computed,
+        /// but 2 ** (2**34 - 1) is refused.
+        /// </summary>
+        private static bool PowerIsTooLarge(BigInteger/*!*/ self, BigInteger/*!*/ exponent) {
+            if (exponent > MriFixnumMax) {
+                return true;
+            }
+            long y = (long)exponent;
+            BigInteger x = BigInteger.Abs(self);
+
+            if (y > 1 && self >= -MriFixnumMax - 1 && self <= MriFixnumMax) {
+                // int_pow (numeric.c) up to its jump to rb_big_pow; its x is |self| here
+                long xs = (long)x;
+                long z = ((y & 1) != 0) ? xs : 1;
+                y &= ~1L;
+                while (true) {
+                    while ((y & 1) == 0) {
+                        if (xs >= 1L << 31) {
+                            // !FIT_SQRT_LONG(x)
+                            return (BigInteger)BitLength(xs) * y > PowerBitLimit;
+                        }
+                        xs *= xs;
+                        y >>= 1;
+                    }
+                    if ((Int128)xs * z > MriFixnumMax) {
+                        // MUL_OVERFLOW_FIXNUM_P(x, z)
+                        return (BigInteger)BitLength(xs) * y > PowerBitLimit;
+                    }
+                    z *= xs;
+                    if (--y == 0) {
+                        // the power fits in a Fixnum
+                        return false;
+                    }
+                }
+            }
+
+            // rb_big_pow: rb_absint_numwords(x, 1) * y > BIGLEN_LIMIT
+            return (BigInteger)x.GetBitLength() * y > PowerBitLimit;
+        }
+
+        private static long BitLength(long positive) {
+            return 64 - BitOperations.LeadingZeroCount((ulong)positive);
         }
 
         /// <summary>
@@ -438,8 +529,12 @@ namespace IronRuby.Builtins {
         /// <returns>self ** exponent as Float</returns>
         /// <remarks>Converts self to Float (directly) then calls System.Math.Pow</remarks>
         [RubyMethod("**")]
-        public static object Power(BigInteger/*!*/ self, double exponent) {
-            return Math.Pow(self.ToFloat64(), exponent);
+        public static object Power(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow, RubyContext/*!*/ context, BigInteger/*!*/ self, double exponent) {
+            if (self.Sign < 0 && ClrInteger.IsFractional(exponent)) {
+                // a Complex (rational.rb)
+                return ClrInteger.PowerSlow(slow, self, exponent, () => Math.Pow(Protocols.ConvertToDouble(context, self), exponent));
+            }
+            return Math.Pow(Protocols.ConvertToDouble(context, self), exponent);
         }
 
         /// <summary>
@@ -448,8 +543,11 @@ namespace IronRuby.Builtins {
         /// <returns>self ** exponent</returns>
         /// <remarks>Coerces self and other using other.coerce(self) then dynamically invokes **</remarks>
         [RubyMethod("**")]
-        public static object Power(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, object/*!*/ self, object exponent) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "**", self, exponent);
+        public static object Power(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite,
+            CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow, object/*!*/ self, object exponent) {
+            // coerced the way rational.rb's __ir_num_coerce_bin__ does it
+            return ClrInteger.PowerSlow(slow, self, exponent,
+                () => Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "**", self, exponent));
         }
 
         #endregion
@@ -482,15 +580,13 @@ namespace IronRuby.Builtins {
         /// Returns self modulo other, where other is Float.
         /// </summary>
         /// <returns>self modulo other, as Float</returns>
-        /// <remarks>Calls divmod directly to get the modulus.</remarks>
+        /// <remarks>
+        /// MRI coerces self to a Float (warning when it is out of range) and answers Float#%,
+        /// so a Bignum too large for a double is Infinity % other, which is NaN.
+        /// </remarks>
         [RubyMethod("%"), RubyMethod("modulo")]
-        public static object Modulo(BigInteger/*!*/ self, double other) {
-            // Integer#%, unlike Float#%, does not answer NaN for a zero divisor
-            if (other == 0.0) {
-                throw new DivideByZeroException("divided by 0");
-            }
-            RubyArray result = DivMod(self, other);
-            return result[1];
+        public static object Modulo(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
+            return ClrFloat.Modulo(Protocols.ConvertToDouble(context, self), other);
         }
 
         /// <summary>
@@ -549,26 +645,9 @@ namespace IronRuby.Builtins {
         /// <returns>[self div other, self modulo other] as RubyArray</returns>
         /// <remarks>Normalizes div to Fixnum as necessary</remarks>
         [RubyMethod("divmod")]
-        public static RubyArray DivMod(BigInteger/*!*/ self, double other) {
-            if (Double.IsNaN(other)) {
-                throw new FloatDomainError("NaN");
-            }
-            if (other == 0.0) {
-                throw new DivideByZeroException("divided by 0");
-            }
-
-            double selfFloat = self.ToFloat64();
-            // Ruby floors the quotient and gives the remainder the sign of the divisor;
-            // C#'s % takes the sign of the dividend and truncates towards zero.  Derive
-            // the remainder from % rather than from div * other, which loses every
-            // significant digit once self is far outside double's exact integer range.
-            BigInteger div = new BigInteger(Math.Floor(selfFloat / other));
-            double mod = selfFloat % other;
-            if (mod != 0.0 && (mod < 0.0) != (other < 0.0)) {
-                mod += other;
-            }
-
-            return RubyOps.MakeArray2(Protocols.Normalize(div), mod);
+        public static RubyArray DivMod(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
+            // Float#divmod on self as a Float, which is what MRI's coercion amounts to.
+            return ClrFloat.DivMod(Protocols.ConvertToDouble(context, self), other);
         }
 
         /// <summary>
@@ -624,11 +703,13 @@ namespace IronRuby.Builtins {
         /// </example>
         /// <returns>Float</returns>
         [RubyMethod("remainder")]
-        public static double Remainder(BigInteger/*!*/ self, double other) {
+        public static double Remainder(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
+            // Converted (and warned about) before the zero check, as MRI's coercion does.
+            double dividend = Protocols.ConvertToDouble(context, self);
             if (other == 0.0) {
                 throw new DivideByZeroException("divided by 0");
             }
-            return self.ToFloat64() % other;
+            return dividend % other;
         }
 
         /// <summary>
@@ -843,10 +924,6 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region eql?
-
-        #endregion
-
         #endregion
 
         #region Bitwise Operators
@@ -863,7 +940,7 @@ namespace IronRuby.Builtins {
         /// </remarks>
         [RubyMethod("<<")]
         public static object/*!*/ LeftShift(BigInteger/*!*/ self, int other) {
-            BigInteger result = self << other;
+            BigInteger result = ClrInteger.ShiftLeftOrFail(self, other);
             result = ShiftOverflowCheck(self, result);
             return Protocols.Normalize(result);
         }
@@ -874,7 +951,7 @@ namespace IronRuby.Builtins {
             if (other.AsInt32(out small)) {
                 return LeftShift(self, small);
             }
-            return ClrInteger.ShiftedOutOfRange(self.Sign, other.Sign > 0);
+            return ClrInteger.ShiftBeyondInt32(self, other);
         }
 
         /// <summary>
@@ -901,6 +978,10 @@ namespace IronRuby.Builtins {
         /// </remarks>
         [RubyMethod(">>")]
         public static object/*!*/ RightShift(BigInteger/*!*/ self, int other) {
+            if (other < 0) {
+                // a left shift, held to the BigInteger size limit as << is (ClrInteger.ShiftLeftOrFail)
+                return (other == Int32.MinValue) ? ClrInteger.ShiftBeyondInt32(self, BigInteger.One << 31) : LeftShift(self, -other);
+            }
             BigInteger result = self >> other;
             result = ShiftOverflowCheck(self, result);
             return Protocols.Normalize(result);
@@ -912,7 +993,7 @@ namespace IronRuby.Builtins {
             if (other.AsInt32(out small)) {
                 return RightShift(self, small);
             }
-            return ClrInteger.ShiftedOutOfRange(self.Sign, other.Sign < 0);
+            return ClrInteger.ShiftBeyondInt32(self, -other);
         }
 
         /// <summary>
@@ -1028,18 +1109,15 @@ namespace IronRuby.Builtins {
         /// <returns>indexth bit in the (assumed) binary representation of self, where self[0] is the least significant bit.</returns>
         /// <remarks>Since representation is supposed to be 2s complement, we return always 1 if self is negative and index is greater than most signifcant bit in BigInteger</remarks>
         [RubyMethod("[]")]
-        public static int Bit(BigInteger/*!*/ self, [DefaultProtocol]int index) {
+        public static int Bit(BigInteger/*!*/ self, int index) {
             // If we are outside the range then return 0 ...
             if (index < 0) return 0;
 
-            int bytePos = index / 8;
-            int bitOffset = index % 8;
-            byte[] data = self.ToByteArray();
+            // ... or the sign past the highest bit (BigInteger's >> is arithmetic, so a negative value's bits are its
+            // two's complement)
+            if (index >= self.GetBitLength()) return self.Sign < 0 ? 1 : 0;
 
-            // ... or 1 if the index is too high and BigInteger is negative.
-            if (bytePos >= data.Length) return (self.Sign > 0) ? 0 : 1;
-
-            return (data[bytePos] & (1 << bitOffset)) != 0 ? 1 : 0;
+            return (self >> index).IsEven ? 0 : 1;
         }
 
         /// <summary>
@@ -1054,9 +1132,18 @@ namespace IronRuby.Builtins {
         /// we asssume we can always return 1 if self is negative and 0 otherwise</remarks>
         [RubyMethod("[]")]
         public static int Bit(BigInteger/*!*/ self, [NotNull]BigInteger/*!*/ index) {
-            // BigIntegers as indexes are always going to be outside the range.
-            if (index.IsNegative() || self.IsPositive()) return 0;
-            return 1;
+            if (index.IsNegative()) return 0;
+
+            // Past the highest bit: the sign extends for ever.
+            if (index >= self.GetBitLength()) return self.Sign < 0 ? 1 : 0;
+
+            // An Integer of more than 2**31 bits (1 << 2**31) has bits an Int32 index cannot reach.
+            BigInteger shifted = self;
+            while (index > Int32.MaxValue) {
+                shifted >>= Int32.MaxValue;
+                index -= Int32.MaxValue;
+            }
+            return (shifted >> (int)index).IsEven ? 0 : 1;
         }
 
         #endregion
@@ -1086,7 +1173,24 @@ namespace IronRuby.Builtins {
         [RubyMethod("to_s")]
         [RubyMethod("inspect")]
         public static MutableString/*!*/ ToString(BigInteger/*!*/ self) {
-            return MutableString.CreateAscii(self.ToString());
+            return MutableString.CreateAscii(ToRadixString(self, 10));
+        }
+
+        // A Fixnum: without these, an Int32 self bound to the BigInteger overloads above and was
+        // widened to a BigInteger to be formatted - most of the cost of "#{i}" and i.to_s.
+        [RubyMethod("to_s")]
+        [RubyMethod("inspect")]
+        public static MutableString/*!*/ ToString(int self) {
+            return MutableString.CreateAscii(self.ToString(CultureInfo.InvariantCulture));
+        }
+
+        [RubyMethod("to_s")]
+        [RubyMethod("inspect")]
+        public static MutableString/*!*/ ToString(int self, int radix) {
+            if (radix < 2 || radix > 36) {
+                throw RubyExceptions.CreateArgumentError("invalid radix {0}", radix);
+            }
+            return MutableString.CreateAscii(radix == 10 ? self.ToString(CultureInfo.InvariantCulture) : ToRadixString((long)self, radix));
         }
 
         /// <summary>
@@ -1100,8 +1204,92 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateArgumentError("invalid radix {0}", radix);
             }
 
-            // TODO: Can we do the ToLower in BigInteger?
-            return MutableString.CreateAscii(self.ToString(radix).ToLowerInvariant());
+            return MutableString.CreateAscii(ToRadixString(self, radix));
+        }
+
+        private const string RadixDigits = "0123456789abcdefghijklmnopqrstuvwxyz";
+
+        /// <summary>
+        /// The digits of <paramref name="value"/> in base <paramref name="radix"/> (2 through 36), lower case,
+        /// with a leading '-' when it is negative. Integer#to_s and #inspect, and format's %d, %x, %o and %b,
+        /// all come here.
+        /// </summary>
+        /// <remarks>
+        /// A value in the Int64 range is converted with machine arithmetic and a power-of-two radix reads the
+        /// bits directly. Any other radix goes to the DLR's MathUtils.ToString (Build/dlr-patches/0106), which
+        /// splits the number by powers of the radix and so is subquadratic; dividing by the radix a digit (or a
+        /// long's worth of digits) at a time, as this did before, took ~6 s for a million bits. In radix 10
+        /// the runtime's own BigInteger.ToString is quicker up to a size that depends on the runtime (see
+        /// <see cref="DecimalSplitBits"/>).
+        /// </remarks>
+        public static string/*!*/ ToRadixString(BigInteger value, int radix) {
+            Debug.Assert(radix >= 2 && radix <= 36);
+
+            if (value >= Int64.MinValue && value <= Int64.MaxValue) {
+                long fixnum = (long)value;
+                return (radix == 10) ? fixnum.ToString(CultureInfo.InvariantCulture) : ToRadixString(fixnum, radix);
+            }
+
+            if ((radix & (radix - 1)) == 0) {
+                return ToPowerOfTwoRadixString(value, radix);
+            }
+
+            if (radix == 10 && value.GetBitLength() < DecimalSplitBits) {
+                return value.ToString(CultureInfo.InvariantCulture);
+            }
+
+            // MathUtils writes upper-case letters, and only a radix above 10 has any
+            string digits = MathUtils.ToString(value, radix);
+            return (radix > 10) ? digits.ToLowerInvariant() : digits;
+        }
+
+        // From this many bits on, MathUtils.ToString beats BigInteger.ToString in radix 10. Measured (Release,
+        // one core) on random values: .NET 9 and later divide in subquadratic time and format slowly, and the
+        // two are level at ~4-32k bits (on .NET 8 it was ~64-96k bits).
+        private const long DecimalSplitBits = 32 * 1024;
+
+        private static string/*!*/ ToPowerOfTwoRadixString(BigInteger value, int radix) {
+            bool negative = value.Sign < 0;
+            BigInteger magnitude = BigInteger.Abs(value);
+            int bitsPerDigit = System.Numerics.BitOperations.TrailingZeroCount(radix);
+            byte[] bytes = magnitude.ToByteArray(isUnsigned: true, isBigEndian: false);
+            long bitLength = (long)magnitude.GetBitLength();
+            int digitCount = (int)((bitLength + bitsPerDigit - 1) / bitsPerDigit);
+            char[] chars = new char[digitCount + (negative ? 1 : 0)];
+            int mask = radix - 1;
+            int pos = chars.Length;
+            for (int d = 0; d < digitCount; d++) {
+                long bit = (long)d * bitsPerDigit;
+                int byteIndex = (int)(bit >> 3);
+                int window = bytes[byteIndex];
+                if (byteIndex + 1 < bytes.Length) {
+                    window |= bytes[byteIndex + 1] << 8;
+                }
+                chars[--pos] = RadixDigits[(window >> (int)(bit & 7)) & mask];
+            }
+            if (negative) {
+                chars[0] = '-';
+            }
+            return new string(chars);
+        }
+
+        private static string/*!*/ ToRadixString(long value, int radix) {
+            if (value == 0) {
+                return "0";
+            }
+            // the magnitude as an unsigned number, which Int64.MinValue also has:
+            ulong magnitude = (value < 0) ? (ulong)(-(value + 1)) + 1 : (ulong)value;
+            Span<char> buffer = stackalloc char[65];
+            int pos = buffer.Length;
+            ulong r = (ulong)radix;
+            while (magnitude != 0) {
+                buffer[--pos] = RadixDigits[(int)(magnitude % r)];
+                magnitude /= r;
+            }
+            if (value < 0) {
+                buffer[--pos] = '-';
+            }
+            return new string(buffer.Slice(pos));
         }
 
         #endregion
@@ -1124,6 +1312,15 @@ namespace IronRuby.Builtins {
         [RubyMethod("coerce")]
         public static RubyArray/*!*/ Coerce(BigInteger/*!*/ self, [NotNull]BigInteger/*!*/ other) {
             return RubyOps.MakeArray2(Protocols.Normalize(other), Protocols.Normalize(self));
+        }
+
+        /// <summary>
+        /// [other, self as a Float], warning when self is out of the Float range as MRI's
+        /// rb_big2dbl does.
+        /// </summary>
+        [RubyMethod("coerce")]
+        public static RubyArray/*!*/ Coerce(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
+            return RubyOps.MakeArray2(other, Protocols.ConvertToDouble(context, self));
         }
 
         [RubyMethod("coerce")]

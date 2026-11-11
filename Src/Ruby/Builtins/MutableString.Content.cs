@@ -14,18 +14,60 @@
  * ***************************************************************************/
 
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using Microsoft.Scripting.Utils;
 using System.Text;
-using IronRuby.Runtime;
 using System.Diagnostics;
 using System.IO;
-using IronRuby.Compiler;
+using System.Runtime.CompilerServices;
+using System.Threading;
 
 namespace IronRuby.Builtins {
     public partial class MutableString {
         // TODO: Add range checks to APIs or change the implementation to be out-of-range tolerant (see GetSlice).
         // Tha latter is preferred if the semantics is reasonable since it reduces the amounts of content size dependent checks that the user needs to do.
+        /// <summary>
+        /// The state word of a BinaryContent or CharArrayContent: whether its array may be shared with
+        /// another content (copy-on-write, see Content.Clone), and whether a thread holds the content.
+        /// There is no GVL, so a #dup can run while another thread writes the string, and the copy
+        /// must not change after the dup returns (a frozen copy may be a Hash key). Clone, a sharing
+        /// GetSlice and every write hold the content, so a write cannot check that the array is its
+        /// own, let a Clone hand the array out, and then write into it; and a copy made while the
+        /// array is replaced cannot see the new array with the old count or lose its shared mark.
+        /// The common write - unshared, nobody holding it - costs one compare-exchange. Holding is not
+        /// reentrant and other threads spin while it lasts, so nothing runs while a content is held but
+        /// array copies and IronRuby's own encoders: no stream, no user code, nothing that could reach
+        /// this string again (Append(Stream) reads before it holds the content).
+        /// </summary>
+        internal static class ContentState {
+            internal const int Shared = 1;
+            internal const int Held = 2;
+
+            /// <summary>Holds the content if its array is its own and nobody holds it.</summary>
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            internal static bool TryEnterUnshared(ref int state) {
+                return Interlocked.CompareExchange(ref state, Held, 0) == 0;
+            }
+
+            /// <summary>Holds the content, waiting while another thread does. Returns whether its array is shared.</summary>
+            internal static bool Enter(ref int state) {
+                var spin = new SpinWait();
+                while (true) {
+                    int s = Volatile.Read(ref state);
+                    if ((s & Held) == 0 && Interlocked.CompareExchange(ref state, s | Held, s) == s) {
+                        return (s & Shared) != 0;
+                    }
+                    spin.SpinOnce();
+                }
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            internal static void Exit(ref int state, bool shared) {
+                Volatile.Write(ref state, shared ? Shared : 0);
+            }
+        }
+
         [Serializable]
         internal abstract class Content {
             protected MutableString _owner;
@@ -42,6 +84,22 @@ namespace IronRuby.Builtins {
                 _owner = owner;
             }
 
+            /// <summary>
+            /// Whether this content is a slice from an offset into a shared array (GetSlice). Such a
+            /// content never changes: readers take no lock, so its array and offset, two fields, must
+            /// not change under them. The string replaces it with <see cref="Unslice"/> before its first
+            /// write (MutableString.FrozenOrCopyOnWrite and the raw-array accessors).
+            /// </summary>
+            internal bool IsOffsetSlice;
+
+            /// <summary>
+            /// A content of this one's items in an array of their own, from index 0. Only for an
+            /// <see cref="IsOffsetSlice"/> content; any other is returned as it is.
+            /// </summary>
+            internal virtual Content/*!*/ Unslice() {
+                return this;
+            }
+
             protected BinaryContent/*!*/ WrapContent(byte[]/*!*/ bytes, int count) {
                 BinaryContent result = new BinaryContent(bytes, count, _owner);
                 _owner.SetContent(result);
@@ -54,12 +112,70 @@ namespace IronRuby.Builtins {
                 return result;
             }
 
+            /// <summary>
+            /// The length from which a string whose characters are all ASCII hashes them as bytes
+            /// (<see cref="HashAsciiBytes"/>) rather than as UTF-16 characters, whatever its encoding. A shorter one costs about the same either way, and
+            /// keeps the hash it had - String.GetHashCode of its characters - with no narrowing first.
+            /// ASCII characters and bytes are as many, so the choice does not depend on how the
+            /// string is held.
+            /// </summary>
+            internal const int AsciiByteHashMinLength = 128;
+
+            /// <summary>
+            /// The hash of a long string whose characters are all ASCII, from those characters as bytes
+            /// (in an encoding that <see cref="RubyEncoding.AsciiRoundTrips"/>, the string's own
+            /// bytes; in any other, its characters narrowed): SipHash-1-3 under a random per-process
+            /// key (<see cref="SipHash"/>), as CRuby hashes strings. That reads half the bytes the hash
+            /// of the UTF-16 characters did, and SipHash-1-3 is about 1.5 times as fast per byte as
+            /// Marvin, String.GetHashCode's seeded hash, which every other string still uses. Every
+            /// equal string - bytes or characters, US-ASCII, UTF-8 or BINARY, each #eql? the others,
+            /// and a CLR string #eql? to any of them - hashes the same.
+            /// </summary>
+            internal static int HashAsciiBytes(ReadOnlySpan<byte> ascii) {
+                Debug.Assert(ascii.Length >= AsciiByteHashMinLength);
+                return SipHash.Hash32(ascii);
+            }
+
+            /// <summary>
+            /// The hash of a string held as characters (see <see cref="HashAsciiBytes"/>). The
+            /// characters of a short string, or of one that is not all ASCII, are hashed as they are,
+            /// which is what the bytes of one decode to (BinaryContent.CalculateHashCode).
+            /// </summary>
+            internal int HashCharacters(ReadOnlySpan<char> chars) {
+                if (chars.Length < AsciiByteHashMinLength) {
+                    return String.GetHashCode(chars);
+                }
+                // The hash depends on the characters alone, not on the encoding (a CLR string is #eql? to
+                // a String of the same characters in any encoding) nor on the cached ASCII flags, which
+                // a write in place can leave behind: the narrowing checks the characters themselves
+                // and stops at the first that is not ASCII.
+                return HashCharacters(chars, true);
+            }
+
+            [SkipLocalsInit]
+            internal static int HashCharacters(ReadOnlySpan<char> chars, bool asciiAsBytes) {
+                if (asciiAsBytes && chars.Length >= AsciiByteHashMinLength) {
+                    byte[] rented = null;
+                    Span<byte> bytes = (chars.Length <= 512) ? stackalloc byte[512] : (rented = ArrayPool<byte>.Shared.Rent(chars.Length));
+                    try {
+                        if (System.Text.Ascii.FromUtf16(chars, bytes, out int written) == OperationStatus.Done) {
+                            return HashAsciiBytes(bytes.Slice(0, written));
+                        }
+                    } finally {
+                        if (rented != null) {
+                            ArrayPool<byte>.Shared.Return(rented);
+                        }
+                    }
+                }
+                return String.GetHashCode(chars);
+            }
+
             internal static uint UpdateAsciiAndSurrogatesFlags(string/*!*/ str, uint flags) {
                 return UpdateAsciiAndSurrogatesFlags(str.AsSpan(), flags);
             }
 
-            internal static uint UpdateAsciiAndSurrogatesFlags(char[]/*!*/ str, int itemCount, uint flags) {
-                return UpdateAsciiAndSurrogatesFlags(new ReadOnlySpan<char>(str, 0, itemCount), flags);
+            internal static uint UpdateAsciiAndSurrogatesFlags(char[]/*!*/ str, int start, int itemCount, uint flags) {
+                return UpdateAsciiAndSurrogatesFlags(new ReadOnlySpan<char>(str, start, itemCount), flags);
             }
 
             // Vectorized: these scans run whenever the cached flags are out of date (after most mutations).
@@ -84,7 +200,12 @@ namespace IronRuby.Builtins {
             public abstract bool ContainsInvalidCharacters();
 
             public abstract byte[]/*!*/ ToByteArray();
-            internal abstract byte[]/*!*/ GetByteArray(out int count);
+            /// <summary>
+            /// The bytes in place: <paramref name="count"/> items of the array from <paramref name="start"/>,
+            /// which is 0 unless the array is shared with another string (a slice, see GetSlice).
+            /// Only for reading; see <see cref="Clone"/>.
+            /// </summary>
+            internal abstract byte[]/*!*/ GetByteArray(out int start, out int count);
 
             // returns self if there are no characters to be escaped:
             public abstract Content/*!*/ EscapeRegularExpression();
@@ -116,7 +237,29 @@ namespace IronRuby.Builtins {
             public abstract void TrimExcess();
             public abstract int GetCapacity();
             public abstract void SetCapacity(int capacity);
+            /// <summary>
+            /// A copy of the content, owned by the same string until it is given to another one.
+            /// BinaryContent and CharArrayContent share their array with the copy instead of copying
+            /// it (copy-on-write): both are marked shared, and each copies the array the first time it
+            /// writes to it. That is what makes #dup, #clone, String.new(str) and a whole-buffer
+            /// StringIO#read of a long string cost the same as of a short one, as they do in MRI.
+            /// Every method that writes into the array of either class must hold the content with its
+            /// EnterWrite/ExitWrite (see <see cref="ContentState"/>); anything outside them that writes
+            /// into an array it got from GetByteArray must call <see cref="PrepareForWrite"/> before
+            /// taking it. A slice (GetSlice) can share the array too, from an offset: a content's
+            /// items need not start at index 0 of its array until it is written to, as EnterWrite
+            /// copies them to an array of their own at index 0. StringContent wraps an immutable CLR string, so its copy shares that string
+            /// with nothing to mark.
+            /// </summary>
             public abstract Content/*!*/ Clone();
+
+            /// <summary>
+            /// Makes sure the array this content holds is its own (see <see cref="Clone"/>), with room
+            /// for at least <paramref name="minCapacity"/> items if it has to be copied, and that the
+            /// items start at index 0 of it.
+            /// </summary>
+            internal virtual void PrepareForWrite(int minCapacity) {
+            }
 
             /// <summary>
             /// Gets index'th character of the string.

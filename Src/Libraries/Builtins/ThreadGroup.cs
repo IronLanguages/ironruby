@@ -12,13 +12,12 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_THREAD
 using System.Threading;
 using Microsoft.Scripting.Runtime;
 using IronRuby.Runtime;
 
 namespace IronRuby.Builtins {
-    [RubyClass("ThreadGroup", Inherits = typeof(object), BuildConfig = "FEATURE_THREAD")]
+    [RubyClass("ThreadGroup", Inherits = typeof(object))]
     public class ThreadGroup {
         private bool _enclosed;
 
@@ -54,9 +53,16 @@ namespace IronRuby.Builtins {
             return self._enclosed;
         }
 
+        // #<ThreadGroup:0x...>, not the CLR type name a CLR-backed object would otherwise show
+        [RubyMethod("inspect")]
+        [RubyMethod("to_s")]
+        public static MutableString/*!*/ Inspect(RubyContext/*!*/ context, [NotNull]ThreadGroup/*!*/ self) {
+            return RubyUtils.ObjectToMutableString(context, self);
+        }
+
         [RubyMethod("list")]
-        public static RubyArray/*!*/ List([NotNull]ThreadGroup/*!*/ self) {
-            ThreadOps.RubyThreadInfo[] threads = ThreadOps.RubyThreadInfo.Threads;
+        public static RubyArray/*!*/ List(RubyContext/*!*/ context, [NotNull]ThreadGroup/*!*/ self) {
+            ThreadOps.RubyThreadInfo[] threads = ThreadOps.RubyThreadInfo.GetRactorThreads(context);
             RubyArray result = new RubyArray(threads.Length);
             foreach (ThreadOps.RubyThreadInfo threadInfo in threads) {
                 Thread thread = threadInfo.Thread;
@@ -72,4 +78,3 @@ namespace IronRuby.Builtins {
         public readonly static ThreadGroup Default = new ThreadGroup();
     }
 }
-#endif

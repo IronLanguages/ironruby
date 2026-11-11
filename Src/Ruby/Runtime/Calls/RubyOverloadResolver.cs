@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections;
@@ -25,6 +21,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Dynamic;
 using System.Reflection;
+using System.Numerics;
 using System.Text;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
@@ -59,23 +56,51 @@ namespace IronRuby.Runtime.Calls {
         private IList _list;
 
         // An optional list of assumptions upon arguments that were made during resolution.
-        private List<Key<int, NarrowingLevel, Expression>> _argumentAssumptions;
+        private List<(int Position, NarrowingLevel Level, Expression Test)> _argumentAssumptions;
+
+        // Arguments whose class the rule tests, because the protocol conversions their class implements decided the binding.
+        private List<DynamicMetaObject> _classTestedArguments;
+        private List<DynamicMetaObject> _itemTestedArguments;
+
+        // Keywords of a call to a CLR method that bind by name: to its parameters, and for a constructor
+        // also to the properties and fields of the new object. Null when the call passes no keywords or
+        // they are passed on as a positional Hash. _keywordNames holds the CLR name each keyword binds to.
+        private RubySymbol[] _keywordSymbols;
+        private string[] _keywordNames;
+
+        // The keywords are the last item of the splatted list: f(**opts), f(*args, **opts).
+        private bool _keywordsSplatted;
+
+        // The call's block goes to the method as its last positional argument, a parameter of a delegate type.
+        private bool _blockAsArgument;
+
+        // The overloads being resolved, for an error that counts the positional arguments of a library method that takes
+        // keywords (see GetPositionalArities).
+        internal IList<OverloadInfo> Overloads { get; set; }
 
         internal RubyContext/*!*/ Context {
             get { return _args.RubyContext; }
         }
 
-        internal Expression/*!*/ ScopeExpression {
-            get { return _args.MetaScope.Expression; }
+        /// <summary>
+        /// Whether resolution made assumptions upon argument values - beyond their types - that the rule tests (see CanConvertFrom).
+        /// </summary>
+        internal bool HasArgumentAssumptions {
+            get { return _argumentAssumptions != null && _argumentAssumptions.Count > 0; }
         }
 
-        internal Expression/*!*/ ContextExpression {
-            get { return _args.MetaContext.Expression; }
-        }
+        // What a [CalledName] parameter receives (see CalledNameAttribute).
+        private readonly string _calledName;
 
         internal RubyOverloadResolver(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, SelfCallConvention callConvention,
             bool implicitProtocolConversions)
+            : this(metaBuilder, args, callConvention, implicitProtocolConversions, null) {
+        }
+
+        internal RubyOverloadResolver(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, SelfCallConvention callConvention,
+            bool implicitProtocolConversions, string calledName)
             : base(args.RubyContext.Binder) {
+            _calledName = calledName;
             _args = args;
             _metaBuilder = metaBuilder;
             _callConvention = callConvention;
@@ -85,7 +110,13 @@ namespace IronRuby.Runtime.Calls {
         #region Step 1: Special Parameters
 
         protected override bool AllowMemberInitialization(OverloadInfo method) {
-            return false;
+            // Widget.new(title: "x", width: 3) sets what no constructor parameter takes, like a C# object initializer.
+            return _keywordSymbols != null && (method.IsConstructor || IsDefaultValueFactory(method));
+        }
+
+        private static bool IsDefaultValueFactory(OverloadInfo/*!*/ method) {
+            var info = method.ReflectionInfo as MethodInfo;
+            return info != null && info.IsGenericMethod && info.GetGenericMethodDefinition() == RubyOps.CreateDefaultValueMethod;
         }
 
         /// <summary>
@@ -101,10 +132,10 @@ namespace IronRuby.Runtime.Calls {
             var infos = method.Parameters;
             var special = new BitArray(infos.Count);
 
-            // Method signatures                                                                                  SelfCallConvention
-            // RubyMethod/RubyCtor:   [(CallSiteStorage)*, (RubyContext|RubyScope)?, (BlockParam)?, self, args]  SelfIsParameter
-            // static:                [(CallSiteStorage)*, (RubyContext|RubyScope)?, (BlockParam)?, args]        NoSelf
-            // instance/extension/op: [self, (CallSiteStorage)*, (RubyContext|RubyScope)?, (BlockParam)?, args]  SelfIsInstace
+            // Method signatures                                                                                                  SelfCallConvention
+            // RubyMethod/RubyCtor:   [(CallSiteStorage)*, (RubyContext|RubyScope)?, ([CalledName])?, (BlockParam)?, self, args]  SelfIsParameter
+            // static:                [(CallSiteStorage)*, (RubyContext|RubyScope)?, ([CalledName])?, (BlockParam)?, args]        NoSelf
+            // instance/extension/op: [self, (CallSiteStorage)*, (RubyContext|RubyScope)?, ([CalledName])?, (BlockParam)?, args]  SelfIsInstace
 
             var i = 0;
 
@@ -129,7 +160,7 @@ namespace IronRuby.Runtime.Calls {
             }
 
             while (i < infos.Count && infos[i].ParameterType.IsSubclassOf(typeof(RubyCallSiteStorage))) {
-                mapping.AddBuilder(new RubyCallSiteStorageBuilder(infos[i]));
+                mapping.AddBuilder(new ImplicitArgBuilder(infos[i], static (resolver, info) => AstUtils.Constant(RubyCallSiteStorage.Create(info.ParameterType, resolver.Context))));
                 special[i++] = true;
             }
 
@@ -137,15 +168,20 @@ namespace IronRuby.Runtime.Calls {
                 var info = infos[i];
 
                 if (info.ParameterType == typeof(RubyScope)) {
-                    mapping.AddBuilder(new RubyScopeArgBuilder(info));
+                    mapping.AddBuilder(new ImplicitArgBuilder(info, static (resolver, _) => resolver._args.MetaScope.Expression));
                     special[i++] = true;
                 } else if (info.ParameterType == typeof(RubyContext)) {
-                    mapping.AddBuilder(new RubyContextArgBuilder(info));
+                    mapping.AddBuilder(new ImplicitArgBuilder(info, static (resolver, _) => resolver._args.MetaContext.Expression));
                     special[i++] = true;
                 } else if (method.IsConstructor && info.ParameterType == typeof(RubyClass)) {
-                    mapping.AddBuilder(new RubyClassCtorArgBuilder(info));
+                    mapping.AddBuilder(new ImplicitArgBuilder(info, static (resolver, _) => resolver._args.TargetExpression));
                     special[i++] = true;
                 }
+            }
+
+            if (i < infos.Count && CalledNameAttribute.IsDefinedOn(infos[i])) {
+                mapping.AddBuilder(new ImplicitArgBuilder(infos[i], static (resolver, _) => AstUtils.Constant(resolver._calledName, typeof(string))));
+                special[i++] = true;
             }
 
             // If the method overload doesn't have a BlockParam parameter, we inject MissingBlockParam parameter and arg builder.
@@ -167,7 +203,7 @@ namespace IronRuby.Runtime.Calls {
             if (i < infos.Count && infos[i].ParameterType == typeof(BlockParam)) {
                 AddSimpleHiddenMapping(mapping, infos[i], mapping.Overload.ProhibitsNull(i));
                 special[i++] = true;
-            } else if (i >= infos.Count || infos[i].ParameterType != typeof(BlockParam)) {
+            } else {
                 mapping.AddBuilder(new MissingBlockArgBuilder(mapping.ArgIndex));
                 mapping.AddParameter(new ParameterWrapper(null, typeof(MissingBlockParam), null, ParameterBindingFlags.IsHidden));
             }
@@ -219,6 +255,10 @@ namespace IronRuby.Runtime.Calls {
                 }
             }
 
+            if (i < infos.Count && CalledNameAttribute.IsDefinedOn(infos[i])) {
+                i++;
+            }
+
             if (i < infos.Count && infos[i].ParameterType == typeof(BlockParam)) {
                 i++;
             }
@@ -253,6 +293,337 @@ namespace IronRuby.Runtime.Calls {
             }
         }
 
+        // Whether a library method's overload has a [Keywords] parameter; read once per method.
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<MethodBase, bool>/*!*/ _takesKeywords =
+            new System.Collections.Concurrent.ConcurrentDictionary<MethodBase, bool>();
+
+        internal static bool TakesKeywords(OverloadInfo/*!*/ overload) {
+            var method = overload.ReflectionInfo;
+            if (method == null) {
+                return false;
+            }
+            return _takesKeywords.GetOrAdd(method, m => {
+                foreach (var parameter in m.GetParameters()) {
+                    if (parameter.IsDefined(typeof(KeywordsAttribute), false)) {
+                        return true;
+                    }
+                }
+                return false;
+            });
+        }
+
+        // Whether a method's overload gets the keyword arguments of its call marked as such; read once per method.
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<MethodBase, bool>/*!*/ _receivesKeywords =
+            new System.Collections.Concurrent.ConcurrentDictionary<MethodBase, bool>();
+
+        /// <summary>
+        /// Whether <paramref name="method"/> - an overload of a library method - is given a keyword Hash its call passes still
+        /// marked as keyword arguments: it is [ReceivesKeywords] or has a [Keywords] parameter. Any other library or CLR method
+        /// gets it as the positional Hash it is to a method that takes no keywords (see <see cref="ReceivesKeywordsAttribute"/>).
+        /// </summary>
+        internal static bool ReceivesKeywordArguments(MethodBase method) {
+            if (method == null) {
+                return false;
+            }
+            return _receivesKeywords.GetOrAdd(method, m => {
+                if (m.IsDefined(typeof(ReceivesKeywordsAttribute), false)) {
+                    return true;
+                }
+                foreach (var parameter in m.GetParameters()) {
+                    if (parameter.IsDefined(typeof(KeywordsAttribute), false)) {
+                        return true;
+                    }
+                }
+                return false;
+            });
+        }
+
+        /// <summary>
+        /// The expression of the last argument the call passes, where a keyword Hash would be - the last simple argument, or
+        /// the last item of the splatted list, read from the list the splat test stored - or null if there is none (or a rhs).
+        /// Evaluated after the rule's tests.
+        /// </summary>
+        internal Expression GetLastArgumentExpression() {
+            if (_args.Signature.HasRhsArgument) {
+                return null;
+            }
+            if (_args.Signature.HasSplattedArgument && _listVariable != null && _list.Count > 0) {
+                return Ast.Call(_listVariable, Methods.IList_get_Item, AstUtils.Constant(_list.Count - 1));
+            }
+            int count = _args.SimpleArgumentCount;
+            return (count > 0) ? _args.GetSimpleArgumentExpression(count - 1) : null;
+        }
+
+        /// <summary>
+        /// The numbers of positional arguments the library method of <paramref name="overloads"/> takes, if one of them
+        /// receives keyword arguments in a [Keywords] parameter, else null: what MRI counts, which a keyword Hash is not
+        /// a part of. Each overload takes from its mandatory to all of its other parameters, any number more with a params
+        /// array; <paramref name="restFrom"/> is the least count from which on every count is taken (Int32.MaxValue if none).
+        /// </summary>
+        internal static List<int> GetPositionalArities(IList<OverloadInfo>/*!*/ overloads, SelfCallConvention callConvention,
+            out int restFrom) {
+
+            restFrom = Int32.MaxValue;
+            bool takesKeywords = false;
+            foreach (var overload in overloads) {
+                if (TakesKeywords(overload)) {
+                    takesKeywords = true;
+                    break;
+                }
+            }
+            if (!takesKeywords) {
+                return null;
+            }
+
+            var result = new List<int>();
+            foreach (var overload in overloads) {
+                int mandatory = 0, optional = 0;
+                bool rest = false;
+                for (int i = GetHiddenParameterCount(overload, callConvention); i < overload.ParameterCount; i++) {
+                    var info = overload.Parameters[i];
+                    if (overload.IsParamArray(i)) {
+                        rest = true;
+                    } else if (info.IsDefined(typeof(KeywordsAttribute), false)) {
+                        continue;
+                    } else if (info.IsMandatory()) {
+                        mandatory++;
+                    } else {
+                        optional++;
+                    }
+                }
+                for (int count = mandatory; count <= mandatory + optional; count++) {
+                    if (!result.Contains(count)) {
+                        result.Add(count);
+                    }
+                }
+                if (rest) {
+                    restFrom = Math.Min(restFrom, mandatory + optional);
+                }
+            }
+            return result;
+        }
+
+        internal static bool AcceptsPositionalCount(List<int>/*!*/ arities, int restFrom, int count) {
+            return count >= restFrom || arities.Contains(count);
+        }
+
+        /// <summary>
+        /// "1..2" for <see cref="GetPositionalArities"/>, as the error for a count it does not take says it.
+        /// </summary>
+        internal static string/*!*/ DescribePositionalArities(List<int>/*!*/ arities, int restFrom) {
+            if (restFrom == Int32.MaxValue) {
+                return DescribeExpectedArgumentCount(arities);
+            }
+            var counts = new List<int>();
+            foreach (int count in arities) {
+                if (count < restFrom) {
+                    counts.Add(count);
+                }
+            }
+            counts.Add(restFrom);
+            counts.Add(Int32.MaxValue);
+            return DescribeExpectedArgumentCount(counts);
+        }
+
+        #endregion
+
+        #region Keywords and Blocks of CLR Method Calls
+
+        /// <summary>
+        /// The keywords a call passes, if they could bind to a CLR method by name: a keyword Hash with
+        /// only Symbol keys, the last simple argument or the last item of the splatted list (f(**opts)).
+        /// Null otherwise.
+        /// </summary>
+        internal static Hash GetKeywordArguments(CallArguments/*!*/ args) {
+            if (args.Signature.HasRhsArgument) {
+                return null;
+            }
+
+            Hash keywords;
+            if (args.Signature.HasSplattedArgument) {
+                var list = args.GetSplattedArgument();
+                keywords = (list.Count > 0) ? list[list.Count - 1] as Hash : null;
+                // a hash a ruby2_keywords method carries is turned back into keywords when splatted:
+                if (keywords == null || !keywords.IsKeywordArguments && !keywords.IsRuby2KeywordsHash) {
+                    return null;
+                }
+            } else {
+                int count = args.SimpleArgumentCount;
+                keywords = (count > 0) ? args.GetSimpleArgument(count - 1) as Hash : null;
+                if (keywords == null || !keywords.IsKeywordArguments) {
+                    return null;
+                }
+            }
+
+            if (keywords.Count == 0) {
+                return null;
+            }
+
+            foreach (var entry in keywords) {
+                if (!(entry.Key is RubySymbol)) {
+                    return null;
+                }
+            }
+            return keywords;
+        }
+
+        /// <summary>
+        /// The expression of the keyword Hash <see cref="GetKeywordArguments"/> found. A splatted one
+        /// is read from the list the splat test has stored, so it may only be evaluated after that test.
+        /// </summary>
+        private Expression/*!*/ GetKeywordArgumentsExpression() {
+            if (_args.Signature.HasSplattedArgument) {
+                Debug.Assert(_listVariable != null);
+                return Ast.Call(_listVariable, typeof(IList).GetMethod("get_Item"), AstUtils.Constant(_list.Count - 1));
+            }
+            return AstUtils.Box(_args.GetSimpleArgumentExpression(_args.SimpleArgumentCount - 1));
+        }
+
+        /// <summary>
+        /// Makes the keywords of the call bind by name, to parameters of <paramref name="overloads"/> or,
+        /// for a constructor, to writable properties and fields of the new object. A keyword names its
+        /// parameter or member either exactly or in the snake_case form IronRuby gives CLR names
+        /// (first_name: binds to firstName or FirstName).
+        /// </summary>
+        internal void BindKeywordsByName(Hash/*!*/ keywords, IList<OverloadInfo>/*!*/ overloads) {
+            _keywordsSplatted = _args.Signature.HasSplattedArgument;
+            var symbols = new RubySymbol[keywords.Count];
+            var names = new string[symbols.Length];
+            int i = 0;
+            foreach (var entry in keywords) {
+                var symbol = (RubySymbol)entry.Key;
+                symbols[i] = symbol;
+                names[i] = GetKeywordTarget(symbol.ToString(), overloads);
+                i++;
+            }
+            _keywordSymbols = symbols;
+            _keywordNames = names;
+        }
+
+        internal bool BindsKeywordsByName {
+            get { return _keywordSymbols != null; }
+        }
+
+        /// <summary>
+        /// Adds the rule test for a call that passes <paramref name="keywords"/>: it passes exactly these
+        /// keywords, in any order. How keywords bind to a CLR method depends on their names. Done on the
+        /// resolver whose binding the rule uses, after overload resolution.
+        /// </summary>
+        internal void AddKeywordArgumentsTest(MetaObjectBuilder/*!*/ metaBuilder, Hash/*!*/ keywords) {
+            var symbols = new RubySymbol[keywords.Count];
+            int i = 0;
+            foreach (var entry in keywords) {
+                symbols[i++] = (RubySymbol)entry.Key;
+            }
+
+            var expression = GetKeywordArgumentsExpression();
+            var test = Ast.AndAlso(
+                Methods.IsKeywordArgumentsHash.OpCall(expression),
+                Methods.KeywordArgumentsMatch.OpCall(expression, AstUtils.Constant(symbols),
+                    AstUtils.Constant(symbols.Length), AstUtils.Constant(false))
+            );
+
+            if (_args.Signature.HasSplattedArgument) {
+                // after the splat test, which stores the list and checks its length:
+                metaBuilder.AddCondition(test);
+            } else {
+                metaBuilder.AddRestriction(test);
+            }
+        }
+
+        private static string/*!*/ GetKeywordTarget(string/*!*/ keyword, IList<OverloadInfo>/*!*/ overloads) {
+            string mangledMatch = null;
+            foreach (var overload in overloads) {
+                foreach (var parameter in overload.Parameters) {
+                    string name = parameter.Name;
+                    if (name == null || IsInfrastructureType(parameter.ParameterType)) {
+                        continue;
+                    }
+                    if (name == keyword) {
+                        return name;
+                    }
+                    if (mangledMatch == null && RubyUtils.TryMangleName(name) == keyword) {
+                        mangledMatch = name;
+                    }
+                }
+            }
+
+            if (mangledMatch != null) {
+                return mangledMatch;
+            }
+
+            foreach (var overload in overloads) {
+                Type initialized = overload.IsConstructor ? overload.DeclaringType : IsDefaultValueFactory(overload) ? overload.ReturnType : null;
+                if (initialized == null) {
+                    continue;
+                }
+                foreach (var member in initialized.GetMembers(BindingFlags.Public | BindingFlags.Instance)) {
+                    if ((member is PropertyInfo || member is FieldInfo) &&
+                        (member.Name == keyword || RubyUtils.TryMangleName(member.Name) == keyword)) {
+                        return member.Name;
+                    }
+                }
+            }
+
+            // binds to nothing; overload resolution reports it
+            return keyword;
+        }
+
+        private static bool IsInfrastructureType(Type/*!*/ type) {
+            return type == typeof(RubyClass) || type == typeof(RubyContext) || type == typeof(RubyScope) || type == typeof(BlockParam)
+                || type.IsSubclassOf(typeof(RubyCallSiteStorage));
+        }
+
+        protected override void GetNamedArguments(out IList<DynamicMetaObject> namedArgs, out IList<string> argNames) {
+            if (_keywordSymbols == null) {
+                base.GetNamedArguments(out namedArgs, out argNames);
+                return;
+            }
+
+            Hash hash;
+            if (_keywordsSplatted) {
+                // The splat test goes first so the keywords can be read from the list it stores:
+                var splatted = _args.GetSplattedMetaArgument();
+                int listLength;
+                _list = (IList)splatted.Value;
+                _metaBuilder.AddSplattedArgumentTest(_list, splatted.Expression, out listLength, out _listVariable);
+                hash = (Hash)_list[listLength - 1];
+            } else {
+                hash = (Hash)_args.GetSimpleArgument(_args.SimpleArgumentCount - 1);
+            }
+
+            var keywords = GetKeywordArgumentsExpression();
+            var result = new DynamicMetaObject[_keywordSymbols.Length];
+            for (int i = 0; i < result.Length; i++) {
+                object value;
+                hash.TryGetValue(_keywordSymbols[i], out value);
+                result[i] = DynamicMetaObject.Create(value, Methods.GetKeywordArgument.OpCall(
+                    keywords, AstUtils.Constant(_keywordSymbols[i]), AstUtils.Constant(i)
+                ));
+            }
+
+            namedArgs = result;
+            argNames = _keywordNames;
+        }
+
+        /// <summary>
+        /// A CLR method called with a block takes it as its last argument if that is a delegate,
+        /// List#ForEach { |x| ... } as List#ForEach(Action), the way JRuby passes a block to a Java
+        /// method's trailing functional interface. Only for a block literal or a non-nil &amp;proc;
+        /// whether an overload takes it is up to overload resolution.
+        /// </summary>
+        internal static bool CanPassBlockAsArgument(CallArguments/*!*/ args) {
+            return args.Signature.HasBlock && args.GetBlock() != null && !args.Signature.HasRhsArgument;
+        }
+
+        internal void PassBlockAsArgument() {
+            _blockAsArgument = true;
+        }
+
+        internal bool PassesBlockAsArgument {
+            get { return _blockAsArgument; }
+        }
+
         #endregion
 
         #region Step 2: Actual Arguments
@@ -274,7 +645,7 @@ namespace IronRuby.Runtime.Calls {
                 result.Add(_args.MetaTarget);
             }
 
-            if (_args.Signature.HasBlock) {
+            if (_args.Signature.HasBlock && !_blockAsArgument) {
                 if (_args.GetBlock() == null) {
                     // the user explicitly passed nil as a block arg:
                     result.Add(NullMetaBlockParam);
@@ -301,7 +672,9 @@ namespace IronRuby.Runtime.Calls {
 
             // hidden args: block, self
             int hidden = _callConvention == SelfCallConvention.NoSelf ? 1 : 2;
-            return CreateActualArguments(result, _metaBuilder, _args, hidden, preSplatLimit, postSplatLimit, out _lastSplattedArg, out _list, out _listVariable);
+            return CreateActualArguments(result, _metaBuilder, _args, hidden, preSplatLimit, postSplatLimit, out _lastSplattedArg, out _list, out _listVariable,
+                namedArgs, argNames, _keywordSymbols != null ? 1 : 0, _blockAsArgument ? _args.GetMetaBlock() : null,
+                _keywordsSplatted ? _listVariable : null);
         }
 
         public static IList<DynamicMetaObject/*!*/> NormalizeArguments(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, int minCount, int maxCount) {
@@ -328,12 +701,16 @@ namespace IronRuby.Runtime.Calls {
         }
 
         private static ActualArguments/*!*/ CreateActualArguments(List<DynamicMetaObject>/*!*/ normalized, MetaObjectBuilder/*!*/ metaBuilder,
-            CallArguments/*!*/ args, int hidden, int preSplatLimit, int postSplatLimit, out int lastSplattedArg, out IList list, out ParameterExpression listVariable) {
+            CallArguments/*!*/ args, int hidden, int preSplatLimit, int postSplatLimit, out int lastSplattedArg, out IList list, out ParameterExpression listVariable,
+            IList<DynamicMetaObject> namedArgs = null, IList<string> argNames = null, int keywordArgumentCount = 0, DynamicMetaObject blockArgument = null,
+            ParameterExpression splatTestedListVariable = null) {
 
             int firstSplattedArg, splatIndex, collapsedArgCount;
 
-            // simple arguments:
-            for (int i = 0; i < args.SimpleArgumentCount; i++) {
+            // Simple arguments. A keyword hash that binds by name is not an argument: neither the last
+            // simple argument nor, if there is a splat, the last item of the splatted list.
+            int simpleCount = args.SimpleArgumentCount - (args.Signature.HasSplattedArgument ? 0 : keywordArgumentCount);
+            for (int i = 0; i < simpleCount; i++) {
                 normalized.Add(args.GetSimpleMetaArgument(i));
             }
 
@@ -346,7 +723,13 @@ namespace IronRuby.Runtime.Calls {
                 int listLength;
                 var splatted = args.GetSplattedMetaArgument();
                 list = (IList)splatted.Value;
-                metaBuilder.AddSplattedArgumentTest(list, splatted.Expression, out listLength, out listVariable);
+                if (splatTestedListVariable != null) {
+                    listVariable = splatTestedListVariable;
+                    listLength = list.Count;
+                } else {
+                    metaBuilder.AddSplattedArgumentTest(list, splatted.Expression, out listLength, out listVariable);
+                }
+                listLength -= keywordArgumentCount;
 
                 int i = 0;
                 while (i < Math.Min(listLength, preSplatLimit - firstSplattedArg)) {
@@ -357,7 +740,8 @@ namespace IronRuby.Runtime.Calls {
                 // skip items that are not needed for overload resolution
                 splatIndex = normalized.Count;
 
-                i = Math.Max(i, listLength - (postSplatLimit - (args.Signature.HasRhsArgument ? 1 : 0)));
+                // the rhs and a block passed as an argument follow the splat:
+                i = Math.Max(i, listLength - (postSplatLimit - (args.Signature.HasRhsArgument ? 1 : 0) - (blockArgument != null ? 1 : 0)));
                 while (i < listLength) {
                     normalized.Add(MakeSplattedItem(list, listVariable, i));
                     i++;
@@ -377,10 +761,15 @@ namespace IronRuby.Runtime.Calls {
                 normalized.Add(args.GetRhsMetaArgument());
             }
 
+            // the block, passed as the last positional argument (there is no rhs then):
+            if (blockArgument != null) {
+                normalized.Add(blockArgument);
+            }
+
             return new ActualArguments(
                 normalized.ToArray(),
-                DynamicMetaObject.EmptyMetaObjects,
-                ArrayUtils.EmptyStrings,
+                namedArgs ?? DynamicMetaObject.EmptyMetaObjects,
+                argNames ?? ArrayUtils.EmptyStrings,
                 hidden,
                 collapsedArgCount,
                 firstSplattedArg,
@@ -391,7 +780,7 @@ namespace IronRuby.Runtime.Calls {
         internal static DynamicMetaObject/*!*/ MakeSplattedItem(IList/*!*/ list, Expression/*!*/ listVariable, int index) {
             return DynamicMetaObject.Create(
                 list[index],
-                Ast.Call(listVariable, typeof(IList).GetMethod("get_Item"), AstUtils.Constant(index))
+                Ast.Call(listVariable, Methods.IList_get_Item, AstUtils.Constant(index))
             );
         }
 
@@ -401,12 +790,14 @@ namespace IronRuby.Runtime.Calls {
 
         internal void AddArgumentRestrictions(MetaObjectBuilder/*!*/ metaBuilder, BindingTarget/*!*/ bindingTarget) {
             var args = GetActualArguments();
-            var restrictedArgs = bindingTarget.Success ? bindingTarget.RestrictedArguments.GetObjects() : args.Arguments;
+            // (keywords bound by name are arguments too; the error rule of a failed binding has to test them as well)
+            var restrictedArgs = bindingTarget.Success ? bindingTarget.RestrictedArguments.GetObjects() :
+                (args.NamedArguments.Count == 0 ? args.Arguments : ArrayUtils.AppendRange(ArrayUtils.ToArray(args.Arguments), args.NamedArguments));
 
             for (int i = _firstRestrictedArg; i < restrictedArgs.Count; i++) {
                 var arg = (bindingTarget.Success ? restrictedArgs[i] : restrictedArgs[i].Restrict(restrictedArgs[i].GetLimitType()));
 
-                if (i >= args.FirstSplattedArg && i <= _lastSplattedArg) {
+                if (i >= args.FirstSplattedArg && i <= _lastSplattedArg || _keywordsSplatted && i >= args.Arguments.Count) {
                     metaBuilder.AddCondition(arg.Restrictions.ToExpression());
                 } else {
                     metaBuilder.AddRestriction(arg.Restrictions);
@@ -421,8 +812,8 @@ namespace IronRuby.Runtime.Calls {
 
             if (_argumentAssumptions != null) {
                 foreach (var assumption in _argumentAssumptions) {
-                    if (assumption.Second == bindingTarget.NarrowingLevel) {
-                        metaBuilder.AddCondition(assumption.Third);
+                    if (assumption.Level == bindingTarget.NarrowingLevel) {
+                        metaBuilder.AddCondition(assumption.Test);
                     }
                 }
             }
@@ -441,12 +832,11 @@ namespace IronRuby.Runtime.Calls {
             );
 
             if (result.Assumption != null) {
-                if (_argumentAssumptions == null) {
-                    _argumentAssumptions = new List<Key<int, NarrowingLevel, Ast>>();
-                }
+                _argumentAssumptions ??= new();
 
-                if (_argumentAssumptions.FindIndex((k) => k.First == toParameter.ParameterInfo.Position && k.Second == level) < 0) {
-                    _argumentAssumptions.Add(Key.Create(toParameter.ParameterInfo.Position, level, result.Assumption));
+                int position = toParameter.ParameterInfo.Position;
+                if (!_argumentAssumptions.Exists(a => a.Position == position && a.Level == level)) {
+                    _argumentAssumptions.Add((position, level, result.Assumption));
                 }
             }
 
@@ -457,11 +847,61 @@ namespace IronRuby.Runtime.Calls {
             return Converter.CanConvertFrom(null, fromParameter.Type, toParameter.Type, toParameter.ProhibitNull, NarrowingLevel.None, false, false).IsConvertible;
         }
 
+        #region Parameter attributes
+
+        // A parameter's custom attributes never change, but every IsDefined is a walk of its metadata
+        // that allocates, and overload resolution asks for the same few at each binding of a call site
+        // - several times per candidate. So each parameter is read once. A weak table, so that the
+        // parameters of a collectible or dynamic method go with it.
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ParameterInfo, object>/*!*/ _parameterFlags =
+            new System.Runtime.CompilerServices.ConditionalWeakTable<ParameterInfo, object>();
+
+        private const int DefaultProtocolFlag = 1;
+        private const int ParamArrayFlag = 2;
+        private static readonly object[]/*!*/ _boxedParameterFlags = { 0, 1, 2, 3 };
+
+        private static int GetParameterFlags(ParameterInfo/*!*/ info) {
+            object flags;
+            if (!_parameterFlags.TryGetValue(info, out flags)) {
+                flags = _boxedParameterFlags[
+                    (info.IsDefined(typeof(DefaultProtocolAttribute), false) ? DefaultProtocolFlag : 0) |
+                    (info.IsDefined(typeof(ParamArrayAttribute), false) ? ParamArrayFlag : 0)
+                ];
+                _parameterFlags.AddOrUpdate(info, flags);
+            }
+            return (int)flags;
+        }
+
+        internal static bool HasDefaultProtocol(ParameterInfo/*!*/ info) {
+            return (GetParameterFlags(info) & DefaultProtocolFlag) != 0;
+        }
+
+        internal static bool IsParamArray(ParameterInfo/*!*/ info) {
+            return (GetParameterFlags(info) & ParamArrayFlag) != 0;
+        }
+
+        #endregion
+
         private bool HasExplicitProtocolConversion(ParameterWrapper/*!*/ parameter) {
             return
                 parameter.ParameterInfo != null &&
-                parameter.ParameterInfo.IsDefined(typeof(DefaultProtocolAttribute), false) &&
+                HasDefaultProtocol(parameter.ParameterInfo) &&
                 !parameter.IsParamsArray; // default protocol doesn't apply on param-array/dict itself, only on the expanded parameters
+        }
+
+        private static bool DelegateReturnsValue(Type/*!*/ delegateType) {
+            MethodInfo invoke = delegateType.GetMethod("Invoke");
+            return invoke != null && invoke.ReturnType != typeof(void);
+        }
+
+        private static bool DelegateReturns(Type/*!*/ delegateType, Type/*!*/ returnType) {
+            MethodInfo invoke = delegateType.GetMethod("Invoke");
+            return invoke != null && invoke.ReturnType == returnType;
+        }
+
+        private static int DelegateArity(Type/*!*/ delegateType) {
+            MethodInfo invoke = delegateType.GetMethod("Invoke");
+            return invoke != null ? invoke.GetParameters().Length : -1;
         }
 
         public override Candidate SelectBestConversionFor(DynamicMetaObject/*!*/ arg, ParameterWrapper/*!*/ candidateOne, 
@@ -511,6 +951,53 @@ namespace IronRuby.Runtime.Calls {
                         return Candidate.Two;
                     }
                 }
+
+                if ((typeof(Proc).IsAssignableFrom(actualType) || typeof(RubyMethod).IsAssignableFrom(actualType))
+                    && typeof(Delegate).IsAssignableFrom(typeOne) && typeof(Delegate).IsAssignableFrom(typeTwo)) {
+
+                    // A block fits a delegate of any arity; prefer the one that passes it as many arguments as
+                    // it has parameters (Select(Func<T, R>) for { |x| }, Select(Func<T, int, R>) for { |x, i| }):
+                    var proc = arg.Value as Proc;
+                    if (proc != null) {
+                        bool oneFits = Proc.Meta.AcceptsArity(proc, DelegateArity(typeOne));
+                        bool twoFits = Proc.Meta.AcceptsArity(proc, DelegateArity(typeTwo));
+                        if (oneFits != twoFits) {
+                            return oneFits ? Candidate.One : Candidate.Two;
+                        }
+                    }
+
+                    // A block or method fits a void delegate and one returning a value alike (Task.Run(Action/Func<T>)).
+                    // Its value is what Ruby code means to produce, so prefer the delegate that keeps it - C# picks
+                    // Func for a lambda with a value the same way:
+                    bool oneReturns = DelegateReturnsValue(typeOne), twoReturns = DelegateReturnsValue(typeTwo);
+                    if (oneReturns != twoReturns) {
+                        return oneReturns ? Candidate.One : Candidate.Two;
+                    }
+
+                    // What a block returns is not known until it runs, so of delegates returning a value the one
+                    // that takes any value is safe (Task.Run(Func<TResult>) with TResult = Object, not
+                    // Task.Run(Func<Task<TResult>>), which a block returning 42 could not satisfy):
+                    if (oneReturns && twoReturns) {
+                        bool oneAny = DelegateReturns(typeOne, typeof(object)), twoAny = DelegateReturns(typeTwo, typeof(object));
+                        if (oneAny != twoAny) {
+                            return oneAny ? Candidate.One : Candidate.Two;
+                        }
+                    }
+                }
+            }
+
+            if (actualType == typeof(BigInteger)) {
+                Candidate bignum = PreferBignumParameter(typeOne, typeTwo);
+                if (IsChosen(bignum)) {
+                    return bignum;
+                }
+            }
+
+            if (arg.HasValue && arg.Value is RubyArray array) {
+                Candidate items = SelectBestItemConversion(arg, array, typeOne, typeTwo);
+                if (IsChosen(items)) {
+                    return items;
+                }
             }
 
             // prefer integer type over enum:
@@ -522,7 +1009,483 @@ namespace IronRuby.Runtime.Calls {
                 return Candidate.One;
             }
 
+            // On the last narrowing level any object converts to a CLR method's String, numeric, Array or Hash parameter by
+            // Ruby's conversion protocols (to_str, to_int, ...), and only the call finds out whether it can. A conversion
+            // the object's class does not implement is the worst there is:
+            if (level >= NarrowingLevel.Three) {
+                bool oneLacks = LacksImplicitConversion(arg, candidateOne);
+                bool twoLacks = LacksImplicitConversion(arg, candidateTwo);
+                if (oneLacks != twoLacks) {
+                    return oneLacks ? Candidate.Two : Candidate.One;
+                }
+
+                // Neither is better for an argument both fail to convert: the DLR's ordering of the parameter types made
+                // System::Math.abs(nil) call Abs(SByte) and fail "into System::SByte" (#141). Equally bad overloads leave
+                // the call ambiguous (dlr-patches/0006), and MakeProtocolConversionError names all they would convert to.
+                if (oneLacks) {
+                    return Candidate.Ambiguous;
+                }
+            }
+
             return base.SelectBestConversionFor(arg, candidateOne, candidateTwo, level);
+        }
+
+        /// <summary>
+        /// An Integer held in a BigInteger is beyond the Int64 range, which every other integral CLR type is narrower than
+        /// or barely wider than, so of numeric parameters it converts to (all explicitly) the floating-point ones are better:
+        /// Double first - Integer#to_f, the conversion Ruby itself makes for a Float operation - then Decimal, then Single.
+        /// System::Math.Abs(2**70) is Abs(Double).
+        /// </summary>
+        private static Candidate PreferBignumParameter(Type/*!*/ typeOne, Type/*!*/ typeTwo) {
+            int rankOne = GetBignumParameterRank(typeOne), rankTwo = GetBignumParameterRank(typeTwo);
+            return rankOne == rankTwo || rankOne < 0 || rankTwo < 0 ? Candidate.Equivalent : rankOne > rankTwo ? Candidate.One : Candidate.Two;
+        }
+
+        private static bool IsChosen(Candidate candidate) {
+            return candidate == Candidate.One || candidate == Candidate.Two;
+        }
+
+        private static Candidate Other(Candidate candidate) {
+            return candidate == Candidate.One ? Candidate.Two : candidate == Candidate.Two ? Candidate.One : candidate;
+        }
+
+        private static int GetBignumParameterRank(Type/*!*/ type) {
+            switch (Type.GetTypeCode(type)) {
+                case TypeCode.Double: return 3;
+                case TypeCode.Decimal: return 2;
+                case TypeCode.Single: return 1;
+                case TypeCode.SByte: case TypeCode.Byte: case TypeCode.Int16: case TypeCode.UInt16:
+                case TypeCode.Int32: case TypeCode.UInt32: case TypeCode.Int64: case TypeCode.UInt64:
+                    return 0;
+                default:
+                    return (type == typeof(IntPtr) || type == typeof(UIntPtr)) ? 0 : -1;
+            }
+        }
+
+        #region Ruby Array to typed collection
+
+        /// <summary>
+        /// Of two collection parameters a Ruby Array converts to with different item types (String.Join's String[] and
+        /// Object[], LINQ Sum's IEnumerable&lt;int&gt;, IEnumerable&lt;double&gt;, ...), the better is decided by the items
+        /// the Array holds, as C# decides by the static type of a collection: first the one each item converts to without
+        /// narrowing (an Integer to an Object, not to a String), then the one whose item type is the better parameter for
+        /// every item (Int32 over Int64 and Double for [1, 2, 3], Double for [1.5, 2]). The rule then tests that the items
+        /// are of the CLR types seen now (<see cref="RubyOps.HasItemTypes"/>), which costs a pass over the items, as does the
+        /// conversion of the Array that follows; other items bind again. Only the binding of a CLR call with such overloads
+        /// does any of this. An item of a splatted list is left to the other rules, as its test could not precede the splat's.
+        /// </summary>
+        private Candidate SelectBestItemConversion(DynamicMetaObject/*!*/ arg, RubyArray/*!*/ array, Type/*!*/ typeOne, Type/*!*/ typeTwo) {
+            Type itemOne = GetArrayItemType(typeOne), itemTwo = GetArrayItemType(typeTwo);
+            if (itemOne == null || itemTwo == null || itemOne == itemTwo) {
+                return Candidate.Equivalent;
+            }
+
+            if (IsSplatted(arg)) {
+                return Candidate.Equivalent;
+            }
+
+            Type[] elementTypes = GetElementTypes(array);
+            bool fitsOne = true, fitsTwo = true;
+            foreach (Type elementType in elementTypes) {
+                fitsOne &= ItemFits(elementType, itemOne);
+                fitsTwo &= ItemFits(elementType, itemTwo);
+            }
+
+            Candidate result = Candidate.Equivalent;
+            if (fitsOne != fitsTwo) {
+                result = fitsOne ? Candidate.One : Candidate.Two;
+            } else {
+                foreach (Type elementType in elementTypes) {
+                    Candidate preferred = CompareItemTypes(elementType, itemOne, itemTwo);
+                    if (!IsChosen(preferred)) {
+                        continue;
+                    }
+                    if (result != Candidate.Equivalent && result != preferred) {
+                        result = Candidate.Equivalent;
+                        break;
+                    }
+                    result = preferred;
+                }
+            }
+
+            // The outcome depends on the items, whichever it is: an ambiguity found for ["a"] must not stand for [1] either.
+            AddItemTypesTest(arg, elementTypes);
+            return result;
+        }
+
+        /// <summary>
+        /// The item type of a collection parameter a Ruby Array is passed for: T of T[], IEnumerable&lt;T&gt; and the like,
+        /// Object of a non-generic IEnumerable or IList - or null if the parameter is not a collection.
+        /// </summary>
+        private static Type GetArrayItemType(Type/*!*/ type) {
+            Type itemType = Converter.GetListItemType(type);
+            if (itemType == null && type != typeof(object) && type.IsAssignableFrom(typeof(RubyArray)) && typeof(IEnumerable).IsAssignableFrom(type)) {
+                itemType = typeof(object);
+            }
+            return itemType;
+        }
+
+        // The distinct CLR types of the items, typeof(DynamicNull) for nil.
+        private static Type/*!*/[]/*!*/ GetElementTypes(RubyArray/*!*/ array) {
+            var types = new List<Type>();
+            for (int i = 0; i < array.Count; i++) {
+                object item = array[i];
+                Type type = (item != null) ? item.GetType() : typeof(DynamicNull);
+                if (!types.Contains(type)) {
+                    types.Add(type);
+                }
+            }
+            return types.ToArray();
+        }
+
+        private static bool IsStringItem(Type/*!*/ elementType) {
+            return elementType == typeof(MutableString) || elementType == typeof(RubySymbol);
+        }
+
+        // An item converts to the item type without narrowing (a Ruby String or Symbol to a String counts as such):
+        private static bool ItemFits(Type/*!*/ elementType, Type/*!*/ itemType) {
+            if (itemType == typeof(object) || elementType == itemType) {
+                return true;
+            }
+
+            Type underlying = Nullable.GetUnderlyingType(itemType);
+            if (elementType == typeof(DynamicNull)) {
+                return underlying != null || !itemType.IsValueType;
+            }
+
+            if (IsStringItem(elementType) && (underlying ?? itemType) == typeof(string)) {
+                return true;
+            }
+
+            return Converter.CanConvertFrom(null, elementType, itemType, false, NarrowingLevel.None, false, false).IsConvertible;
+        }
+
+        private Candidate CompareItemTypes(Type/*!*/ elementType, Type/*!*/ itemOne, Type/*!*/ itemTwo) {
+            bool exactOne = elementType == itemOne || IsStringItem(elementType) && itemOne == typeof(string);
+            bool exactTwo = elementType == itemTwo || IsStringItem(elementType) && itemTwo == typeof(string);
+            if (exactOne != exactTwo) {
+                return exactOne ? Candidate.One : Candidate.Two;
+            }
+
+            if (elementType == typeof(BigInteger)) {
+                Candidate bignum = PreferBignumParameter(itemOne, itemTwo);
+                if (IsChosen(bignum)) {
+                    return bignum;
+                }
+            }
+
+            // T over T? for an item that is not nil, T? over T for nil (which only T? takes):
+            Type underlyingOne = Nullable.GetUnderlyingType(itemOne), underlyingTwo = Nullable.GetUnderlyingType(itemTwo);
+            if (underlyingOne == itemTwo || underlyingTwo == itemOne) {
+                return (elementType == typeof(DynamicNull)) == (underlyingOne != null) ? Candidate.One : Candidate.Two;
+            }
+
+            // the more specific item type, the one that converts to the other implicitly (Int64 to Double, String to Object):
+            bool oneToTwo = Converter.CanConvertFrom(null, itemOne, itemTwo, false, NarrowingLevel.None, false, false).IsConvertible;
+            bool twoToOne = Converter.CanConvertFrom(null, itemTwo, itemOne, false, NarrowingLevel.None, false, false).IsConvertible;
+            if (oneToTwo != twoToOne) {
+                return oneToTwo ? Candidate.One : Candidate.Two;
+            }
+
+            Candidate preferred = PreferConvert(itemOne, itemTwo);
+            return IsChosen(preferred) ? preferred : Other(PreferConvert(itemTwo, itemOne));
+        }
+
+        // Whether the argument is an item of a splatted list (or a keyword), whose test has to follow that of the splat:
+        private bool IsSplatted(DynamicMetaObject/*!*/ arg) {
+            var args = GetActualArguments();
+            int index = args.Arguments.IndexOf(arg);
+            return index < 0 || index >= args.FirstSplattedArg && index <= _lastSplattedArg;
+        }
+
+        private void AddItemTypesTest(DynamicMetaObject/*!*/ arg, Type/*!*/[]/*!*/ elementTypes) {
+            _itemTestedArguments ??= new List<DynamicMetaObject>();
+            if (_itemTestedArguments.Contains(arg)) {
+                return;
+            }
+            _itemTestedArguments.Add(arg);
+
+            _metaBuilder.AddCondition(Expression.Call(
+                RubyOps.HasItemTypesMethod, AstUtils.Convert(arg.Expression, typeof(IList)), AstUtils.Constant(elementTypes)
+            ));
+        }
+
+        #endregion
+
+        /// <summary>
+        /// True if the argument converts to the parameter only by one of Ruby's conversion protocols and its class does not
+        /// implement that conversion the way MRI's implicit conversions go: it has no to_str, to_int, to_ary or to_hash for
+        /// it, or for a floating-point parameter it is not a Numeric. The call then raises the conversion's TypeError - or
+        /// parses a String, calls to_f of another object or passes an Int32? parameter null, more than MRI would do, which
+        /// should not make an overload a better choice than another.
+        /// </summary>
+        private bool LacksImplicitConversion(DynamicMetaObject/*!*/ arg, ParameterWrapper/*!*/ parameter) {
+            return NeedsProtocolConversion(arg, parameter) && !HasImplicitConversion(arg, parameter.Type);
+        }
+
+        /// <summary>
+        /// True if the argument converts to the parameter only by one of Ruby's conversion protocols, which a CLR
+        /// method's parameter of a String, numeric, IList or IDictionary type accepts any object for on the last
+        /// narrowing level (<see cref="Converter.CanConvertFrom"/>).
+        /// </summary>
+        private bool NeedsProtocolConversion(DynamicMetaObject/*!*/ arg, ParameterWrapper/*!*/ parameter) {
+            if (!_implicitProtocolConversions || !ProtocolConversionAction.HasDefaultConversion(parameter.Type)) {
+                return false;
+            }
+
+            Type argType = arg.GetLimitType();
+            bool explicitProtocol = HasExplicitProtocolConversion(parameter);
+            return !Converter.CanConvertFrom(arg, argType, parameter.Type, parameter.ProhibitNull, NarrowingLevel.Two, explicitProtocol, true).IsConvertible
+                && Converter.CanConvertFrom(arg, argType, parameter.Type, parameter.ProhibitNull, NarrowingLevel.Three, explicitProtocol, true).IsConvertible;
+        }
+
+        /// <summary>
+        /// False if the class of the argument does not implement the protocol conversion to <paramref name="type"/>: it has
+        /// no to_xxx method for it and does not answer through respond_to? or method_missing either
+        /// (<see cref="ProtocolConversionAction.CanConvert"/>), or the conversion is to_f and the class is not a Numeric -
+        /// MRI converts nothing else to a Float implicitly (rb_to_float: "can't convert String into Float"). That depends
+        /// on the class, so the rule tests it from here on.
+        /// </summary>
+        private bool HasImplicitConversion(DynamicMetaObject/*!*/ arg, Type/*!*/ type) {
+            string methodName;
+            if (!arg.HasValue || RubyMetaBinder.IsForeignMetaObject(arg) ||
+                (methodName = ProtocolConversionAction.GetDefaultConversionMethodName(Context, type)) == null) {
+                return true;
+            }
+
+            RubyClass cls = Context.GetImmediateClassOf(arg.Value);
+            using (Context.ClassHierarchyLocker()) {
+                AddArgumentClassTest(arg, cls);
+                if (methodName == Symbols.ToF && !IsNumeric(cls)) {
+                    return false;
+                }
+                return ProtocolConversionAction.CanConvert(cls, methodName);
+            }
+        }
+
+        private bool IsNumeric(RubyClass/*!*/ cls) {
+            // Integer < Numeric:
+            RubyClass integer = Context.IntegerClass;
+            return integer != null && integer.SuperClass != null && cls.IsSubclassOf(integer.SuperClass);
+        }
+
+        private void AddArgumentClassTest(DynamicMetaObject/*!*/ arg, RubyClass/*!*/ cls) {
+            if (_classTestedArguments == null) {
+                _classTestedArguments = new List<DynamicMetaObject>();
+            } else if (_classTestedArguments.Contains(arg)) {
+                return;
+            }
+            _classTestedArguments.Add(arg);
+
+            // A splatted argument is read from the list the splat test stores, so it can only be tested after that test,
+            // the way AddArgumentRestrictions does:
+            var args = GetActualArguments();
+            int index = args.Arguments.IndexOf(arg);
+            bool splatted = (index >= 0) ? (index >= args.FirstSplattedArg && index <= _lastSplattedArg) : _keywordsSplatted;
+
+            bool treatRestrictionsAsConditions = _metaBuilder.TreatRestrictionsAsConditions;
+            _metaBuilder.TreatRestrictionsAsConditions |= splatted;
+            try {
+                _metaBuilder.AddTargetTypeTest(arg.Value, cls, arg.Expression, _args.MetaContext, ProtocolConversionAction.DefaultConversionMethodNames);
+            } finally {
+                _metaBuilder.TreatRestrictionsAsConditions = treatRestrictionsAsConditions;
+            }
+        }
+
+        /// <summary>
+        /// C#'s tie-break between overloads that take the same parameter types once instantiated, where the DLR only prefers
+        /// a non-generic method to a generic one (C# spec, "better function member"). In C#'s order:
+        /// - one that takes the arguments in its normal form wins over one that expands its params array;
+        /// - of two that expand it, the one with more declared parameters wins;
+        /// - one that gets an argument for each of its parameters wins over one that needs a default value;
+        /// - the one whose declared parameter types are more specific wins, a type parameter being less specific than any
+        ///   other type. Of LINQ's Max&lt;TSource&gt;(IEnumerable&lt;TSource&gt;, Func&lt;TSource, int&gt;) and
+        ///   Max&lt;TSource, TResult&gt;(IEnumerable&lt;TSource&gt;, Func&lt;TSource, TResult&gt;), both Max(List&lt;int&gt;, Func&lt;int, int&gt;) for a
+        ///   Func&lt;int, int&gt; selector, that is the first.
+        /// </summary>
+        protected override Candidate CompareEquivalentCandidates(ApplicableCandidate/*!*/ one, ApplicableCandidate/*!*/ two) {
+            Candidate result = base.CompareEquivalentCandidates(one, two);
+            if (result != Candidate.Equivalent) {
+                return result;
+            }
+
+            MethodBase declarationOne = GetDeclaration(one.Method.Overload);
+            MethodBase declarationTwo = GetDeclaration(two.Method.Overload);
+            if (declarationOne == null || declarationTwo == null ||
+                declarationOne == one.Method.Overload.ReflectionInfo && declarationTwo == two.Method.Overload.ReflectionInfo) {
+                // nothing generic to compare
+                return result;
+            }
+
+            var args = GetActualArguments();
+            for (int i = 0; i < args.Count; i++) {
+                if (one.GetParameter(i).Type != two.GetParameter(i).Type) {
+                    return result;
+                }
+            }
+
+            bool expandedOne, expandedTwo, defaultsOne, defaultsTwo;
+            if (!TryGetArgumentForm(one.Method, declarationOne, out expandedOne, out defaultsOne) ||
+                !TryGetArgumentForm(two.Method, declarationTwo, out expandedTwo, out defaultsTwo)) {
+                return result;
+            }
+
+            if (expandedOne != expandedTwo) {
+                return expandedOne ? Candidate.Two : Candidate.One;
+            }
+
+            int countOne = declarationOne.GetParameters().Length, countTwo = declarationTwo.GetParameters().Length;
+            if (expandedOne && countOne != countTwo) {
+                return countOne > countTwo ? Candidate.One : Candidate.Two;
+            }
+
+            if (defaultsOne != defaultsTwo) {
+                return defaultsOne ? Candidate.Two : Candidate.One;
+            }
+
+            // Of two that need default values for different numbers of parameters C# prefers neither:
+            if (countOne != countTwo) {
+                return result;
+            }
+
+            int specificity = 0;
+            for (int i = 0; i < args.Count; i++) {
+                Type declaredOne, declaredTwo;
+                if (!TryGetDeclaredType(declarationOne, one.GetParameter(i), out declaredOne) ||
+                    !TryGetDeclaredType(declarationTwo, two.GetParameter(i), out declaredTwo)) {
+                    return result;
+                }
+
+                int c = CompareSpecificity(declaredOne, declaredTwo);
+                if (c != 0) {
+                    if (specificity == -c) {
+                        return result;
+                    }
+                    specificity = c;
+                }
+            }
+
+            return specificity > 0 ? Candidate.One : specificity < 0 ? Candidate.Two : result;
+        }
+
+        /// <summary>
+        /// The method with its declared parameter types - those of a generic method's definition, in a generic type's
+        /// definition - or null if it cannot be found.
+        /// </summary>
+        private static MethodBase GetDeclaration(OverloadInfo/*!*/ overload) {
+            MethodBase method = overload.ReflectionInfo;
+            if (method == null || method.ContainsGenericParameters) {
+                return null;
+            }
+
+            if (method.DeclaringType != null && method.DeclaringType.IsConstructedGenericType) {
+                try {
+                    return method.Module.ResolveMethod(method.MetadataToken);
+                } catch (ArgumentException) {
+                    return null;
+                } catch (InvalidOperationException) {
+                    return null;
+                } catch (NotSupportedException) {
+                    return null;
+                }
+            }
+
+            return method.IsGenericMethod ? ((MethodInfo)method).GetGenericMethodDefinition() : method;
+        }
+
+        /// <summary>
+        /// Whether the candidate expands the params array of the method, into any number of items including none, and
+        /// whether it substitutes the default value of a parameter no argument is passed for. False if it leaves out a
+        /// parameter for another reason, such as an out parameter it returns.
+        /// </summary>
+        private static bool TryGetArgumentForm(MethodCandidate/*!*/ candidate, MethodBase/*!*/ declaration, out bool expanded,
+            out bool usesDefaults) {
+
+            ParameterInfo[] declared = declaration.GetParameters();
+            var passed = new bool[declared.Length];
+            foreach (ParameterWrapper parameter in candidate.GetParameters()) {
+                ParameterInfo info = parameter.ParameterInfo;
+                if (info != null && info.Position >= 0 && info.Position < declared.Length) {
+                    passed[info.Position] = true;
+                }
+            }
+
+            expanded = usesDefaults = false;
+            for (int i = 0; i < declared.Length; i++) {
+                if (IsParamArray(declared[i])) {
+                    expanded = !candidate.HasParamsArray;
+                } else if (!passed[i]) {
+                    if (!declared[i].IsOptional) {
+                        return false;
+                    }
+                    usesDefaults = true;
+                }
+            }
+            return true;
+        }
+
+        private static bool TryGetDeclaredType(MethodBase/*!*/ declaration, ParameterWrapper/*!*/ parameter, out Type declaredType) {
+            ParameterInfo info = parameter.ParameterInfo;
+            if (info == null) {
+                // the instance, or a parameter the binder adds:
+                declaredType = parameter.Type;
+                return true;
+            }
+
+            if (info.Position < 0) {
+                declaredType = null;
+                return false;
+            }
+
+            declaredType = declaration.GetParameters()[info.Position].ParameterType;
+
+            // a by-ref parameter takes a StrongBox or the value itself, but C# compares ref T to ref int:
+            if (info.ParameterType == parameter.Type || info.ParameterType.IsByRef) {
+                return true;
+            }
+
+            // an item of an expanded params array, compared by the item type:
+            if (declaredType.IsArray && parameter.Type == info.ParameterType.GetElementType() &&
+                IsParamArray(info)) {
+                declaredType = declaredType.GetElementType();
+                return true;
+            }
+
+            declaredType = null;
+            return false;
+        }
+
+        /// <summary>
+        /// +1 if <paramref name="one"/> is more specific than <paramref name="two"/>, -1 if it is less, 0 otherwise: a type
+        /// parameter is less specific than any other type, and a constructed type or an array is more specific than another
+        /// of the same shape if one of its type arguments is and none is less (C# spec, "better function member").
+        /// </summary>
+        private static int CompareSpecificity(Type/*!*/ one, Type/*!*/ two) {
+            if (one.IsGenericParameter || two.IsGenericParameter) {
+                return (one.IsGenericParameter == two.IsGenericParameter) ? 0 : one.IsGenericParameter ? -1 : +1;
+            }
+
+            if (one.IsArray && two.IsArray && one.GetArrayRank() == two.GetArrayRank() ||
+                one.IsByRef && two.IsByRef || one.IsPointer && two.IsPointer) {
+                return CompareSpecificity(one.GetElementType(), two.GetElementType());
+            }
+
+            if (one.IsGenericType && two.IsGenericType && one.GetGenericTypeDefinition() == two.GetGenericTypeDefinition()) {
+                Type[] argsOne = one.GetGenericArguments(), argsTwo = two.GetGenericArguments();
+                int result = 0;
+                for (int i = 0; i < argsOne.Length; i++) {
+                    int c = CompareSpecificity(argsOne[i], argsTwo[i]);
+                    if (c != 0) {
+                        if (result == -c) {
+                            return 0;
+                        }
+                        result = c;
+                    }
+                }
+                return result;
+            }
+
+            return 0;
         }
 
         public override Expression/*!*/ Convert(DynamicMetaObject/*!*/ metaObject, Type restrictedType, ParameterInfo info, Type/*!*/ toType) {
@@ -540,7 +1503,7 @@ namespace IronRuby.Runtime.Calls {
             }
 
             // protocol conversions:
-            if (info != null && info.IsDefined(typeof(DefaultProtocolAttribute), false)) {
+            if (info != null && HasDefaultProtocol(info)) {
                 var action = RubyConversionAction.TryGetDefaultConversionAction(Context, toType);
                 if (action != null) {
                     // TODO: inline implicit conversions:
@@ -549,6 +1512,19 @@ namespace IronRuby.Runtime.Calls {
 
                 // Do not throw an exception here to allow generic type parameters to be used with D.P. attribute.
                 // The semantics should be to use DP if available for the current instantiation and ignore it otherwise.
+            }
+
+            // A Ruby String passed for a CLR method's Object parameter arrives as a System.String: CLR code looks at what
+            // it gets - ADO.NET's AddWithValue, serializers, String.Format's format items, data binding - and knows
+            // System.String, not IronRuby's MutableString. JRuby passes a java.lang.String for an Object parameter too.
+            // (An argument for an Object parameter has no type restriction, so whether it is a String is decided as the call runs.)
+            if (_implicitProtocolConversions && toType == typeof(object)) {
+                if (restrictedType != null && typeof(MutableString).IsAssignableFrom(restrictedType)) {
+                    return Methods.ConvertMutableStringToClrString.OpCall(AstUtils.Convert(expr, typeof(MutableString)));
+                }
+                if (restrictedType == null || restrictedType == typeof(object)) {
+                    return Ast.Call(RubyOps.ToClrArgumentMethod, AstUtils.Box(expr));
+                }
             }
 
             if (restrictedType != null) {
@@ -572,7 +1548,20 @@ namespace IronRuby.Runtime.Calls {
                 }
             }
 
-            return Converter.ConvertExpression(expr, toType, _args.RubyContext, _args.MetaContext.Expression, _implicitProtocolConversions);
+            return Converter.TryConvertToCollection(expr, restrictedType ?? expr.Type, toType, _args.RubyContext, _implicitProtocolConversions)
+                ?? Converter.TryConvertTypeGroup(expr, restrictedType ?? expr.Type, toType, _args.MetaContext.Expression)
+                ?? Converter.TryConvertRange(expr, restrictedType ?? expr.Type, toType)
+                ?? Converter.ConvertExpression(expr, toType, _args.RubyContext, _args.MetaContext.Expression, _implicitProtocolConversions);
+        }
+
+        /// <summary>
+        /// A method with out or ref parameters returns its result followed by their final values.
+        /// Hand them back as a Ruby Array rather than an object[], so they are what Ruby code
+        /// expects of a multi-value result: an Array to destructure, pattern match (a C#
+        /// Deconstruct(out ...) method serves as #deconstruct) or call Array methods on.
+        /// </summary>
+        protected override Expression/*!*/ GetByRefArrayExpression(Expression/*!*/ argumentArrayExpression) {
+            return Methods.MakeArrayN.OpCall(argumentArrayExpression);
         }
 
         protected override Expression/*!*/ GetSplattedExpression() {
@@ -583,75 +1572,24 @@ namespace IronRuby.Runtime.Calls {
             return _list[index];
         }
 
-        internal sealed class RubyContextArgBuilder : ArgBuilder {
-            public RubyContextArgBuilder(ParameterInfo/*!*/ info)
+        /// <summary>
+        /// A parameter the call passes no argument for, which the resolver fills in: the context, the scope,
+        /// call-site storage or the class a constructor is instantiating.
+        /// </summary>
+        private sealed class ImplicitArgBuilder : ArgBuilder {
+            private readonly Func<RubyOverloadResolver, ParameterInfo, Expression>/*!*/ _value;
+
+            public ImplicitArgBuilder(ParameterInfo/*!*/ info, Func<RubyOverloadResolver, ParameterInfo, Expression>/*!*/ value)
                 : base(info) {
+                _value = value;
             }
 
-            public override int Priority {
-                get { return -1; }
-            }
+            public override int Priority => -1;
 
-            public override int ConsumedArgumentCount {
-                get { return 0; }
-            }
+            public override int ConsumedArgumentCount => 0;
 
             protected override Expression ToExpression(OverloadResolver/*!*/ resolver, RestrictedArguments/*!*/ args, bool[]/*!*/ hasBeenUsed) {
-                return ((RubyOverloadResolver)resolver).ContextExpression;
-            }
-        }
-
-        internal sealed class RubyCallSiteStorageBuilder : ArgBuilder {
-            public RubyCallSiteStorageBuilder(ParameterInfo/*!*/ info)
-                : base(info) {
-            }
-
-            public override int Priority {
-                get { return -1; }
-            }
-
-            public override int ConsumedArgumentCount {
-                get { return 0; }
-            }
-
-            protected override Expression ToExpression(OverloadResolver/*!*/ resolver, RestrictedArguments/*!*/ args, bool[]/*!*/ hasBeenUsed) {
-                return AstUtils.Constant(Activator.CreateInstance(ParameterInfo.ParameterType, ((RubyOverloadResolver)resolver).Context));
-            }
-        }
-
-        internal sealed class RubyScopeArgBuilder : ArgBuilder {
-            public RubyScopeArgBuilder(ParameterInfo/*!*/ info)
-                : base(info) {
-            }
-
-            public override int Priority {
-                get { return -1; }
-            }
-
-            public override int ConsumedArgumentCount {
-                get { return 0; }
-            }
-
-            protected override Expression ToExpression(OverloadResolver/*!*/ resolver, RestrictedArguments/*!*/ args, bool[]/*!*/ hasBeenUsed) {
-                return ((RubyOverloadResolver)resolver).ScopeExpression;
-            }
-        }
-
-        internal sealed class RubyClassCtorArgBuilder : ArgBuilder {
-            public RubyClassCtorArgBuilder(ParameterInfo/*!*/ info)
-                : base(info) {
-            }
-
-            public override int Priority {
-                get { return -1; }
-            }
-
-            public override int ConsumedArgumentCount {
-                get { return 0; }
-            }
-
-            protected override Expression ToExpression(OverloadResolver/*!*/ resolver, RestrictedArguments/*!*/ args, bool[]/*!*/ hasBeenUsed) {
-                return ((RubyOverloadResolver)resolver)._args.TargetExpression;
+                return _value((RubyOverloadResolver)resolver, ParameterInfo);
             }
         }
 
@@ -706,7 +1644,7 @@ namespace IronRuby.Runtime.Calls {
             Expression exceptionValue;
             switch (target.Result) {
                 case BindingResult.AmbiguousMatch:
-                    exceptionValue = MakeAmbiguousCallError(target);
+                    exceptionValue = MakeProtocolConversionError(target) ?? MakeAmbiguousCallError(target);
                     break;
 
                 case BindingResult.IncorrectArgumentCount:
@@ -741,9 +1679,13 @@ namespace IronRuby.Runtime.Calls {
                 sb.Append(target.Name);
                 sb.Append('(');
                 foreach (var param in parameters) {
-                    if (!param.IsHidden) {
+                    // (an extension method called as a static method takes its hidden this parameter as an argument too)
+                    if (!param.IsHidden || param.ParameterInfo != null && _callConvention != SelfCallConvention.SelfIsInstance) {
                         sb.Append(innerComma);
-                        sb.Append(Binder.GetTypeName(param.Type));
+                        // Int64 and BigInteger values are Integers, but as parameter types they differ from Int32's:
+                        // Abs(System::Int64), not a second Abs(Integer) (see RubyContext.GetClrTypeModule).
+                        sb.Append(param.Type == typeof(long) || param.Type == typeof(BigInteger) ?
+                            Context.GetClrTypeModule(param.Type).Name : Binder.GetTypeName(param.Type));
                         if (param.ProhibitNull) {
                             sb.Append('!');
                         }
@@ -755,14 +1697,146 @@ namespace IronRuby.Runtime.Calls {
                 outerComma = ", ";
             }
 
+            if (_blockAsArgument) {
+                sb.Append(" - the block fits more than one of them; pass the delegate itself, e.g. System::Func[...].new { ... }");
+            }
+
             return Methods.MakeAmbiguousMatchError.OpCall(AstUtils.Constant(sb.ToString()));
         }
 
-        private Expression MakeIncorrectArgumentCountError(BindingTarget target) {
-            return Methods.MakeWrongNumberOfArgumentsErrorN.OpCall(
-                AstUtils.Constant(target.ActualArgumentCount),
-                AstUtils.Constant(DescribeExpectedArgumentCount(target.ExpectedArgumentCount))
+        /// <summary>
+        /// Overloads found equally good may all be ones that cannot take the arguments: each needs a protocol conversion
+        /// of an argument whose class does not implement it (<see cref="LacksImplicitConversion"/>), as Method(String, String)
+        /// and Method(String, Integer) do for a Time. Then the call fails with MRI's TypeError for such a conversion ("no
+        /// implicit conversion of Time into String or Integer"), not as an ambiguity. Null if some overload could take the
+        /// arguments.
+        /// </summary>
+        private Expression MakeProtocolConversionError(BindingTarget/*!*/ target) {
+            if (!_implicitProtocolConversions) {
+                return null;
+            }
+
+            var args = GetActualArguments();
+            var failures = new List<KeyValuePair<int, Type>>();
+            int firstFailure = Int32.MaxValue;
+            foreach (MethodCandidate candidate in target.AmbiguousMatches) {
+                var parameters = candidate.GetParameters();
+                int failed = -1;
+                for (int i = 0; i < args.Count && failed < 0; i++) {
+                    ParameterWrapper parameter = GetBoundParameter(parameters, args, i);
+                    if (parameter != null && LacksImplicitConversion(args[i], parameter)) {
+                        failures.Add(new KeyValuePair<int, Type>(i, parameter.Type));
+                        failed = i;
+                    }
+                }
+
+                if (failed < 0) {
+                    // this one could take the arguments
+                    return null;
+                }
+                firstFailure = Math.Min(firstFailure, failed);
+            }
+
+            // name what the first argument that fails would have to convert to:
+            var targetNames = new List<string>();
+            foreach (var failure in failures) {
+                string name = GetProtocolConversionTargetName(failure.Value);
+                if (failure.Key == firstFailure && !targetNames.Contains(name)) {
+                    targetNames.Add(name);
+                }
+            }
+
+            return Methods.CreateImplicitConversionError.OpCall(
+                AstUtils.Constant(GetConversionSourceName(args[firstFailure].Value)),
+                AstUtils.Constant(JoinAlternatives(targetNames))
             );
+        }
+
+        // The parameter of a candidate the argument at the index binds to: a positional argument to the parameter at its
+        // index, a keyword to the parameter of its name (ActualArguments.TryBindNamedArguments).
+        private static ParameterWrapper GetBoundParameter(IList<ParameterWrapper>/*!*/ parameters, ActualArguments/*!*/ args, int index) {
+            if (index < args.Arguments.Count) {
+                return parameters[index];
+            }
+
+            string name = args.ArgNames[index - args.Arguments.Count];
+            foreach (var parameter in parameters) {
+                if (parameter.Name == name) {
+                    return parameter;
+                }
+            }
+            return null;
+        }
+
+        // How a conversion error names the object: true, false and nil as themselves, anything else by its class.
+        private string/*!*/ GetConversionSourceName(object value) {
+            if (value == null) {
+                return "nil";
+            }
+            if (value is bool) {
+                return (bool)value ? "true" : "false";
+            }
+            return Context.GetImmediateClassOf(value).GetNonSingletonClass().GetNonNullName(Context);
+        }
+
+        // The class MRI names for the implicit conversion the parameter needs, whatever CLR type it has: Integer for a Byte,
+        // an Int64 or an Int32? parameter alike (to_int), Float for a Single (to_f), String for a CLR String (to_str).
+        private string/*!*/ GetProtocolConversionTargetName(Type/*!*/ type) {
+            string methodName = ProtocolConversionAction.GetDefaultConversionMethodName(Context, type);
+            if (methodName == Symbols.ToInt) {
+                return "Integer";
+            }
+            if (methodName == Symbols.ToF) {
+                return "Float";
+            }
+            if (methodName == Symbols.ToStr) {
+                return "String";
+            }
+            return GetConversionTargetName(Nullable.GetUnderlyingType(type) ?? type);
+        }
+
+        // "A", "A or B", "A, B, or C" - the way DescribeExpectedArgumentCount lists arities.
+        private static string/*!*/ JoinAlternatives(IList<string>/*!*/ items) {
+            var sb = new StringBuilder();
+            for (int i = 0; i < items.Count; i++) {
+                if (i > 0) {
+                    sb.Append(i == items.Count - 1 ? (items.Count == 2 ? " or " : ", or ") : ", ");
+                }
+                sb.Append(items[i]);
+            }
+            return sb.ToString();
+        }
+
+        private Expression MakeIncorrectArgumentCountError(BindingTarget target) {
+            int restFrom = Int32.MaxValue;
+            var positional = (Overloads != null && !_implicitProtocolConversions) ?
+                GetPositionalArities(Overloads, _callConvention, out restFrom) : null;
+
+            if (positional == null) {
+                return Methods.MakeWrongNumberOfArgumentsErrorN.OpCall(
+                    AstUtils.Constant(target.ActualArgumentCount),
+                    AstUtils.Constant(DescribeExpectedArgumentCount(target.ExpectedArgumentCount))
+                );
+            }
+
+            // MRI counts the positional arguments alone, not a trailing Hash of keywords:
+            int count = target.ActualArgumentCount;
+            Expression given = AstUtils.Constant(count);
+            if (count > 0 && !_args.Signature.HasRhsArgument) {
+                if (!_args.Signature.HasSplattedArgument) {
+                    if (_args.SimpleArgumentCount > 0) {
+                        given = Ast.Condition(
+                            Methods.IsKeywordArgumentsHash.OpCall(AstUtils.Box(_args.GetSimpleArgumentExpression(_args.SimpleArgumentCount - 1))),
+                            AstUtils.Constant(count - 1),
+                            given
+                        );
+                    }
+                } else if (_list != null && _list.Count > 0 && RubyOps.IsKeywordArgumentsHash(_list[_list.Count - 1])) {
+                    given = AstUtils.Constant(count - 1);
+                }
+            }
+
+            return Methods.MakeWrongNumberOfArgumentsErrorN.OpCall(given, AstUtils.Constant(DescribePositionalArities(positional, restFrom)));
         }
 
         /// <summary>
@@ -834,7 +1908,85 @@ namespace IronRuby.Runtime.Calls {
             return Binder.GetTypeName(type);
         }
 
+        // The keywords as the call spelled them (:first_name), not the CLR names they were bound to.
+        private string/*!*/ FormatKeywords(IList<string>/*!*/ clrNames) {
+            var result = new StringBuilder();
+            foreach (string clrName in clrNames) {
+                int index = (_keywordNames != null) ? Array.IndexOf(_keywordNames, clrName) : -1;
+                if (result.Length > 0) {
+                    result.Append(", ");
+                }
+                result.Append(':').Append(index >= 0 ? _keywordSymbols[index].ToString() : clrName);
+            }
+            return result.ToString();
+        }
+
+        /// <summary>
+        /// A CLR method none of whose overloads can take the arguments (#141). The error used to name the conversion that
+        /// failed in whichever overload the binder happened to try first. The overloads that got furthest through the
+        /// arguments before one failed to convert are the plausible ones; the error names that argument and every type
+        /// those overloads would have converted it to, as MRI names a protocol conversion's: Take(StringBuilder) and
+        /// Take(Version) called with a String say "no implicit conversion of String into System::Text::StringBuilder or
+        /// System::Version". Null when no overload failed on a conversion, or the failure is one with its own message (a
+        /// block, a Proc). (Overloads that all accept an argument but cannot convert it, as System::Math.abs(nil), are
+        /// ambiguous instead: see SelectBestConversionFor and MakeProtocolConversionError.)
+        /// </summary>
+        private Expression MakeOverloadConversionError(BindingTarget/*!*/ target) {
+            var best = new List<ConversionResult>();
+            int bestIndex = -1;
+            foreach (CallFailure cf in target.CallFailures) {
+                if (cf.Reason != CallFailureReason.ConversionFailure) {
+                    continue;
+                }
+
+                // ConversionResults has one entry per argument, in argument order:
+                int index = -1;
+                for (int i = 0; i < cf.ConversionResults.Count; i++) {
+                    if (cf.ConversionResults[i].Failed) {
+                        index = i;
+                        break;
+                    }
+                }
+
+                if (index < 0 || index < bestIndex) {
+                    continue;
+                }
+                if (index > bestIndex) {
+                    best.Clear();
+                    bestIndex = index;
+                }
+                best.Add(cf.ConversionResults[index]);
+            }
+
+            if (best.Count == 0) {
+                return null;
+            }
+
+            var targetNames = new List<string>();
+            foreach (ConversionResult cr in best) {
+                if (typeof(Proc).IsAssignableFrom(cr.To) || cr.To == typeof(BlockParam)) {
+                    return null;
+                }
+                string name = GetProtocolConversionTargetName(cr.To);
+                if (!targetNames.Contains(name)) {
+                    targetNames.Add(name);
+                }
+            }
+
+            return Methods.CreateImplicitConversionError.OpCall(
+                AstUtils.Constant(best[0].GetArgumentTypeName(Binder)),
+                AstUtils.Constant(JoinAlternatives(targetNames))
+            );
+        }
+
         private Expression MakeCallFailureError(BindingTarget target) {
+            if (_implicitProtocolConversions) {
+                Expression error = MakeOverloadConversionError(target);
+                if (error != null) {
+                    return error;
+                }
+            }
+
             foreach (CallFailure cf in target.CallFailures) {
                 switch (cf.Reason) {
                     case CallFailureReason.ConversionFailure:
@@ -853,6 +2005,7 @@ namespace IronRuby.Runtime.Calls {
                                 // MRI reports a bad method name with its own wording rather than the
                                 // implicit-conversion one. nil reaches here rather than the conversion
                                 // action, which accepts it and leaves [NotNull] to do the rejecting.
+                                // (A CLR method's String parameter is just a String: see MakeOverloadConversionError.)
                                 if (cr.To == typeof(string)) {
                                     string argument = cr.GetArgumentTypeName(Binder);
                                     return Methods.CreateNotSymbolNorStringErrorFor.OpCall(
@@ -878,8 +2031,17 @@ namespace IronRuby.Runtime.Calls {
                             AstUtils.Constant(String.Format("generic arguments could not be infered for method '{0}'", target.Name))
                         );
 
-                    case CallFailureReason.DuplicateKeyword:
                     case CallFailureReason.UnassignableKeyword:
+                        // MRI: unknown keyword: :zz / unknown keywords: :a, :b
+                        return Methods.CreateArgumentsError.OpCall(AstUtils.Constant(
+                            (cf.KeywordArguments.Count == 1 ? "unknown keyword: " : "unknown keywords: ") + FormatKeywords(cf.KeywordArguments)
+                        ));
+
+                    case CallFailureReason.DuplicateKeyword:
+                        return Methods.CreateArgumentsError.OpCall(AstUtils.Constant(
+                            "keyword " + FormatKeywords(cf.KeywordArguments) + " given for a parameter that is already passed positionally"
+                        ));
+
                     default: 
                         throw new InvalidOperationException();
                 }

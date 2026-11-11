@@ -13,9 +13,6 @@
  *
  * ***************************************************************************/
 
-using System;
-using System.Collections.Generic;
-using System.Text;
 using IronRuby.Compiler.Generation;
 using IronRuby.Builtins;
 using System.Diagnostics;
@@ -44,20 +41,6 @@ namespace IronRuby.Runtime {
     }
 
     public static class UnionSpecializations {
-        public static bool IsFixnum(this Union<int, MutableString> union) {
-            return ReferenceEquals(union.Second, null);
-        }
-
-        public static int Fixnum(this Union<int, MutableString> union) {
-            Debug.Assert(union.IsFixnum());
-            return union.First;
-        }
-
-        public static MutableString/*!*/ String(this Union<int, MutableString> union) {
-            Debug.Assert(!union.IsFixnum());
-            return union.Second;
-        }
-
         public static bool IsFixnum(this Union<MutableString, int> union) {
             return ReferenceEquals(union.First, null);
         }

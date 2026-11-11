@@ -22,9 +22,7 @@ using System.Text;
 using IronRuby.Compiler;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Builtins {
 
@@ -132,6 +130,13 @@ namespace IronRuby.Builtins {
             return MutableStringOps.Equals(respondToStorage, equalsStorage, self, other);
         }
 
+        // A CLR string is #eql? to a String of the same characters, so it has to hash as one (a long
+        // ASCII String hashes its bytes, not its characters: see MutableString.GetHashCode).
+        [RubyMethod("hash")]
+        public static int GetHashCode(string/*!*/ self) {
+            return MutableString.GetHashCode(self);
+        }
+
         [RubyMethod("eql?")]
         public static bool Eql(string/*!*/ lhs, [NotNull]string/*!*/ rhs) {
             return lhs == rhs;
@@ -161,7 +166,8 @@ namespace IronRuby.Builtins {
         [RubyMethod("slice")]
         public static string GetSubstring(string/*!*/ self, [DefaultProtocol]int start, [DefaultProtocol]int count) {
             if (!MutableStringOps.NormalizeSubstringRange(self.Length, ref start, ref count)) {
-                return (start == self.Length) ? self : null;
+                // at the very end: an empty string, as "hello"[5, 1] is - but a negative length is nil there too
+                return (start == self.Length && count >= 0) ? String.Empty : null;
             }
 
             return self.Substring(start, count);
@@ -174,13 +180,22 @@ namespace IronRuby.Builtins {
             if (!MutableStringOps.NormalizeSubstringRange(fixnumCast, range, self.Length, out begin, out count)) {
                 return null;
             }
-            return (count < 0) ? self : GetSubstring(self, begin, count);
+            // a backwards range within the string ("hello"[3..1]) is empty
+            return (count < 0) ? String.Empty : GetSubstring(self, begin, count);
         }
 
         [RubyMethod("[]")]
         [RubyMethod("slice")]
         public static string GetSubstring(string/*!*/ self, [NotNull]string/*!*/ searchStr) {
             return (self.IndexOf(searchStr, StringComparison.Ordinal) != -1) ? searchStr : null;
+        }
+
+        // a Ruby String to look for: there was no overload, so the binder took the Integer one and
+        // "hello there".to_clr_string["lo"] raised "no implicit conversion of String into Integer" (#140)
+        [RubyMethod("[]")]
+        [RubyMethod("slice")]
+        public static string GetSubstring(string/*!*/ self, [NotNull]MutableString/*!*/ searchStr) {
+            return GetSubstring(self, searchStr.ToString());
         }
 
         [RubyMethod("[]")]
@@ -218,17 +233,6 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region TODO: casecmp, capitalize, downcase, swapcase, upcase
-
-        #endregion
-
-        #region TODO: center
-
-        #endregion
-
-        #region TODO: chomp, chop
-        #endregion
-
         #region dump, inspect
 
         [RubyMethod("inspect", RubyMethodAttributes.PublicInstance)]
@@ -253,10 +257,6 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region TODO: each, each_byte, each_line
-
-        #endregion
-
         #region empty?, size, length, encoding
 
         [RubyMethod("empty?")]
@@ -274,20 +274,6 @@ namespace IronRuby.Builtins {
             return RubyEncoding.UTF8;
         }
 
-        #endregion
-
-        #region TODO: sub, gsub
-        #endregion
-
-        #region TODO: index, rindex
-
-
-        #endregion
-
-        #region TODO: delete
-        #endregion
-
-        #region TODO: count
         #endregion
 
         #region include?
@@ -329,12 +315,6 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region TODO: scan
-        #endregion
-
-        #region TODO: succ
-        #endregion
-
         #region split
 
         // TODO: return an array of CLR strings, not mutable strings
@@ -358,12 +338,6 @@ namespace IronRuby.Builtins {
             return MutableStringOps.Split(stringCast, MutableString.Create(self, RubyEncoding.UTF8), regexp, limit);
         }
 
-        #endregion
-
-        #region TODO: strip, lstrip, rstrip
-        #endregion
-
-        #region TODO: squeeze
         #endregion
 
         #region to_i, hex, oct
@@ -415,7 +389,7 @@ namespace IronRuby.Builtins {
         #region to_f, to_s, to_str, to_clr_string, to_sym, intern
 
         [RubyMethod("to_f")]
-        public static double ToDouble(string/*!*/ self) {
+        public static double ToDouble(RubyContext/*!*/ context, string/*!*/ self) {
             // The tokenizer parses *literals*, where an underscore may sit anywhere between
             // digits and the whole string has to be consumed. #to_f is the lenient form: it
             // takes the longest valid prefix and answers 0.0 when there is none, and an
@@ -426,12 +400,12 @@ namespace IronRuby.Builtins {
             }
 
             double result;
-            if (Double.TryParse(cleaned, NumberStyles.Float, CultureInfo.InvariantCulture, out result)) {
-                return result;
+            if (!Double.TryParse(cleaned, NumberStyles.Float, CultureInfo.InvariantCulture, out result)) {
+                // Out of range: MRI answers +/-Infinity rather than failing.
+                result = cleaned[0] == '-' ? Double.NegativeInfinity : Double.PositiveInfinity;
             }
-
-            // Out of range: MRI answers +/-Infinity rather than failing.
-            return cleaned[0] == '-' ? Double.NegativeInfinity : Double.PositiveInfinity;
+            RubyOps.WarnIfFloatOutOfRange(context, cleaned, result);
+            return result;
         }
 
         /// <summary>
@@ -535,9 +509,6 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region TODO: upto
-        #endregion
-
         #region replace, reverse
 
         // Ruby replace is a mutating operation, we fallback to System.String::Replace.
@@ -556,44 +527,20 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region TODO: tr, tr_s
-        #endregion
-
-        #region TODO: ljust
-        #endregion
-
-        #region TODO: rjust
-        #endregion
-
-        #region TODO: unpack
-        #endregion
-
-        #region TODO: sum
-        #endregion
-
-        #region TODO: Encodings (1.9)
-
-        //ascii_only?
-        //bytes
-        //bytesize
-        //chars
-        //codepoints
-        //each_byte
-        //each_char
-        //each_codepoint
-        //encode
-        //encoding
-        //valid_esncoding?
-
-        #endregion
-
         #region method_missing
 
         [RubyMethod("method_missing", RubyMethodAttributes.PrivateInstance)]
         [RubyStackTraceHidden]
         public static object MethodMissing(RubyScope/*!*/ scope, BlockParam block, string/*!*/ self, [NotNull]RubySymbol/*!*/ name, params object[]/*!*/ args) {
             if (name.EndsWith('=') || name.EndsWith('!')) {
-                throw RubyExceptions.CreateTypeError("Mutating method `{0}' called for an immutable string (System::String)", name);
+                // Only a mutator that Ruby's String really defines is refused as mutating; any other
+                // name is simply undefined (#159).
+                var context = scope.RubyContext;
+                string methodName = name.ToString();
+                if (context.GetClass(typeof(MutableString)).ResolveMethod(methodName, VisibilityContext.AllVisible).Found) {
+                    throw RubyExceptions.CreateTypeError("Mutating method '{0}' called for an immutable string (System::String)", name);
+                }
+                throw RubyExceptions.CreateMethodMissing(context, self, methodName);
             }
 
             // TODO: forward to MutableString until we implement the methods here:

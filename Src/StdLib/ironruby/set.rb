@@ -216,8 +216,6 @@
 #   has been modified while an element in the set.
 #
 class Set
-  VERSION = "1.1.0"
-
   include Enumerable
 
   # Creates a new set containing the given objects.
@@ -241,12 +239,12 @@ class Set
   #     Set.new(1..5)                         #=> #<Set: {1, 2, 3, 4, 5}>
   #     Set.new([1, 2, 3]) { |x| x * x }      #=> #<Set: {1, 4, 9}>
   def initialize(enum = nil, &block) # :yields: o
-    @hash ||= Hash.new(false)
+    @__hash__ ||= Hash.new(false)
 
     enum.nil? and return
 
     if block
-      do_with_enum(enum) { |o| add(block[o]) }
+      __do_with_enum__(enum) { |o| add(block[o]) }
     else
       merge(enum)
     end
@@ -255,11 +253,11 @@ class Set
   # Makes the set compare its elements by their identity and returns
   # self.  This method may not be supported by all subclasses of Set.
   def compare_by_identity
-    if @hash.respond_to?(:compare_by_identity)
-      return self if @hash.compare_by_identity?
+    if @__hash__.respond_to?(:compare_by_identity)
+      return self if @__hash__.compare_by_identity?
       __check_frozen__
-      raise RuntimeError, "compare_by_identity during iteration" if @iter_lev
-      @hash.compare_by_identity
+      raise RuntimeError, "compare_by_identity during iteration" if @__iter_lev__
+      @__hash__.compare_by_identity
       self
     else
       raise NotImplementedError, "#{self.class.name}\##{__method__} is not implemented"
@@ -269,10 +267,10 @@ class Set
   # Returns true if the set will compare its elements by their
   # identity.  Also see Set#compare_by_identity.
   def compare_by_identity?
-    @hash.respond_to?(:compare_by_identity?) && @hash.compare_by_identity?
+    @__hash__.respond_to?(:compare_by_identity?) && @__hash__.compare_by_identity?
   end
 
-  def do_with_enum(enum, &block) # :nodoc:
+  def __do_with_enum__(enum, &block) # :nodoc:
     if enum.respond_to?(:each_entry)
       enum.each_entry(&block) if block
     elsif enum.respond_to?(:each)
@@ -281,7 +279,7 @@ class Set
       raise ArgumentError, "value must be enumerable"
     end
   end
-  private :do_with_enum
+  private :__do_with_enum__
 
   # Ruby 4.0's core Set names itself, not its table, when frozen:
   # "can't modify frozen Set: Set[1]".
@@ -291,34 +289,34 @@ class Set
   private :__check_frozen__
 
   # Dup internal hash.
-  def initialize_dup(orig)
+  def initialize_copy(orig)
     super
-    @hash = orig.instance_variable_get(:@hash).dup
+    @__hash__ = orig.__send__(:__ir_hidden_ivar__, :@__hash__).dup
     # a copy taken inside #each is not itself being iterated
-    remove_instance_variable(:@iter_lev) if defined?(@iter_lev)
+    @__iter_lev__ = nil if @__iter_lev__
   end
 
   # Clone internal hash.
   def initialize_clone(orig, **options)
     super
-    @hash = orig.instance_variable_get(:@hash).clone(**options)
-    remove_instance_variable(:@iter_lev) if defined?(@iter_lev) && !frozen?
+    @__hash__ = orig.__send__(:__ir_hidden_ivar__, :@__hash__).clone(**options)
+    @__iter_lev__ = nil if @__iter_lev__ && !frozen?
   end
 
   def freeze    # :nodoc:
-    @hash.freeze
+    @__hash__.freeze
     super
   end
 
   # Returns the number of elements.
   def size
-    @hash.size
+    @__hash__.size
   end
   alias length size
 
   # Returns true if the set contains no elements.
   def empty?
-    @hash.empty?
+    @__hash__.empty?
   end
 
   # Removes all elements and returns self.
@@ -328,7 +326,7 @@ class Set
   #     set                               #=> #<Set: {}>
   def clear
     __check_frozen__
-    @hash.clear
+    @__hash__.clear
     self
   end
 
@@ -340,12 +338,12 @@ class Set
   #     set                               #=> #<Set: {1, 2}>
   def replace(enum)
     __check_frozen__
-    raise RuntimeError, "cannot replace set during iteration" if @iter_lev
+    raise RuntimeError, "cannot replace set during iteration" if @__iter_lev__
     if enum.instance_of?(self.class)
-      @hash.replace(enum.instance_variable_get(:@hash))
+      @__hash__.replace(enum.__send__(:__ir_hidden_ivar__, :@__hash__))
       self
     else
-      do_with_enum(enum)  # make sure enum is enumerable before calling clear
+      __do_with_enum__(enum)  # make sure enum is enumerable before calling clear
       clear
       merge(enum)
     end
@@ -356,7 +354,7 @@ class Set
   #     Set[1, 2].to_a                    #=> [1, 2]
   #     Set[1, 'c', :s].to_a              #=> [1, "c", :s]
   def to_a
-    @hash.keys
+    @__hash__.keys
   end
 
   # Returns self if no arguments are given.  Otherwise, converts the
@@ -369,7 +367,7 @@ class Set
     klass.new(self, *args, &block)
   end
 
-  def flatten_merge(set, seen = Set.new) # :nodoc:
+  def __flatten_merge__(set, seen = Set.new) # :nodoc:
     set.each { |e|
       if e.is_a?(Set)
         if seen.include?(e_id = e.object_id)
@@ -377,7 +375,7 @@ class Set
         end
 
         seen.add(e_id)
-        flatten_merge(e, seen)
+        __flatten_merge__(e, seen)
         seen.delete(e_id)
       else
         add(e)
@@ -386,12 +384,12 @@ class Set
 
     self
   end
-  protected :flatten_merge
+  protected :__flatten_merge__
 
   # Returns a new set that is a copy of the set, flattening each
   # containing set recursively.
   def flatten
-    self.class.new.flatten_merge(self)
+    self.class.new.__flatten_merge__(self)
   end
 
   # Equivalent to Set#flatten, but replaces the receiver with the
@@ -407,15 +405,15 @@ class Set
   #
   # See also Enumerable#include?
   def include?(o)
-    @hash[o]
+    @__hash__[o]
   end
   alias member? include?
 
   # Returns true if the set is a superset of the given set.
   def superset?(set)
     case
-    when set.instance_of?(self.class) && @hash.respond_to?(:>=)
-      @hash >= set.instance_variable_get(:@hash)
+    when set.instance_of?(self.class) && @__hash__.respond_to?(:>=)
+      @__hash__ >= set.__send__(:__ir_hidden_ivar__, :@__hash__)
     when set.is_a?(Set)
       size >= set.size && set.all?(self)
     else
@@ -427,8 +425,8 @@ class Set
   # Returns true if the set is a proper superset of the given set.
   def proper_superset?(set)
     case
-    when set.instance_of?(self.class) && @hash.respond_to?(:>)
-      @hash > set.instance_variable_get(:@hash)
+    when set.instance_of?(self.class) && @__hash__.respond_to?(:>)
+      @__hash__ > set.__send__(:__ir_hidden_ivar__, :@__hash__)
     when set.is_a?(Set)
       size > set.size && set.all?(self)
     else
@@ -440,8 +438,8 @@ class Set
   # Returns true if the set is a subset of the given set.
   def subset?(set)
     case
-    when set.instance_of?(self.class) && @hash.respond_to?(:<=)
-      @hash <= set.instance_variable_get(:@hash)
+    when set.instance_of?(self.class) && @__hash__.respond_to?(:<=)
+      @__hash__ <= set.__send__(:__ir_hidden_ivar__, :@__hash__)
     when set.is_a?(Set)
       size <= set.size && all?(set)
     else
@@ -453,8 +451,8 @@ class Set
   # Returns true if the set is a proper subset of the given set.
   def proper_subset?(set)
     case
-    when set.instance_of?(self.class) && @hash.respond_to?(:<)
-      @hash < set.instance_variable_get(:@hash)
+    when set.instance_of?(self.class) && @__hash__.respond_to?(:<)
+      @__hash__ < set.__send__(:__ir_hidden_ivar__, :@__hash__)
     when set.is_a?(Set)
       size < set.size && all?(set)
     else
@@ -513,22 +511,22 @@ class Set
   # the element as parameter.  Returns an enumerator if no block is
   # given.
   #
-  # Like MRI, the set counts the iterations running over it (@iter_lev) so
+  # Like MRI, the set counts the iterations running over it (@__iter_lev__) so
   # that adding a new element, merging or replacing meanwhile raises.
   def each(&block)
     block_given? or return enum_for(__method__) { size }
-    return @hash.each_key(&block) && self if frozen?
+    return @__hash__.each_key(&block) && self if frozen?
 
-    @iter_lev = (@iter_lev || 0) + 1
+    @__iter_lev__ = (@__iter_lev__ || 0) + 1
     begin
-      @hash.each_key(&block)
+      @__hash__.each_key(&block)
     ensure
       # a set frozen inside the block keeps the count; it cannot change anyway
       unless frozen?
-        if @iter_lev > 1
-          @iter_lev -= 1
+        if @__iter_lev__ > 1
+          @__iter_lev__ -= 1
         else
-          remove_instance_variable(:@iter_lev)
+          @__iter_lev__ = nil
         end
       end
     end
@@ -543,10 +541,10 @@ class Set
   #     Set[1, 2].add(2)                    #=> #<Set: {1, 2}>
   def add(o)
     __check_frozen__
-    if @iter_lev && !@hash.key?(o)
+    if @__iter_lev__ && !@__hash__.key?(o)
       raise RuntimeError, "can't add a new item into set during iteration"
     end
-    @hash[o] = true
+    @__hash__[o] = true
     self
   end
   alias << add
@@ -565,7 +563,7 @@ class Set
   # `subtract` to delete many items at once.
   def delete(o)
     __check_frozen__
-    @hash.delete(o)
+    @__hash__.delete(o)
     self
   end
 
@@ -581,9 +579,9 @@ class Set
   def delete_if
     block_given? or return enum_for(__method__) { size }
     __check_frozen__
-    # @hash.delete_if should be faster, but using it breaks the order
+    # @__hash__.delete_if should be faster, but using it breaks the order
     # of enumeration in subclasses.
-    select { |o| yield o }.each { |o| @hash.delete(o) }
+    select { |o| yield o }.each { |o| @__hash__.delete(o) }
     self
   end
 
@@ -593,9 +591,9 @@ class Set
   def keep_if
     block_given? or return enum_for(__method__) { size }
     __check_frozen__
-    # @hash.keep_if should be faster, but using it breaks the order of
+    # @__hash__.keep_if should be faster, but using it breaks the order of
     # enumeration in subclasses.
-    reject { |o| yield o }.each { |o| @hash.delete(o) }
+    reject { |o| yield o }.each { |o| @__hash__.delete(o) }
     self
   end
 
@@ -635,12 +633,12 @@ class Set
   # returns self.
   def merge(*enums, **nil)
     __check_frozen__
-    raise RuntimeError, "cannot add to set during iteration" if @iter_lev
+    raise RuntimeError, "cannot add to set during iteration" if @__iter_lev__
     enums.each do |enum|
       if enum.instance_of?(self.class)
-        @hash.update(enum.instance_variable_get(:@hash))
+        @__hash__.update(enum.__send__(:__ir_hidden_ivar__, :@__hash__))
       else
-        do_with_enum(enum) { |o| add(o) }
+        __do_with_enum__(enum) { |o| add(o) }
       end
     end
 
@@ -651,7 +649,7 @@ class Set
   # and returns self.
   def subtract(enum)
     __check_frozen__
-    do_with_enum(enum) { |o| delete(o) }
+    __do_with_enum__(enum) { |o| delete(o) }
     self
   end
 
@@ -690,7 +688,7 @@ class Set
         enum.each { |o| n.add(o) if include?(o) }
       end
     else
-      do_with_enum(enum) { |o| n.add(o) if include?(o) }
+      __do_with_enum__(enum) { |o| n.add(o) if include?(o) }
     end
     n
   end
@@ -723,16 +721,16 @@ class Set
     if self.equal?(other)
       true
     elsif other.instance_of?(self.class)
-      @hash == other.instance_variable_get(:@hash)
+      @__hash__ == other.__send__(:__ir_hidden_ivar__, :@__hash__)
     elsif other.is_a?(Set) && self.size == other.size
-      other.all? { |o| @hash.include?(o) }
+      other.all? { |o| @__hash__.include?(o) }
     else
       false
     end
   end
 
   def hash      # :nodoc:
-    @hash.hash
+    @__hash__.hash
   end
 
   # Ruby 4.0 made #eql? the same method as #==, not merely one that agrees with it.
@@ -744,9 +742,9 @@ class Set
   # Elements will be reindexed and deduplicated.
   def reset
     __check_frozen__
-    raise RuntimeError, "reset during iteration" if @iter_lev
-    if @hash.respond_to?(:rehash)
-      @hash.rehash # This should perform frozenness check.
+    raise RuntimeError, "reset during iteration" if @__iter_lev__
+    if @__hash__.respond_to?(:rehash)
+      @__hash__.rehash # This should perform frozenness check.
     else
       raise FrozenError.new("can't modify frozen #{self.class}: #{inspect}", receiver: self) if frozen?
     end
@@ -855,21 +853,23 @@ class Set
   end
 
   InspectKey = :__inspect_key__         # :nodoc:
+  __hide_constant__ :InspectKey
 
   # Ruby 4.0 made Set a core class and gave it the literal-looking form
-  # "Set[1, 2]"; a subclass keeps the older "#<MySet: {1, 2}>".
+  # "Set[1, 2]"; a subclass keeps the older "#<MySet: {1, 2}>", unless it is one of
+  # Set::CoreSet, which has the core behaviour ("MySet[1, 2]").
   def inspect
     ids = (Thread.current[InspectKey] ||= [])
-    plain = instance_of?(::Set)
+    plain = __core_set__?
 
     if ids.include?(object_id)
-      return plain ? 'Set[...]' : sprintf('#<%s: {...}>', self.class.name)
+      return plain ? "#{self.class}[...]" : sprintf('#<%s: {...}>', self.class.name)
     end
 
     ids << object_id
     begin
       body = to_a.inspect[1..-2]
-      return plain ? sprintf('Set[%s]', body) : sprintf('#<%s: {%s}>', self.class, body)
+      return plain ? "#{self.class}[#{body}]" : sprintf('#<%s: {%s}>', self.class, body)
     ensure
       ids.pop
     end
@@ -880,8 +880,8 @@ class Set
   # Set itself pretty-prints in the Ruby 4.0 "Set[...]" form, subclasses in
   # the older one, as #inspect does.
   def pretty_print(pp)  # :nodoc:
-    if instance_of?(::Set)
-      return pp.group(1, 'Set[', ']') {
+    if __core_set__?
+      return pp.group(1, "#{self.class}[", ']') {
         pp.seplist(self) { |o|
           pp.pp o
         }
@@ -899,9 +899,19 @@ class Set
   end
 
   def pretty_print_cycle(pp)    # :nodoc:
-    return pp.text(empty? ? 'Set[]' : 'Set[...]') if instance_of?(::Set)
+    return pp.text(empty? ? "#{self.class}[]" : "#{self.class}[...]") if __core_set__?
     pp.text sprintf('#<%s: {%s}>', self.class.name, empty? ? '' : '...')
   end
+
+  def __core_set__? # :nodoc:
+    instance_of?(::Set) || is_a?(CoreSet)
+  end
+  private :__core_set__?
+
+  # In Ruby 4.0 a direct subclass of the core Set is given Set::SubclassCompatible, the
+  # behaviour of the pure-Ruby Set before it, while a subclass of CoreSet keeps the core
+  # behaviour. IronRuby's Set is that pure-Ruby Set, so only #inspect tells them apart.
+  class CoreSet < Set; end
 end
 
 module Enumerable
@@ -911,5 +921,3 @@ module Enumerable
     klass.new(self, *args, &block)
   end unless method_defined?(:to_set)
 end
-
-autoload :SortedSet, "#{__dir__}/set/sorted_set"

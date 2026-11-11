@@ -22,12 +22,11 @@ using Microsoft.Scripting.Utils;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Runtime.Calls {
-    using AstFactory = IronRuby.Compiler.Ast.AstFactory;
 
     public abstract class RubyAttributeAccessorInfo : RubyMemberInfo {
         private readonly string/*!*/ _instanceVariableName;
 
-        protected string/*!*/ InstanceVariableName { get { return _instanceVariableName; } }
+        protected internal string/*!*/ InstanceVariableName { get { return _instanceVariableName; } }
 
         protected RubyAttributeAccessorInfo(RubyMemberFlags flags, RubyModule/*!*/ declaringModule, string/*!*/ variableName)
             : base(flags, declaringModule) {
@@ -64,7 +63,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public override MemberInfo/*!*/[]/*!*/ GetMembers() {
-            return Utils.EmptyMemberInfos;
+            return Array.Empty<MemberInfo>();
         }
     }
 
@@ -127,7 +126,8 @@ namespace IronRuby.Runtime.Calls {
         internal override void BuildCallNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ name) {
             var actualArgs = RubyOverloadResolver.NormalizeArguments(metaBuilder, args, 1, 1);
             if (!metaBuilder.Error) {
-                metaBuilder.Result = Methods.SetInstanceVariable.OpCall(
+                // the value is a positional argument, even a Hash passed as keywords (a.send(:x=, k: 1)): kept, it stops saying so
+                metaBuilder.Result = Methods.SetAttribute.OpCall(
                     AstUtils.Box(args.TargetExpression),
                     AstUtils.Box(actualArgs[0].Expression),
                     AstUtils.Convert(args.MetaScope.Expression, typeof(RubyScope)),

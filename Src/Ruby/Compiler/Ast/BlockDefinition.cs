@@ -13,21 +13,17 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
-using System.Collections.ObjectModel;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
+
+using IronRuby.Runtime.Osr;
 
 namespace IronRuby.Compiler.Ast {
     using Ast = MSA.Expression;
@@ -172,28 +168,34 @@ namespace IronRuby.Compiler.Ast {
                 scopeVariable,
                 redoLabel
             );
+            gen.CurrentBlock.LexicalDepth = _definedScope.Depth;
 
+            // the binding of the parameters is one assignment of each, whatever it takes to make it
+            gen.BindingParameters = true;
             MSA.Expression paramInit = MakeParametersInitialization(gen, parameters);
-            MSA.ParameterExpression blockUnwinder, filterVariable;
+            gen.BindingParameters = false;
+            gen.CountParameterAssignments(_parameters);
+            MSA.ParameterExpression blockUnwinder;
 
-            MSA.Expression traceCall, traceReturn;
-			if (gen.TraceEnabled) {
-                int firstStatementLine = _body.Count > 0 ? _body.First.Location.Start.Line : Location.End.Line;
-                int lastStatementLine = _body.Count > 0 ? _body.Last.Location.End.Line : Location.End.Line;
-
-                traceCall = Methods.TraceBlockCall.OpCall(scopeVariable, blockParameter, gen.SourcePathConstant, AstUtils.Constant(firstStatementLine));
-                traceReturn = Methods.TraceBlockReturn.OpCall(scopeVariable, blockParameter, gen.SourcePathConstant, AstUtils.Constant(lastStatementLine));
-            } else {
-                traceCall = traceReturn = Ast.Empty();
+            // `do ... rescue ... end`: the entry safe point goes inside the rescued statements, so that a
+            // Thread#raise that came in between two calls of the block meets the rescue (see
+            // RubyOps.CreateBlockScopeSafePointInBody).
+            Body rescuedBody = (_body.Count == 1) ? _body.First as Body : null;
+            bool safePointInBody = rescuedBody != null && rescuedBody.HasRescue;
+            if (safePointInBody) {
+                rescuedBody.SafePointFirst = true;
             }
 
             MSA.Expression statements = gen.TransformStatements(_body, ResultOperation.Return);
             bool hasNestedReturn = gen.CurrentBlock.HasNestedReturn;
+            var outerVariables = gen.CurrentBlock.OuterVariables;
+            var outerVariableAssignments = gen.CurrentBlock.OuterVariableAssignments;
+            var assignedOuterVariables = gen.CurrentBlock.AssignedOuterVariables;
 
             // A body that never uses its scope - { }, { |x| x } - has no use for the RubyBlockScope
             // every invocation would allocate, except to hand to the TracePoint hooks, which only
             // evaluate their scope while a TracePoint listens: there it is made on demand.
-            MSA.Expression lazyScope = null, filterScope = scopeVariable;
+            MSA.Expression lazyScope = null;
             if (!hasNestedReturn && !gen.TraceEnabled && !gen.CompilerOptions.IsEval && !scope.HasClosures && IsScopeFreeBody()) {
                 var names = scope.GetVariableNamesExpression();
                 Func<MSA.Expression> makeScope = () => Methods.CreateBlockScopeLazy.OpCall(
@@ -207,7 +209,6 @@ namespace IronRuby.Compiler.Ast {
                     paramInit = lazyParamInit;
                     statements = lazyStatements;
                     lazyScope = lazy;
-                    filterScope = Ast.Coalesce(scopeVariable, makeScope());
                 }
             }
 
@@ -225,7 +226,8 @@ namespace IronRuby.Compiler.Ast {
             if (hasNestedReturn) {
                 // a return in a nested block leaves this block if it runs as a lambda, however it was invoked:
                 MSA.ParameterExpression lambdaUnwinder;
-                bodyTry = bodyTry.Filter(lambdaUnwinder = Ast.Parameter(typeof(Exception), "#lu"),
+                // a LambdaUnwinder only (IsLambdaScopeUnwinderTarget), so that nothing else is caught on its way (see Proc.BuildCall)
+                bodyTry = bodyTry.Filter(lambdaUnwinder = Ast.Parameter(typeof(LambdaUnwinder), "#lu"),
                     Methods.IsLambdaScopeUnwinderTarget.OpCall(scopeVariable, lambdaUnwinder),
                     gen.Return(Methods.GetLambdaUnwinderReturnValue.OpCall(lambdaUnwinder))
                 );
@@ -235,17 +237,17 @@ namespace IronRuby.Compiler.Ast {
                 enterNestedReturn = leaveNestedReturn = Ast.Empty();
             }
 
+            // No handler for the exceptions that leave the block: it used to have one whose filter captured
+            // their backtrace, but a filter is a catch and a rethrow, a CLR exception dispatch of its own per
+            // block an exception leaves (see MethodDefinition.TransformBody, which does the same).
             MSA.Expression body = AstUtils.Try(
                 enterNestedReturn,
                 paramInit,
-                traceCall,
                 Ast.Label(redoLabel),
                 bodyTry
-            ).Filter(filterVariable = Ast.Parameter(typeof(Exception), "#e"),
-                Methods.FilterBlockException.OpCall(filterScope, filterVariable)
             ).Finally(
-                traceReturn,
                 leaveNestedReturn,
+                Methods.ReleaseScopeFrame.OpCall(scopeVariable),
                 Ast.Empty()
             );
 
@@ -279,7 +281,7 @@ namespace IronRuby.Compiler.Ast {
                 // the scope to reuse is taken first, its tuple from it (see RubyOps.TakeReusableBlockScope)
                 var reusableScope = scope.DefineHiddenVariable("#reusable", typeof(RubyBlockScope));
                 enterScope = Methods.CreateReusableBlockScope.OpCall(new AstExpressions {
-                    scope.MakeReusableLocalsStorage(blockParameter, reusableScope),
+                    scope.MakeReusableLocalsStorage(blockParameter, reusableScope, safePointInBody),
                     scope.GetVariableNamesExpression(),
                     blockParameter,
                     selfParameter,
@@ -287,7 +289,8 @@ namespace IronRuby.Compiler.Ast {
                     reusableScope
                 });
             } else {
-                enterScope = (lazyScope != null ? Methods.CreateBlockScopeIfTraced : Methods.CreateBlockScope).OpCall(new AstExpressions {
+                enterScope = (lazyScope != null ? Methods.CreateBlockScopeIfTraced :
+                    safePointInBody ? Methods.CreateBlockScopeSafePointInBody : Methods.CreateBlockScope).OpCall(new AstExpressions {
                     scope.MakeLocalsStorage(),
                     scope.GetVariableNamesExpression(),
                     blockParameter, 
@@ -309,15 +312,27 @@ namespace IronRuby.Compiler.Ast {
 
             var blockDispatcher = BlockDispatcher.Create(parameterCount, PostParameterCount, attributes, gen.SourcePath, Location.Start.Line);
             blockDispatcher.ParameterSignature = _parameters.Signature;
+            if (outerVariables != null) {
+                blockDispatcher.OuterVariableNames = outerVariables.ToArray();
+                blockDispatcher.AssignedOuterVariableNames = assignedOuterVariables?.ToArray();
+                blockDispatcher.OuterVariableAssignments = outerVariableAssignments.ToArray();
+            }
+            if (!isLambda && gen.CanReplaceLoops) {
+                // -X:OSR: `n.times { }', `a.each { }' and the like run their loop in C#; a block that
+                // can be is outlined into that loop once it is hot (BlockLoopSite)
+                blockDispatcher.LoopInfo = BlockLoopInfo.TryCreate(this, gen.Context, _definedScope.Depth,
+                    gen.SourcePath + ":" + Location.Start.Line);
+            }
 
             var dispatcher = Ast.Constant(blockDispatcher, typeof(BlockDispatcher));
+            string encodedName = RubyStackTraceBuilder.EncodeMethodName(BlockFrameLabel(gen), gen.SourcePath, Location, gen.DebugMode);
 
             return Ast.Coalesce(
                 (isLambda ? Methods.InstantiateLambda : Methods.InstantiateBlock).OpCall(gen.CurrentScopeVariable, gen.CurrentSelfVariable, dispatcher),
                 (isLambda ? Methods.DefineLambda : Methods.DefineBlock).OpCall(gen.CurrentScopeVariable, gen.CurrentSelfVariable, dispatcher,
                     BlockDispatcher.CreateLambda(
-                        body,
-                        RubyStackTraceBuilder.EncodeMethodName(BlockFrameLabel(gen), gen.SourcePath, Location, gen.DebugMode),
+                        new CompiledFrameExpression(body, encodedName, Location.Start.Line),
+                        encodedName,
                         parameters,
                         parameterCount,
                         PostParameterCount,
@@ -426,6 +441,12 @@ namespace IronRuby.Compiler.Ast {
                         _inTraceHook--;
                     }
                 }
+                if (node is SourceLineMarker) {
+                    return node;
+                }
+                if (node is CompiledFrameExpression) {
+                    return base.VisitExtension(node);
+                }
                 NeedsScope = true;
                 return node;
             }
@@ -433,6 +454,13 @@ namespace IronRuby.Compiler.Ast {
 
         private MSA.Expression/*!*/ GetParameterAccess(AstParameters/*!*/ parameters, MSA.Expression paramsArray, int i) {
             return (paramsArray != null) ? (MSA.Expression)Ast.ArrayAccess(paramsArray, AstUtils.Constant(i)) : parameters[HiddenParameterCount + i];
+        }
+
+        private MSA.Expression/*!*/ GetPositionalParameterAccess(AstParameters/*!*/ parameters, MSA.Expression paramsArray, int i, bool clearsKeywords) {
+            var access = GetParameterAccess(parameters, paramsArray, i);
+            // the call only for a Hash (exactly, see RubyOps.ClearKeywordArguments): the test is all an argument of any other
+            // class costs
+            return clearsKeywords ? Ast.Condition(Ast.TypeEqual(access, typeof(Hash)), Methods.ClearKeywordArguments.OpCall(access), access) : access;
         }
 
         private MSA.Expression/*!*/ MakeParametersInitialization(AstGenerator/*!*/ gen, AstParameters/*!*/ parameters) {
@@ -448,15 +476,22 @@ namespace IronRuby.Compiler.Ast {
 
             var paramsArray = HasFormalParametersInArray ? parameters[HiddenParameterCount] : null;
 
+            // A block that declares no keywords takes a Hash passed as keywords (yield(a: 1)) as a positional argument, which
+            // it may keep: it stops saying it is keyword arguments, as for a method (RubyOps.ClearKeywordArguments). The
+            // dispatcher of a block with few plain parameters does that before the call (BlockDispatcher.Positional).
+            var signature = _parameters.Signature;
+            bool clearsKeywords = signature != null && !signature.TakesKeywords && !signature.RefusesKeywords &&
+                !BlockDispatcher.UnmarksKeywordArguments(ParameterCount, PostParameterCount, _parameters.GetBlockSignatureAttributes());
+
             int parameterIndex = 0;
             for (int i = 0; i < _parameters.Mandatory.Length; i++) {
-                result.Add(_parameters.Mandatory[i].TransformWrite(gen, GetParameterAccess(parameters, paramsArray, parameterIndex)));
+                result.Add(_parameters.Mandatory[i].TransformWrite(gen, GetPositionalParameterAccess(parameters, paramsArray, parameterIndex, clearsKeywords)));
                 parameterIndex++;
             }
 
             if (_parameters.Optional.Length > 0) {
                 for (int i = 0; i < _parameters.Optional.Length; i++) {
-                    result.Add(_parameters.Optional[i].Left.TransformWrite(gen, GetParameterAccess(parameters, paramsArray, parameterIndex)));
+                    result.Add(_parameters.Optional[i].Left.TransformWrite(gen, GetPositionalParameterAccess(parameters, paramsArray, parameterIndex, clearsKeywords)));
                     parameterIndex++;
                 }
                 result.Add(_parameters.TransformOptionalsInitialization(gen));

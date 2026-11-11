@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -35,6 +31,7 @@ using Microsoft.Scripting;
 using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
+using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Actions.Calls;
 using IronRuby.Runtime.Conversions;
 
@@ -42,6 +39,20 @@ namespace IronRuby.Runtime {
     using EvalEntryPointDelegate = Func<RubyScope, object, RubyModule, Proc, object>;
 
     public static class RubyUtils {
+        #region Threads
+
+        /// <summary>
+        /// The stack a thread that runs Ruby code is given: a Thread.new thread, and on Windows the thread ir runs the
+        /// program on (#129). A Ruby call takes a CLR frame or several, so how deep a recursion goes before it is a
+        /// SystemStackError is how big the stack is. A Linux or macOS process's main thread has 8 MB (ulimit -s), but
+        /// Windows gives a main thread 1 MB and other threads 1.5 MB, where a recursion went a seventh as deep as in
+        /// CRuby, whose depth its own VM stack bounds. The memory is reserved, and committed only as deep as the
+        /// recursion goes.
+        /// </summary>
+        public const int ThreadStackSize = 8 * 1024 * 1024;
+
+        #endregion
+
         #region Objects
 
         public static readonly int FalseObjectId = 0;
@@ -51,7 +62,9 @@ namespace IronRuby.Runtime {
         // MRI seeds the hash of immediate values with a random per-process key (CVE-2011-4815), so
         // an attacker cannot precompute colliding keys. Integer and Float hashes are mixed with it;
         // String and Symbol hashes already come from .NET's randomized string hashing.
-        private static readonly uint _hashSeed = (uint)System.Security.Cryptography.RandomNumberGenerator.GetInt32(Int32.MinValue, Int32.MaxValue);
+        // Random.Shared is seeded from the OS (getrandom/arc4random), as that string hashing is; the
+        // cryptographic generator gave no stronger key for this and loading it (OpenSSL) cost ~8 ms of startup.
+        private static readonly uint _hashSeed = (uint)Random.Shared.Next(Int32.MinValue, Int32.MaxValue);
 
         private static int MixHash(uint h) {
             unchecked {
@@ -111,11 +124,10 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
-        /// The object maintains a state (frozen, tainted flags and instance variables).
+        /// The object maintains a state (frozen flag and instance variables).
         /// <code>
         /// obj.instance_variable_set(:@foo, 'bar')
         /// puts obj.instance_variable_get(:@foo)     # => 'bar'
-        /// puts obj.taint.tainted?                   # => true
         /// </code>
         /// </summary>
         public static bool HasObjectState(object obj) {
@@ -171,24 +183,27 @@ namespace IronRuby.Runtime {
         /// Ruby 4.0 lets an object name the instance variables its #inspect shows, by answering an
         /// array of names from a private #instance_variables_to_inspect. A name that the object
         /// does not have is simply not shown; nil means "all of them", and anything else is an
-        /// error. Objects that do not define the method at all - which is nearly all of them -
-        /// pay one method lookup.
+        /// error. Objects that do not define the method - which is nearly all of them, they have
+        /// Kernel's - pay one method lookup.
         /// </summary>
         private static IEnumerable<KeyValuePair<string, object>>/*!*/ SelectInspectedVariables(
             RubyContext/*!*/ context, object obj, IEnumerable<KeyValuePair<string, object>>/*!*/ vars) {
 
             // The runtime's own slots in the instance variable table - the finalizer that
             // ObjectSpace.define_finalizer attaches is one, spelled with angle brackets so that
-            // it cannot collide with a Ruby name - have no business in an #inspect.
+            // it cannot collide with a Ruby name - have no business in an #inspect, nor has the
+            // @__name__ state of the Ruby-written core classes.
             var visible = new List<KeyValuePair<string, object>>();
             foreach (KeyValuePair<string, object> var in vars) {
-                if (var.Key.Length == 0 || var.Key[0] != '<') {
+                if (RubyContext.IsVisibleInstanceVariableName(var.Key)) {
                     visible.Add(var);
                 }
             }
             vars = visible;
 
-            if (!context.ResolveMethod(obj, "instance_variables_to_inspect", VisibilityContext.AllVisible).Found) {
+            // Kernel's own answers nil:
+            var hook = context.ResolveMethod(obj, "instance_variables_to_inspect", VisibilityContext.AllVisible);
+            if (!hook.Found || hook.Info is RubyLibraryMethodInfo && hook.Info.DeclaringModule == context.KernelModule) {
                 return vars;
             }
 
@@ -225,10 +240,6 @@ namespace IronRuby.Runtime {
 
             var context = tosConversion.Context;
             using (IDisposable handle = RubyUtils.InfiniteInspectTracker.TrackObject(obj)) {
-                if (handle == null) {
-                    return MutableString.CreateAscii("...");
-                }
-
                 MutableString str = MutableString.CreateMutable(context.GetIdentifierEncoding());
                 str.Append("#<");
                 str.Append(context.GetClassDisplayName(obj));
@@ -236,6 +247,11 @@ namespace IronRuby.Runtime {
                 // Ruby prints 2*object_id for objects
                 str.Append(':');
                 AppendFormatHexObjectId(str, GetObjectId(context, obj));
+
+                // an object met again inside its own inspect: MRI's rb_obj_inspect gives "#<Foo:0x... ...>"
+                if (handle == null) {
+                    return str.Append(" ...>");
+                }
 
                 RubyInstanceData data = context.TryGetInstanceData(obj);
                 if (data != null) {
@@ -257,18 +273,15 @@ namespace IronRuby.Runtime {
 
                         var tosSite = tosConversion.GetSite(ConvertToSAction.Make(context));
                         str.Append(tosSite.Target(tosSite, inspectedValue));
-
-                        str.TaintBy(var.Value, context);
                     }
                 }
                 str.Append(">");
 
-                str.TaintBy(obj, context);
                 return str;
             }
         }
 
-        public static MutableString/*!*/ FormatObjectPrefix(RubyContext/*!*/ context, string/*!*/ className, long objectId, bool isTainted, bool isUntrusted) {
+        public static MutableString/*!*/ FormatObjectPrefix(RubyContext/*!*/ context, string/*!*/ className, long objectId) {
             MutableString str = MutableString.CreateMutable(context.GetIdentifierEncoding());
             str.Append("#<");
             str.Append(className);
@@ -276,30 +289,23 @@ namespace IronRuby.Runtime {
             // Ruby prints 2*object_id for objects
             str.Append(':');
             AppendFormatHexObjectId(str, objectId);
-
-            str.IsTainted |= isTainted;
-            str.IsUntrusted |= isUntrusted;
             return str;
         }
 
-        public static MutableString/*!*/ FormatObject(RubyContext/*!*/ context, string/*!*/ className, long objectId, bool isTainted, bool isUntrusted) {
-            return FormatObjectPrefix(context, className, objectId, isTainted, isUntrusted).Append(">");
+        public static MutableString/*!*/ FormatObject(RubyContext/*!*/ context, string/*!*/ className, long objectId) {
+            return FormatObjectPrefix(context, className, objectId).Append(">");
         }
 
         public static MutableString/*!*/ ObjectToMutableString(RubyContext/*!*/ context, object obj) {
-            bool tainted, untrusted;
-            context.GetObjectTrust(obj, out tainted, out untrusted);
-            return FormatObject(context, context.GetClassDisplayName(obj), GetObjectId(context, obj), tainted, untrusted);
+            return FormatObject(context, context.GetClassDisplayName(obj), GetObjectId(context, obj));
         }
 
         public static MutableString/*!*/ ObjectToMutableStringPrefix(RubyContext/*!*/ context, object obj) {
-            bool tainted, untrusted;
-            context.GetObjectTrust(obj, out tainted, out untrusted);
-            return FormatObjectPrefix(context, context.GetClassDisplayName(obj), GetObjectId(context, obj), tainted, untrusted);
+            return FormatObjectPrefix(context, context.GetClassDisplayName(obj), GetObjectId(context, obj));
         }
 
         public static MutableString/*!*/ AppendFormatHexObjectId(MutableString/*!*/ str, long objectId) {
-            return str.AppendFormat("0x{0:x7}", 2 * objectId);
+            return str.AppendFormat("0x{0:x16}", 2 * objectId);
         }
 
         public static MutableString/*!*/ ObjectToMutableString(IRubyObject/*!*/ self) {
@@ -309,9 +315,7 @@ namespace IronRuby.Runtime {
                 // an anonymous class has no Name to print, and MRI does not leave a blank there:
                 // it uses how the class describes itself, "#<#<Class:0x...>:0x...>"
                 self.ImmediateClass.GetNonSingletonClass().GetNonNullName(context),
-                self.GetInstanceData().ObjectId, 
-                self.IsTainted,
-                self.IsUntrusted
+                self.GetInstanceData().ObjectId
             );
         }
 
@@ -649,9 +653,7 @@ namespace IronRuby.Runtime {
             "public_methods",
             "send",
             "singleton_methods",
-            "taint",
             // "type", Kernel#type is deprecated
-            "untaint",
         };
 
         internal static readonly HashSet<string> NotMangledObject = new HashSet<string>() {
@@ -678,9 +680,7 @@ namespace IronRuby.Runtime {
             "PublicMethods",
             "Send",
             "SingletonMethods",
-            "Taint",
             // "Type", Kernel#type is deprecated
-            "Untaint",
         };
 
         public static void CheckConstantName(string name) {
@@ -691,7 +691,7 @@ namespace IronRuby.Runtime {
 
         public static void CheckClassVariableName(string name) {
             if (!Tokenizer.IsClassVariableName(name)) {
-                throw RubyExceptions.CreateNameError(String.Format("`{0}' is not allowed as a class variable name", name));
+                throw RubyExceptions.CreateNameError(String.Format("'{0}' is not allowed as a class variable name", name));
             }
         }
 
@@ -702,6 +702,48 @@ namespace IronRuby.Runtime {
         /// </summary>
         public static string/*!*/ GetHiddenInstanceVariableName(string/*!*/ name) {
             return "<ir>" + name;
+        }
+
+        // Library files outside the core (RubyStackTraceBuilder.IsInternalFile) that stand in for a C
+        // extension and keep their objects' state the same way.
+        private static readonly string[]/*!*/ _HiddenStateLibraryFiles = {
+            "/ironruby/coverage.rb", "/ironruby/json.rb", "/ironruby/io/console.rb",
+        };
+
+        /// <summary>
+        /// True for the Ruby-written parts of IronRuby whose @__name__ instance variables are their own
+        /// state - what MRI keeps in a C struct - rather than the object's (see <see cref="GetCoreStateInstanceVariableName"/>).
+        /// </summary>
+        public static bool KeepsHiddenState(string path) {
+            if (path == null) {
+                return false;
+            }
+            if (RubyStackTraceBuilder.IsInternalFile(path)) {
+                return true;
+            }
+            path = path.Replace('\\', '/');
+            foreach (var suffix in _HiddenStateLibraryFiles) {
+                if (path.EndsWith(suffix, StringComparison.Ordinal)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// The name an @__name__ instance variable written in the Ruby-written core (<see cref="KeepsHiddenState"/>)
+        /// is kept under: a hidden one (<see cref="GetHiddenInstanceVariableName"/>), so that #instance_variables,
+        /// #inspect and Marshal do not see it - MRI keeps that state in C - while the same spelling in any other
+        /// code is an ordinary instance variable, as it is in MRI (gems use @__memoized__, @__Lock__ and the like).
+        /// C# code and the core's reflective calls (__ir_hidden_ivar__) reach it by this name too.
+        /// </summary>
+        public static string/*!*/ GetCoreStateInstanceVariableName(string/*!*/ name) {
+            Debug.Assert(IsCoreStateInstanceVariableName(name));
+            return GetHiddenInstanceVariableName(name);
+        }
+
+        public static bool IsCoreStateInstanceVariableName(string/*!*/ name) {
+            return name.Length > 5 && name.StartsWith("@__", StringComparison.Ordinal) && name.EndsWith("__", StringComparison.Ordinal);
         }
 
         public static void CheckInstanceVariableName(string name) {
@@ -729,7 +771,7 @@ namespace IronRuby.Runtime {
         public static void CheckClassVariableName(RubyContext/*!*/ context, object receiver, string/*!*/ name, object nameArg) {
             if (!Tokenizer.IsClassVariableName(name)) {
                 throw RubyExceptions.WithNameAndReceiver(
-                    RubyExceptions.CreateNameError(String.Format("`{0}' is not allowed as a class variable name", name)),
+                    RubyExceptions.CreateNameError(String.Format("'{0}' is not allowed as a class variable name", name)),
                     GetVariableNameForError(context, name, nameArg), receiver);
             }
         }
@@ -780,6 +822,13 @@ namespace IronRuby.Runtime {
                 if (deprecatedOwner != null) {
                     context.ReportConstantDeprecation(deprecatedOwner, name);
                 }
+                if (context.RactorsStarted && !RactorIsolation.IsTriviallyShareable(value)) {
+                    RubyModule constantOwner;
+                    using (context.ClassHierarchyLocker()) {
+                        constantOwner = owner.GetConstantOwnerNoLock(name) ?? context.ObjectClass;
+                    }
+                    RactorIsolation.CheckConstantRead(context, constantOwner, name, value);
+                }
                 return value;
             }
 
@@ -792,6 +841,17 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
+        /// Location of the Ruby code that called the currently executing builtin from <paramref name="scope"/>:
+        /// what precompiled code noted for the call (PrecompiledCode.NoteCallLocation), else as below.
+        /// </summary>
+        public static bool TryGetCallerSourceLocation(RubyScope/*!*/ scope, out string sourcePath, out int sourceLine) {
+            if (Precompiled.PrecompiledCode.TryTakeCallLocation(scope, out sourcePath, out sourceLine)) {
+                return true;
+            }
+            return TryGetCallerSourceLocation(scope.RubyContext, out sourcePath, out sourceLine);
+        }
+
+        /// <summary>
         /// Location of the Ruby frame that called the currently executing builtin, taken from the CLR stack.
         /// Only for cold paths (Module#const_set, Module#autoload): capturing a stack trace with file info
         /// costs on the order of a millisecond.
@@ -799,6 +859,13 @@ namespace IronRuby.Runtime {
         public static bool TryGetCallerSourceLocation(RubyContext/*!*/ context, out string sourcePath, out int sourceLine) {
             sourcePath = null;
             sourceLine = 0;
+
+            // Nothing but the core prelude is running, and its frames are not in a backtrace: the
+            // interpreted frame below would be one of the prelude's, and the walk would come back
+            // empty, after ~1ms, for each of its const_set calls (Errno and Encoding make hundreds).
+            if (context.Loader.IsLoadingCorePrelude) {
+                return false;
+            }
 
             // Fast path: the interpreter's frame chain already knows where we are; a CLR stack walk
             // with file info costs ~1ms and this is called once per Module#const_set.
@@ -808,10 +875,8 @@ namespace IronRuby.Runtime {
             sourcePath = null;
             sourceLine = 0;
 
-            // Nothing but the core prelude is running, and its frames are not in a backtrace: the
-            // walk below would come back empty, after ~1ms, for each of the prelude's const_set calls
-            // (Errno and Encoding make hundreds).
-            if (context.Loader.IsLoadingCorePrelude) {
+            // Startup-library code is running, and its frames are not in a backtrace either.
+            if (Precompiled.PrecompiledCode.IsRunningOnThread) {
                 return false;
             }
 
@@ -857,6 +922,11 @@ namespace IronRuby.Runtime {
             RubyEncoding/*!*/ encoding) {
             Assert.NotNull(owner, name);
 
+            if (owner.Context.RactorsStarted) {
+                RactorIsolation.CheckConstantWrite(owner.Context, value);
+            }
+
+            bool hadLocation = owner.TryGetConstantLocation(name, out string previousPath, out int previousLine);
             owner.SetConstantLocation(name, sourcePath, sourceLine);
             owner.SetConstantEncoding(name, encoding);
 
@@ -864,6 +934,9 @@ namespace IronRuby.Runtime {
                 // MRI names the owner unless it is Object: "already initialized constant M::X",
                 // and an anonymous owner by its inspect form, "#<Module:0x...>::X"
                 owner.Context.ReportWarning("already initialized constant " + owner.MakeNestedModuleName(name));
+                if (hadLocation) {
+                    owner.Context.ReportWarningAt(previousPath, previousLine, "previous definition of " + name + " was here");
+                }
             }
 
             // Initializes anonymous module's name, publishes the module:
@@ -1050,6 +1123,12 @@ namespace IronRuby.Runtime {
         internal static RubyModule/*!*/ GetModuleFromObject(RubyScope/*!*/ scope, object obj) {
             RubyModule module = obj as RubyModule;
             if (module == null) {
+                // a type group (System::Nullable is Nullable and Nullable<T>) qualifies a constant as its non-generic member:
+                var typeGroup = obj as TypeGroup;
+                Type nonGenericType;
+                if (typeGroup != null && typeGroup.TryGetNonGenericType(out nonGenericType)) {
+                    return scope.RubyContext.GetModule(nonGenericType);
+                }
                 throw CreateNotModuleException(scope, obj);
             }
             return module;
@@ -1081,7 +1160,7 @@ namespace IronRuby.Runtime {
                 }
 
                 if (module.Context != target.Context) {
-                    throw RubyExceptions.CreateTypeError(String.Format("cannot mix a foreign module `{0}' into `{1}' (runtime mismatch)",
+                    throw RubyExceptions.CreateTypeError(String.Format("cannot mix a foreign module '{0}' into '{1}' (runtime mismatch)",
                         module.GetName(target.Context), target.GetName(module.Context)
                     ));
                 }
@@ -1108,7 +1187,7 @@ namespace IronRuby.Runtime {
                 }
 
                 if (module.Context != target.Context) {
-                    throw RubyExceptions.CreateTypeError(String.Format("cannot mix a foreign module `{0}' into `{1}' (runtime mismatch)",
+                    throw RubyExceptions.CreateTypeError(String.Format("cannot mix a foreign module '{0}' into '{1}' (runtime mismatch)",
                         module.GetName(target.Context), target.GetName(module.Context)
                     ));
                 }
@@ -1119,8 +1198,6 @@ namespace IronRuby.Runtime {
 
         #region Tracking operations that have the potential for infinite recursion
 
-        public static readonly MutableString InfiniteRecursionMarker = MutableString.CreateAscii("[...]").Freeze();
-
         public class RecursionTracker {
             // The set of objects an operation is already inside must be per thread: the
             // trackers themselves are process-wide singletons, so a Dictionary held here is
@@ -1130,31 +1207,24 @@ namespace IronRuby.Runtime {
             // comparing or inspecting arrays (RubyGems installs each gem on a thread of its
             // own) corrupted the dictionary and failed with IndexOutOfRangeException or
             // "a concurrent update was performed on this collection".
-            private readonly System.Threading.ThreadLocal<Dictionary<object, bool>>/*!*/ _infiniteTracker =
-                new System.Threading.ThreadLocal<Dictionary<object, bool>>(
-                    () => new Dictionary<object, bool>(ReferenceEqualityComparer<object>.Instance)
-                );
+            private readonly System.Threading.ThreadLocal<HashSet<object>>/*!*/ _infiniteTracker =
+                new System.Threading.ThreadLocal<HashSet<object>>(() => new HashSet<object>(ReferenceEqualityComparer.Instance));
 
-            private Dictionary<object, bool> TryPushInfinite(object obj) {
-                Dictionary<object, bool> infinite = _infiniteTracker.Value;
-                if (infinite.ContainsKey(obj)) {
-                    return null;
-                }
-                infinite.Add(obj, true);
-                return infinite;
-            }
-
+            /// <summary>
+            /// Marks <paramref name="obj"/> as being inside the operation on this thread until the result is disposed.
+            /// Null if it already is: the operation has recursed into it.
+            /// </summary>
             public IDisposable TrackObject(object obj) {
                 obj = CustomStringDictionary.NullToObj(obj);
-                Dictionary<object, bool> tracker = TryPushInfinite(obj);
-                return (tracker == null) ? null : new RecursionHandle(tracker, obj);
+                HashSet<object> tracker = _infiniteTracker.Value;
+                return tracker.Add(obj) ? new RecursionHandle(tracker, obj) : null;
             }
 
-            private class RecursionHandle : IDisposable {
-                private readonly Dictionary<object, bool>/*!*/ _tracker;
+            private sealed class RecursionHandle : IDisposable {
+                private readonly HashSet<object>/*!*/ _tracker;
                 private readonly object _obj;
 
-                internal RecursionHandle(Dictionary<object, bool>/*!*/ tracker, object obj) {
+                internal RecursionHandle(HashSet<object>/*!*/ tracker, object obj) {
                     _tracker = tracker;
                     _obj = obj;
                 }
@@ -1172,39 +1242,9 @@ namespace IronRuby.Runtime {
             get { return _infiniteInspectTracker; }
         }
 
-        [MultiRuntimeAware]
-        private static readonly RecursionTracker _infiniteToSTracker = new RecursionTracker();
-
-        public static RecursionTracker InfiniteToSTracker {
-            get { return _infiniteToSTracker; }
-        }
-
         #endregion
 
         #region Arrays, Hashes
-
-        // MRI checks for a subtype of RubyArray of subtypes of MutableString.
-        internal static RubyArray AsArrayOfStrings(object value) {
-            // a single String is a one-line backtrace
-            var single = value as MutableString;
-            if (single != null) {
-                var wrapped = new RubyArray(1);
-                wrapped.Add(single);
-                return wrapped;
-            }
-
-            RubyArray array = value as RubyArray;
-            if (array != null) {
-                foreach (object obj in array) {
-                    MutableString str = obj as MutableString;
-                    if (str == null) {
-                        return null;
-                    }
-                }
-                return array;
-            }
-            return null;
-        }
 
         public static object SetHashElement(RubyContext/*!*/ context, IDictionary<object, object>/*!*/ obj, object key, object value) {
             MutableString str = key as MutableString;
@@ -1257,15 +1297,17 @@ namespace IronRuby.Runtime {
             int blockLevels;
             string baseLabel = targetScope.GetFrameBaseLabel(out blockLevels);
 
-            return new RubyCompilerOptions(targetScope.RubyContext.RubyOptions) {
+            return new RubyCompilerOptions() {
                 IsEval = true,
                 EvalFrameBaseLabel = baseLabel,
                 EvalFrameBlockLevels = blockLevels,
                 FactoryKind = isModuleEval ? TopScopeFactoryKind.ModuleEval : TopScopeFactoryKind.None,
                 LocalNames = targetScope.GetVisibleLocalNames(),
+                IsolatedLocalNames = targetScope.GetIsolatedLocalNames(),
                 TopLevelMethodName = (methodScope != null) ? methodScope.DefinitionName : null,
                 TopLevelParameterNames = (methodScope != null) ? methodScope.GetVisibleParameterNames() : null,
                 TopLevelHasUnsplatParameter = (methodScope != null) ? methodScope.HasUnsplatParameter : false,
+                TopLevelParameterSignature = (methodScope != null) ? IronRuby.Compiler.Ast.SuperCall.GetKeywordSignature(methodScope._variableNames) : null,
                 InitialLocation = new SourceLocation(0, line <= 0 ? 1 : line, 1),
             };
         }
@@ -1349,7 +1391,8 @@ namespace IronRuby.Runtime {
                 Utils.Log(new String('-', 50), "EVAL_ERROR");
 
                 // MRI names the file and the line the error is on in front of the message, so
-                // that code which evaluated a string knows which string and where in it.
+                // that code which evaluated a string knows which string and where in it: the
+                // line the parser saw is not the one to name when eval started below line 1.
                 if (e.HasLineInfo && e.File != null) {
                     // A SourceLocation cannot start before line 1, so a zero or negative starting
                     // line was compiled from 1 and is put back here: eval with a line of -100
@@ -1357,10 +1400,7 @@ namespace IronRuby.Runtime {
                     int reportedLine = (line <= 0) ? e.Line - 1 + line : e.Line;
                     string errorFile = e.File;
                     DecodeEvalLineOffset(ref errorFile);
-                    throw new SyntaxError(
-                        String.Format("{0}:{1}: {2}", errorFile, reportedLine, e.Message),
-                        errorFile, reportedLine, e.Column, e.LineSourceCode
-                    );
+                    throw new SyntaxError(e.Description, errorFile, reportedLine);
                 }
                 throw;
             }
@@ -1387,7 +1427,7 @@ namespace IronRuby.Runtime {
             // inside the string to the string: `eval "module_function"' does not reach a `def'
             // written after it.  The state is inherited on the way in - a `def' inside the string
             // does see a modifier set outside it - so saving and restoring it is the whole rule.
-            var attributesScope = targetScope.GetMethodAttributesDefinitionScope();
+            var attributesScope = targetScope.GetVisibilityScope();
             var attributes = attributesScope.MethodAttributes;
             try {
                 return compiled(targetScope, self, module, blockParameter);
@@ -1413,13 +1453,21 @@ namespace IronRuby.Runtime {
         public static object EvaluateRefinementBlock(RubyModule/*!*/ holder, RubyModule/*!*/ refinement, BlockParam/*!*/ block) {
             Proc proc = block.Proc;
             RefinementActivation saved = proc.RefinementOverride;
-            proc.RefinementOverride = RefinementActivation.CreateSingle(proc.LocalScope.GetActiveRefinements(), holder);
-            holder.Context.RefinementVersion++;
+            RefinementActivation active = RefinementActivation.CreateSingle(proc.LocalScope.GetActiveRefinements(), holder);
+
+            // While the count is not zero the lexical walk looks at every block's override, and the rules that
+            // read a method's record for a block in it fail (RubyScope.GetLexicalRefinements, RubyCallAction.Resolve).
+            // Nothing that can throw comes between the increment and the try, whose finally undoes it: a count left
+            // above zero would turn those fast paths off for the rest of the process.
+            Interlocked.Increment(ref RubyOps.RefineBlocksRunning);
             try {
+                proc.RefinementOverride = active;
+                holder.Context.RefinementVersion++;
                 return EvaluateInModule(refinement, block, null);
             } finally {
                 proc.RefinementOverride = saved;
                 holder.Context.RefinementVersion++;
+                Interlocked.Decrement(ref RubyOps.RefineBlocksRunning);
             }
         }
 
@@ -1444,9 +1492,18 @@ namespace IronRuby.Runtime {
             // block looks methods up through the dummy singleton standing in front of their
             // class instead. It sits directly below the class, so a private method of Integer
             // is still reached; a `def' landing in it raises, which is what MRI does too.
+            //
+            // MRI makes the singleton class of an object only when the block defines something into it (see
+            // BlockParam.SetLazySingletonMethodLookup); a module's is always there.
             RubyModule lookupModule;
             if (RubyUtils.HasSingletonClass(self)) {
-                lookupModule = block.RubyContext.GetOrCreateSingletonClass(self);
+                var context = block.RubyContext;
+                if (self is RubyModule) {
+                    lookupModule = context.GetOrCreateSingletonClass(self);
+                } else {
+                    RubyClass immediate = context.GetImmediateClassOf(self);
+                    lookupModule = immediate.IsSingletonClass ? immediate : null;
+                }
             } else {
                 lookupModule = block.RubyContext.GetImmediateClassOf(self).GetDummySingletonClass();
             }
@@ -1456,9 +1513,14 @@ namespace IronRuby.Runtime {
             return result;
         }
 
-        private static bool EvaluateBlock(BlockParam/*!*/ block, RubyModule/*!*/ module, object self, object[] args, out object result) {
-            Assert.NotNull(block, module);
-            block.MethodLookupModule = module;
+        // A null module: the singleton class of self, made when a definition needs it.
+        private static bool EvaluateBlock(BlockParam/*!*/ block, RubyModule module, object self, object[] args, out object result) {
+            Assert.NotNull(block);
+            if (module != null) {
+                block.MethodLookupModule = module;
+            } else {
+                block.SetLazySingletonMethodLookup();
+            }
 
             if (args != null) {
                 result = RubyOps.Yield(args, null, self, block);
@@ -1574,8 +1636,32 @@ namespace IronRuby.Runtime {
 
         #region Exceptions
 
-#if FEATURE_THREAD
-#if FEATURE_EXCEPTION_STATE
+        // Unwinds only discarded fiber stacks. Set before throwing, cleared by the worker
+        // boundary after CLR finally cleanup has completed; Ruby ensure bodies consult it.
+        public sealed class FiberReclaimSignal : StackUnwinder {
+            public FiberReclaimSignal() : base(null) { }
+        }
+
+        [ThreadStatic]
+        private static bool _reclaimingFiber;
+
+        public static bool IsReclaimingFiber { get { return _reclaimingFiber; } }
+
+        public static void BeginFiberReclamation() {
+            if (!_reclaimingFiber) {
+                _reclaimingFiber = true;
+                RequestSafePoint();
+            }
+            throw new FiberReclaimSignal();
+        }
+
+        public static void EndFiberReclamation() {
+            if (_reclaimingFiber) {
+                _reclaimingFiber = false;
+                SafePointRequestDone();
+            }
+        }
+
         /// <summary>
         /// Control-flow exception used to unwind a thread that was killed with Thread#kill / #exit / #terminate.
         /// Deriving from StackUnwinder makes RubyOps.CanRescue skip it, so - exactly like in MRI - a killed
@@ -1594,20 +1680,79 @@ namespace IronRuby.Runtime {
         // The blocking primitives that IronRuby itself uses translate ThreadInterruptedException into the parked
         // exception; every other safe point calls CheckAsyncException. A thread that is spinning in pure Ruby code
         // without ever blocking cannot be interrupted - see the comment on CheckAsyncException.
-        private static readonly Dictionary<int, Exception> _pendingAsyncExceptions = new Dictionary<int, Exception>();
+        // Keyed by the Thread object, not its ManagedThreadId: .NET hands a dead thread's id to a new
+        // thread once the old Thread object is collected, and a stale entry must not reach the new one.
+        private static readonly Dictionary<Thread, Exception> _pendingAsyncExceptions = new Dictionary<Thread, Exception>();
 
         public static void RaiseAsyncException(Thread thread, Exception e) {
             if (thread == Thread.CurrentThread) {
                 throw e;
             }
 
-            lock (_pendingAsyncExceptions) {
-                if (!_pendingAsyncExceptions.ContainsKey(thread.ManagedThreadId)) {
-                    RequestSafePoint();
-                }
-                _pendingAsyncExceptions[thread.ManagedThreadId] = e;
-            }
+            ParkAsyncException(thread, e);
+            NudgeThread(thread);
+        }
 
+        /// <summary>
+        /// The first half of RaiseAsyncException: parks <paramref name="e"/> for <paramref name="thread"/>
+        /// (another thread) without waking it. For a caller that parks under a lock of its own, and
+        /// wakes the thread with <see cref="NudgeThread"/> once it has let go of it: an interrupt that
+        /// finds the thread waiting for that lock would break the wait off with a
+        /// ThreadInterruptedException where nothing expects one.
+        /// </summary>
+        public static void ParkAsyncException(Thread/*!*/ thread, Exception/*!*/ e) {
+            using (new UninterruptedLock(_pendingAsyncExceptions)) {
+                Thread key = thread;
+                Exception parked;
+                if (!_pendingAsyncExceptions.TryGetValue(key, out parked)) {
+                    RequestSafePoint();
+                } else if (parked is ThreadExitSignal) {
+                    // A Thread#raise behind a Thread#kill does not erase it: MRI takes the kill first
+                    // and clears what is queued behind it (rb_threadptr_to_kill), so the raise is
+                    // never seen. Replacing the kill lost it whenever the thread rescued the raise or
+                    // a Thread.handle_interrupt mask held it back.
+                    return;
+                }
+                _pendingAsyncExceptions[key] = e;
+            }
+        }
+
+        /// <summary>
+        /// Wakes <paramref name="thread"/> if it is blocked, so that it picks up what is parked for it.
+        /// </summary>
+        public static void NudgeThread(Thread/*!*/ thread) {
+            Thread key = thread;
+            object waitMonitor = null;
+            using (new UninterruptedLock(_pendingAsyncExceptions)) {
+                if (!_pendingAsyncExceptions.ContainsKey(key)) {
+                    // taken, moved on or dropped already: an interrupt now would find nothing to deliver
+                    return;
+                }
+                NudgeableWait wait;
+                if (_nudgeableWaits.TryGetValue(key, out wait)) {
+                    // The thread is in a wait that looks at what is parked before it blocks: the flag
+                    // and the pulse below reach it wherever it is in that wait (BeginNudgeableWait).
+                    wait.Nudged = true;
+                    waitMonitor = wait.SyncRoot;
+                    if (wait.Waiting) {
+                        // blocked on the monitor, which the pulse wakes: no interrupt to go stale
+                        key = null;
+                    }
+                }
+                if (key != null) {
+                    int count;
+                    _nudgesInFlight.TryGetValue(key, out count);
+                    _nudgesInFlight[key] = count + 1;
+                }
+            }
+            if (waitMonitor != null) {
+                using (new UninterruptedLock(waitMonitor)) {
+                    Monitor.PulseAll(waitMonitor);
+                }
+            }
+            if (key == null) {
+                return;
+            }
             try {
                 if ((thread.ThreadState & System.Threading.ThreadState.WaitSleepJoin) != 0) {
                     thread.Interrupt();
@@ -1615,6 +1760,172 @@ namespace IronRuby.Runtime {
             } catch (PlatformNotSupportedException) {
                 // nothing else we can do; the exception stays parked until the thread reaches a safe point
             } catch (ThreadStateException) {
+            } finally {
+                using (new UninterruptedLock(_pendingAsyncExceptions)) {
+                    int count = _nudgesInFlight[key] - 1;
+                    if (count == 0) {
+                        _nudgesInFlight.Remove(key);
+                    } else {
+                        _nudgesInFlight[key] = count;
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// `using (new UninterruptedLock(o)) { ... }` is `lock (o) { ... }` whose wait for the monitor a nudge
+        /// (<see cref="NudgeThread"/>) does not break off. Thread.Interrupt breaks a contended Monitor.Enter
+        /// as it does Monitor.Wait, and the locks the parking, forwarding and fiber switching take are held
+        /// for moments only, by threads a Thread#raise is aimed at - a ThreadInterruptedException out of
+        /// one of them ends that thread or leaves a fiber switch half done. What the nudge was for stays
+        /// parked, and the thread's next safe point raises it.
+        /// </summary>
+        public struct UninterruptedLock : IDisposable {
+            private readonly object/*!*/ _monitor;
+            private bool _taken;
+
+            public UninterruptedLock(object/*!*/ monitor) {
+                _monitor = monitor;
+                _taken = false;
+                while (true) {
+                    try {
+                        Monitor.Enter(monitor, ref _taken);
+                        return;
+                    } catch (ThreadInterruptedException) {
+                        // a nudge; Monitor.Enter has told us whether it took the lock
+                        if (_taken) {
+                            return;
+                        }
+                    }
+                }
+            }
+
+            public void Dispose() {
+                if (_taken) {
+                    _taken = false;
+                    Monitor.Exit(_monitor);
+                }
+            }
+        }
+
+        /// <summary>
+        /// A wait on a monitor that a nudge has to reach however close to blocking the thread is
+        /// (<see cref="BeginNudgeableWait"/>). Guarded by _pendingAsyncExceptions.
+        /// </summary>
+        private sealed class NudgeableWait {
+            public readonly object/*!*/ SyncRoot;
+            // the wait this one is nested in, on the same thread (Ruby code run by a safe point in it)
+            public readonly NudgeableWait Outer;
+            // A nudge has come since the waiter last looked (PrepareNudgeableWait).
+            public bool Nudged;
+            // In Monitor.Wait on SyncRoot, or about to be, with the monitor held.
+            public bool Waiting;
+
+            public NudgeableWait(object/*!*/ monitor, NudgeableWait outer, bool nudged) {
+                SyncRoot = monitor;
+                Outer = outer;
+                Nudged = nudged;
+            }
+        }
+
+        // CLR thread (by identity) -> the nudgeable wait it is in. Guarded by _pendingAsyncExceptions.
+        private static readonly Dictionary<Thread, NudgeableWait>/*!*/ _nudgeableWaits = new Dictionary<Thread, NudgeableWait>();
+
+        /// <summary>
+        /// Starts a wait on <paramref name="monitor"/> that a Thread#kill or Thread#raise cannot miss.
+        /// NudgeThread interrupts only a thread the CLR already has in WaitSleepJoin - an interrupt
+        /// for a running thread stays latched and goes off at whatever wait comes next - so one that
+        /// came while the thread was still on its way into Monitor.Wait (spinning, taking the lock)
+        /// found nothing to wake, and the thread then blocked with the exception parked for it. A
+        /// fiber's resumer waits like that for the fiber, and Thread#status reports the fiber's
+        /// state for the whole Ruby thread: a test that kills the thread once it says "sleep" lost
+        /// its kill whenever the resumer had not blocked yet.
+        ///
+        /// Between this call and <see cref="EndNudgeableWait"/> every nudge is recorded, and wakes
+        /// the thread with a pulse of <paramref name="monitor"/> if it is waiting there. The waiter
+        /// calls <see cref="PrepareNudgeableWait"/> with the monitor held, just before Monitor.Wait,
+        /// and <see cref="NudgeableWaitDone"/> after it. Something parked already counts as a nudge.
+        /// </summary>
+        public static void BeginNudgeableWait(object/*!*/ monitor) {
+            Thread current = Thread.CurrentThread;
+            using (new UninterruptedLock(_pendingAsyncExceptions)) {
+                NudgeableWait outer;
+                _nudgeableWaits.TryGetValue(current, out outer);
+                _nudgeableWaits[current] = new NudgeableWait(monitor, outer, _pendingAsyncExceptions.ContainsKey(current));
+            }
+        }
+
+        /// <summary>
+        /// With the wait's monitor held, just before Monitor.Wait: false if a nudge has come since the
+        /// last call - the caller looks at what is parked (TranslateThreadInterrupt and the like)
+        /// instead of waiting, and comes back. True means wait; a nudge from now on pulses the monitor,
+        /// which the caller cannot miss, since it holds the monitor until Monitor.Wait releases it.
+        /// </summary>
+        public static bool PrepareNudgeableWait() {
+            using (new UninterruptedLock(_pendingAsyncExceptions)) {
+                NudgeableWait wait = _nudgeableWaits[Thread.CurrentThread];
+                if (wait.Nudged) {
+                    wait.Nudged = false;
+                    return false;
+                }
+                wait.Waiting = true;
+                return true;
+            }
+        }
+
+        /// <summary>Monitor.Wait has returned (or thrown): nudges interrupt the thread again.</summary>
+        public static void NudgeableWaitDone() {
+            using (new UninterruptedLock(_pendingAsyncExceptions)) {
+                _nudgeableWaits[Thread.CurrentThread].Waiting = false;
+            }
+        }
+
+        /// <summary>Ends the wait <see cref="BeginNudgeableWait"/> started.</summary>
+        public static void EndNudgeableWait() {
+            Thread current = Thread.CurrentThread;
+            using (new UninterruptedLock(_pendingAsyncExceptions)) {
+                NudgeableWait outer = _nudgeableWaits[current].Outer;
+                if (outer != null) {
+                    // what was parked meanwhile is the outer wait's to look at too
+                    outer.Nudged |= _pendingAsyncExceptions.ContainsKey(current);
+                    _nudgeableWaits[current] = outer;
+                } else {
+                    _nudgeableWaits.Remove(current);
+                }
+            }
+        }
+
+        // CLR thread (by identity, not ManagedThreadId, which .NET recycles) -> NudgeThread calls between their check that something is parked for the
+        // thread and the end of their Thread.Interrupt. Guarded by _pendingAsyncExceptions.
+        private static readonly Dictionary<Thread, int> _nudgesInFlight = new Dictionary<Thread, int>();
+
+        /// <summary>
+        /// Called by a thread that has just taken away what was parked for it - delivered it, moved it to
+        /// another fiber's thread, dropped it. A nudge meant for it may still come, or has come and found
+        /// the thread between two waits: Thread.Interrupt then stays latched and goes off at the thread's
+        /// next managed wait, whichever that is - a `lock` in the fiber pool, say, which nothing translates,
+        /// and a bare ThreadInterruptedException (or, once something is parked again, the exception with no
+        /// Ruby frames) ends the thread. Waits for the nudges still under way and drops what they latched.
+        /// A raise that parks something new for the thread meanwhile may lose its nudge here; what it
+        /// parked stays, and the thread's next safe point (or the wait it is in, once that ends) raises it.
+        /// Latching it again instead would only go off at whatever wait comes next.
+        /// </summary>
+        private static void DropStaleNudge() {
+            Thread current = Thread.CurrentThread;
+            Thread key = current;
+            while (true) {
+                using (new UninterruptedLock(_pendingAsyncExceptions)) {
+                    if (!_nudgesInFlight.ContainsKey(key)) {
+                        break;
+                    }
+                }
+                // not Thread.Sleep or SpinWait.SpinOnce, which may sleep: a latched interrupt throws there
+                Thread.Yield();
+            }
+            try {
+                Thread.Sleep(0);
+            } catch (ThreadInterruptedException) {
+                // the stale nudge
             }
         }
 
@@ -1624,23 +1935,23 @@ namespace IronRuby.Runtime {
             }
 
             // Do not let a following Thread#kill erase a Thread#raise that is already waiting to
-            // be delivered. MRI finishes unwinding the raised exception (and reports it) first.
-            lock (_pendingAsyncExceptions) {
-                if (!_pendingAsyncExceptions.ContainsKey(thread.ManagedThreadId)) {
+            // be delivered. MRI finishes unwinding the raised exception (and reports it) first - and
+            // kills the thread after it all the same, should it rescue the exception: the kill waits
+            // behind it (_killsBehindRaise) and is parked once the exception is taken.
+            using (new UninterruptedLock(_pendingAsyncExceptions)) {
+                Thread key = thread;
+                Exception parked;
+                if (!_pendingAsyncExceptions.TryGetValue(key, out parked)) {
                     RequestSafePoint();
-                    _pendingAsyncExceptions[thread.ManagedThreadId] = new ThreadExitSignal();
+                    _pendingAsyncExceptions[key] = new ThreadExitSignal();
+                } else if (!(parked is ThreadExitSignal)) {
+                    _killsBehindRaise.Add(key);
                 }
             }
-            try {
-                // Interrupting a running CLR thread queues ThreadInterruptedException for its
-                // next managed wait, where it can bypass Ruby ensure blocks. Running Ruby code
-                // observes the parked exception at safe points; only a blocked thread needs a nudge.
-                if ((thread.ThreadState & System.Threading.ThreadState.WaitSleepJoin) != 0) {
-                    thread.Interrupt();
-                }
-            } catch (PlatformNotSupportedException) {
-            } catch (ThreadStateException) {
-            }
+            // Interrupting a running CLR thread queues ThreadInterruptedException for its
+            // next managed wait, where it can bypass Ruby ensure blocks. Running Ruby code
+            // observes the parked exception at safe points; only a blocked thread needs a nudge.
+            NudgeThread(thread);
         }
 
         // What the target thread does to a parked exception before it throws it (see below).
@@ -1657,6 +1968,16 @@ namespace IronRuby.Runtime {
                 _asyncExceptionFinishers.AddOrUpdate(e, finisher);
             }
             RaiseAsyncException(thread, e);
+        }
+
+        /// <summary>
+        /// <see cref="ParkAsyncException(Thread, Exception)"/> with a finisher, as for RaiseAsyncException.
+        /// </summary>
+        public static void ParkAsyncException(Thread/*!*/ thread, Exception/*!*/ e, Func<Exception, Exception> finisher) {
+            if (finisher != null) {
+                _asyncExceptionFinishers.AddOrUpdate(e, finisher);
+            }
+            ParkAsyncException(thread, e);
         }
 
         /// <summary>The exception to throw for a parked one, on the thread it was parked for.</summary>
@@ -1690,30 +2011,160 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// Removes and returns the asynchronous exception parked for the given thread, if any.
         /// </summary>
-        public static Exception GetPendingAsyncException(Thread/*!*/ thread) {
-            lock (_pendingAsyncExceptions) {
-                Exception e;
-                int key = thread.ManagedThreadId;
-                if (_pendingAsyncExceptions.TryGetValue(key, out e)) {
-                    _pendingAsyncExceptions.Remove(key);
+        // CLR thread (by identity) -> a Thread#kill that came in while a Thread#raise was parked for the thread
+        // (ExitThread). Guarded by _pendingAsyncExceptions.
+        private static readonly HashSet<Thread>/*!*/ _killsBehindRaise = new HashSet<Thread>();
+
+        // Takes what is parked under <paramref name="key"/> away; a kill waiting behind it takes its
+        // place. Under the _pendingAsyncExceptions lock.
+        private static void UnparkLocked(Thread key) {
+            if (_killsBehindRaise.Remove(key)) {
+                // one parked entry for another: the safe point request stays
+                _pendingAsyncExceptions[key] = new ThreadExitSignal();
+            } else {
+                _pendingAsyncExceptions.Remove(key);
+                SafePointRequestDone();
+            }
+        }
+
+        /// <summary>
+        /// A Thread#kill waiting behind the exception parked for <paramref name="thread"/> takes the
+        /// exception's place: for a wait that cannot raise the exception (a fiber waiting for control),
+        /// where the kill has to end the thread all the same. Answers whether there was one.
+        /// </summary>
+        private static bool PromoteKillBehindRaise(Thread/*!*/ thread) {
+            using (new UninterruptedLock(_pendingAsyncExceptions)) {
+                Thread key = thread;
+                if (!_killsBehindRaise.Remove(key)) {
+                    return false;
+                }
+                _pendingAsyncExceptions[key] = new ThreadExitSignal();
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// Drops everything parked for <paramref name="thread"/>, a kill waiting behind an exception too:
+        /// for a thread that is ending, or a fiber thread whose fiber is done.
+        /// </summary>
+        public static void DropPendingAsyncExceptions(Thread/*!*/ thread) {
+            bool dropped;
+            using (new UninterruptedLock(_pendingAsyncExceptions)) {
+                Thread key = thread;
+                _killsBehindRaise.Remove(key);
+                dropped = _pendingAsyncExceptions.Remove(key);
+                if (dropped) {
                     SafePointRequestDone();
-                    return e;
                 }
             }
-            return null;
+            if (dropped && ReferenceEquals(thread, Thread.CurrentThread)) {
+                DropStaleNudge();
+            }
+        }
+
+        public static Exception GetPendingAsyncException(Thread/*!*/ thread) {
+            Exception e;
+            using (new UninterruptedLock(_pendingAsyncExceptions)) {
+                Thread key = thread;
+                if (!_pendingAsyncExceptions.TryGetValue(key, out e)) {
+                    return null;
+                }
+                UnparkLocked(key);
+            }
+            if (ReferenceEquals(thread, Thread.CurrentThread)) {
+                DropStaleNudge();
+            }
+            return e;
         }
 
         public static bool HasPendingAsyncException(Thread/*!*/ thread) {
-            lock (_pendingAsyncExceptions) {
-                return _pendingAsyncExceptions.ContainsKey(thread.ManagedThreadId);
+            using (new UninterruptedLock(_pendingAsyncExceptions)) {
+                return _pendingAsyncExceptions.ContainsKey(thread);
             }
         }
 
+        /// <summary>
+        /// Moves the Thread#raise exception parked for <paramref name="from"/> to <paramref name="to"/>
+        /// and nudges <paramref name="to"/> if it is blocked. All fibers of a Ruby thread share it, but
+        /// each runs on a CLR thread of its own, and an interrupt belongs to whichever of them is
+        /// running (MRI checks the thread's interrupt flag in the current fiber). A Thread#kill stays
+        /// where it is: it ends the CLR thread it was meant for. Answers whether anything moved.
+        /// </summary>
+        public static bool ForwardAsyncException(Thread/*!*/ from, Thread/*!*/ to) {
+            if (!MoveAsyncException(from, to)) {
+                return false;
+            }
+            NudgeThread(to);
+            return true;
+        }
+
+        /// <summary>
+        /// <see cref="ForwardAsyncException"/> without waking <paramref name="to"/>: for a caller that is
+        /// about to hand <paramref name="to"/> control, which wakes it anyway.
+        /// </summary>
+        public static bool MoveAsyncException(Thread/*!*/ from, Thread/*!*/ to) {
+            if (ReferenceEquals(from, to)) {
+                return false;
+            }
+            using (new UninterruptedLock(_pendingAsyncExceptions)) {
+                Exception e;
+                Thread key = from;
+                if (!_pendingAsyncExceptions.TryGetValue(key, out e) || e is ThreadExitSignal) {
+                    return false;
+                }
+                if (_killsBehindRaise.Contains(key)) {
+                    // the thread is being killed: the exception stays with the kill (CheckAsyncException)
+                    return false;
+                }
+                Exception there;
+                if (_pendingAsyncExceptions.TryGetValue(to, out there)) {
+                    if (there is ThreadExitSignal) {
+                        // a raise does not overwrite a kill
+                        return false;
+                    }
+                    // two parked exceptions become one; the later raise wins, as in RaiseAsyncException
+                    SafePointRequestDone();
+                }
+                _pendingAsyncExceptions.Remove(key);
+                _pendingAsyncExceptions[to] = e;
+            }
+            if (ReferenceEquals(from, Thread.CurrentThread)) {
+                DropStaleNudge();
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Drops <paramref name="e"/> if it is still what is parked for <paramref name="thread"/>.
+        /// </summary>
+        public static bool RetractAsyncException(Thread/*!*/ thread, Exception/*!*/ e) {
+            using (new UninterruptedLock(_pendingAsyncExceptions)) {
+                Exception parked;
+                Thread key = thread;
+                if (!_pendingAsyncExceptions.TryGetValue(key, out parked) || !ReferenceEquals(parked, e)) {
+                    return false;
+                }
+                UnparkLocked(key);
+            }
+            if (ReferenceEquals(thread, Thread.CurrentThread)) {
+                DropStaleNudge();
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Installed by the thread library: called on a thread that has an exception parked for it
+        /// (other than a Thread#kill) before it is delivered there. True means it is not to be raised
+        /// there: it belonged to another fiber of the same Ruby thread - the one now running - and
+        /// has been moved there, or the thread is a fiber thread outside its fiber and keeps it.
+        /// </summary>
+        public static Func<bool> AsyncExceptionRedirectHook;
+
         /// <summary>The exception parked for a thread, left in place. Null when there is none.</summary>
         public static Exception PeekPendingAsyncException(Thread/*!*/ thread) {
-            lock (_pendingAsyncExceptions) {
+            using (new UninterruptedLock(_pendingAsyncExceptions)) {
                 Exception e;
-                return _pendingAsyncExceptions.TryGetValue(thread.ManagedThreadId, out e) ? e : null;
+                return _pendingAsyncExceptions.TryGetValue(thread, out e) ? e : null;
             }
         }
 
@@ -1761,16 +2212,24 @@ namespace IronRuby.Runtime {
                 return InterruptImmediate;
             }
 
-            var context = RubyContext._Default;
-            if (context == null) {
-                return InterruptImmediate;
-            }
-
-            RubyClass cls = context.GetClassOf(e);
+            // The exception's class is looked up in the runtime the mask's classes belong to - not in
+            // the process's first runtime, which a host with several of them (IronRuby.Tests) would
+            // have answer for all of them: no class of another runtime is an ancestor of its classes,
+            // so every mask let everything through.
+            RubyContext context = null;
+            RubyClass cls = null;
             for (int i = masks.Count - 1; i >= 0; i--) {
                 InterruptMask mask = masks[i];
                 for (int j = mask.Classes.Length - 1; j >= 0; j--) {
-                    if (mask.Classes[j] != null && cls.HasAncestor(mask.Classes[j])) {
+                    RubyModule maskClass = mask.Classes[j];
+                    if (maskClass == null) {
+                        continue;
+                    }
+                    if (!ReferenceEquals(maskClass.Context, context)) {
+                        context = maskClass.Context;
+                        cls = context.GetClassOf(e);
+                    }
+                    if (cls.HasAncestor(maskClass)) {
                         return mask.Timings[j];
                     }
                 }
@@ -1846,6 +2305,56 @@ namespace IronRuby.Runtime {
         /// </summary>
         public static Func<bool, bool> NativeWaitHook;
 
+        /// <summary>
+        /// Installed by the thread library, as <see cref="NativeWaitHook"/> is: marks the current thread
+        /// as being in a managed wait a Ruby program can see, or not, and answers what it was before.
+        /// </summary>
+        public static Func<bool, bool> ManagedWaitHook;
+
+        /// <summary>
+        /// `using (RubyUtils.BlockingWait.Enter()) { ...wait... }` marks the current thread as blocked in a
+        /// wait a Ruby program can see - a held Mutex, Queue#pop, Thread#join, a concurrent require - for
+        /// as long as it waits, and restores what it was afterwards. Thread#status reports "sleep" only
+        /// for such a wait: the CLR's WaitSleepJoin also covers every brief wait for an internal lock,
+        /// which MRI's thread is "run" through. Put it around the wait itself only, not around code that
+        /// runs Ruby (a trap handler at a safe point) or takes internal locks.
+        ///
+        /// Enter() is for a managed wait (Monitor.Wait, WaitHandle, Thread.Join), and the thread is
+        /// "sleep" only once the CLR has it in WaitSleepJoin as well: whoever sees "sleep" may go on to
+        /// Thread#kill it, and a kill interrupts only a thread that is already waiting
+        /// (<see cref="NudgeThread"/>). EnterNative() is for a syscall (waitpid, read(2)), which the CLR
+        /// cannot see: the mark alone says "sleep".
+        /// </summary>
+        public readonly struct BlockingWait : IDisposable {
+            private readonly bool _wasBlocked;
+            private readonly bool _native;
+
+            private BlockingWait(bool wasBlocked, bool native) {
+                _wasBlocked = wasBlocked;
+                _native = native;
+            }
+
+            public static BlockingWait Enter() {
+                var hook = ManagedWaitHook;
+                return new BlockingWait(hook != null && hook(true), false);
+            }
+
+            public static BlockingWait EnterNative() {
+                return new BlockingWait(EnterNativeWait(), true);
+            }
+
+            public void Dispose() {
+                if (_native) {
+                    ExitNativeWait(_wasBlocked);
+                } else {
+                    var hook = ManagedWaitHook;
+                    if (hook != null) {
+                        hook(_wasBlocked);
+                    }
+                }
+            }
+        }
+
         /// <summary>Marks the current thread blocked; pass the answer to ExitNativeWait.</summary>
         public static bool EnterNativeWait() {
             var hook = NativeWaitHook;
@@ -1874,6 +2383,36 @@ namespace IronRuby.Runtime {
         /// blocks on nothing.  Thread.handle_interrupt's :on_blocking only delivers at the former.
         /// </summary>
         public static void CheckAsyncException(bool atBlockingCall) {
+            CheckAsyncException(atBlockingCall, false);
+        }
+
+        /// <summary>
+        /// For a wait that hands control between the fibers of a thread (ThreadOps.FiberMailbox), which
+        /// a Thread#raise must not break off: the fiber waiting there is not the thread's running one,
+        /// or is about to become it - the message that makes it so is on the way. The exception goes
+        /// to the running fiber or stays parked until control has arrived. Thread#kill still ends the
+        /// thread there.
+        /// </summary>
+        public static void TranslateFiberWaitInterrupt() {
+            CheckAsyncException(true, true);
+        }
+
+        private static void CheckAsyncException(bool atBlockingCall, bool killOnly) {
+            // Everything below - a fiber being reclaimed, a parked signal, a parked finalizer, an
+            // exception parked by Thread#raise / #kill - is counted in _safePointRequests while it is
+            // outstanding, so with none of it there is nothing to look up. Mutex#lock and Monitor#enter
+            // come through here on every call.
+            if (Volatile.Read(ref _safePointRequests) == 0) {
+                return;
+            }
+
+            // Reclamation runs CLR cleanup only. Do not enter Ruby signal/finalizer callbacks
+            // or replace the unwind signal with a pending asynchronous exception.
+            if (_reclaimingFiber) {
+                // A CLR catch(Exception) can swallow a control-flow signal. Keep the request
+                // active until the worker boundary, so another Ruby entry cannot continue it.
+                throw new FiberReclaimSignal();
+            }
             // Trap handlers run on the main thread at a safe point, like MRI's interrupt check.
             // The hook is installed by the Signal library, which lives in another assembly.
             Action safePoint = SafePointHandler;
@@ -1894,10 +2433,43 @@ namespace IronRuby.Runtime {
                 return;
             }
 
+            if (!(e is ThreadExitSignal)) {
+                if (killOnly && PromoteKillBehindRaise(Thread.CurrentThread)) {
+                    // A Thread#kill came in behind the exception, and this wait (a fiber waiting for
+                    // control) cannot raise the exception: the kill ends the thread now, and the
+                    // exception goes with it. Handed on, it could be rescued by the running fiber
+                    // and the kill never come.
+                    e = PeekPendingAsyncException(Thread.CurrentThread);
+                    if (e == null) {
+                        return;
+                    }
+                } else {
+                    // A fiber that is not the running one of its thread - waiting for the fiber it
+                    // resumed, finishing, parked in the pool - hands the exception on instead of
+                    // raising it.
+                    Func<bool> redirect = AsyncExceptionRedirectHook;
+                    if ((redirect != null && redirect()) || killOnly) {
+                        return;
+                    }
+                }
+            }
+
             int timing = GetInterruptTiming(e);
             if (timing == InterruptNever || (timing == InterruptOnBlocking && !atBlockingCall)) {
-                // masked by an enclosing Thread.handle_interrupt; it stays parked
-                return;
+                // Masked by an enclosing Thread.handle_interrupt; it stays parked. A Thread#kill
+                // waiting behind it is not held back by a mask that does not cover the kill (MRI
+                // queues the two side by side): it goes first, and the exception goes with the thread.
+                if (e is ThreadExitSignal || !PromoteKillBehindRaise(Thread.CurrentThread)) {
+                    return;
+                }
+                e = PeekPendingAsyncException(Thread.CurrentThread);
+                if (e == null) {
+                    return;
+                }
+                timing = GetInterruptTiming(e);
+                if (timing == InterruptNever || (timing == InterruptOnBlocking && !atBlockingCall)) {
+                    return;
+                }
             }
 
             // Take it only now: a masked exception has to stay parked for Thread.pending_interrupt?
@@ -1942,23 +2514,32 @@ namespace IronRuby.Runtime {
             }
             return e;
         }
-#else
-        public static Exception GetVisibleException(Exception e) { return e; }
-
-        public static void ExitThread(Thread/*!*/ thread) {
-            thread.Abort();
-        }
-
-        public static bool IsRubyThreadExit(Exception e) {
-            return e is ThreadAbortException;
-        }
-#endif
-#else
-        public static Exception GetVisibleException(Exception e) { return e; }
-#endif
         #endregion
 
         #region Paths
+
+        /// <summary>
+        /// Whether the first line of a script is a #! line that runs IronRuby's own launcher. MRI
+        /// and prism take a #! line without "ruby" in it as the start of some other program and
+        /// look further down for the Ruby one; but RubyGems and Rails write binstubs from
+        /// RbConfig's ruby_install_name, which was "ir", so `rails new` started bin/rails with
+        /// "#!/usr/bin/env ir.exe" - a Ruby script that does not say "ruby". It is "ironruby"
+        /// now, which does; this keeps the binstubs written before that running.
+        /// </summary>
+        public static bool ShebangNamesIronRuby(string/*!*/ code) {
+            if (code == null || !code.StartsWith("#!", StringComparison.Ordinal)) {
+                return false;
+            }
+            int end = code.IndexOf('\n');
+            string shebang = (end < 0) ? code.Substring(2) : code.Substring(2, end - 2);
+            foreach (string word in shebang.Split(new[] { ' ', '\t', '\r', '/', '\\', '"', '\'' }, StringSplitOptions.RemoveEmptyEntries)) {
+                switch (word.ToLowerInvariant()) {
+                    case "ir": case "ir.exe": case "ir.cmd": case "ir.sh":
+                        return true;
+                }
+            }
+            return false;
+        }
 
         // '\' is only a path separator on Windows. On Unix it is an ordinary character in a
         // file name, and rewriting it silently loses files: mspec's own rm_r expands the path
@@ -2087,11 +2668,7 @@ namespace IronRuby.Runtime {
                         // This will always succeed with a non-null string, but it can fail
                         // if the Personal folder was renamed or deleted. In this case it returns
                         // an empty string.
-#if FEATURE_FILESYSTEM // TODO: virtualize via PAL?
                         result = Environment.GetFolderPath(Environment.SpecialFolder.Personal);
-#else
-                        result = null;
-#endif
                     } else {
                         result = userEnvironment;
                     }
@@ -2185,15 +2762,17 @@ namespace IronRuby.Runtime {
         // Returned path is always canonicalized to forward slashes
 
         public static string/*!*/ ExpandPath(PlatformAdaptationLayer/*!*/ platform, string/*!*/ path) {
-            return ExpandPath(platform, path, platform.CurrentDirectory, true);
+            return ExpandPath(platform, path, null, true);
         }
 
-        public static string/*!*/ ExpandPath(PlatformAdaptationLayer/*!*/ platform, string/*!*/ path, string/*!*/ basePath, bool expandHome) {
+        /// <param name="basePath">The directory a relative path is relative to; null for the current directory, which
+        /// is then only asked for (a getcwd) when the path is relative.</param>
+        public static string/*!*/ ExpandPath(PlatformAdaptationLayer/*!*/ platform, string/*!*/ path, string basePath, bool expandHome) {
             return ExpandPath(platform, path, basePath, expandHome, true);
         }
 
-        private static string/*!*/ ExpandPath(PlatformAdaptationLayer/*!*/ platform, string/*!*/ path, string/*!*/ basePath, bool expandHome, bool expandBase) {
-            Assert.NotNull(platform, path, basePath);
+        private static string/*!*/ ExpandPath(PlatformAdaptationLayer/*!*/ platform, string/*!*/ path, string basePath, bool expandHome, bool expandBase) {
+            Assert.NotNull(platform, path);
 
             if (expandHome) {
                 int length = path.Length;
@@ -2201,7 +2780,7 @@ namespace IronRuby.Runtime {
                     if (length == 1 || path[1] == '/' || (FileSystemUsesDriveLetters && path[1] == '\\')) {
                         string homeDirectory = RubyEnvironment.GetVariable(platform, "HOME");
                         if (homeDirectory == null) {
-                            throw RubyExceptions.CreateArgumentError("couldn't find HOME environment -- expanding `~'");
+                            throw RubyExceptions.CreateArgumentError("couldn't find HOME environment -- expanding '~'");
                         }
 
                         if (length <= 2) {
@@ -2220,15 +2799,20 @@ namespace IronRuby.Runtime {
             }
 
             path = RubyUtils.CanonicalizePath(path);
-            basePath = RubyUtils.CanonicalizePath(basePath);
 
             if (RubyUtils.IsAbsolutePath(path)) {
                 // "basePath" can be ignored if "path" is an absolute path
                 return new PathExpander(platform, path).GetResult();
             }
 
-            // expand base path:
-            string expandedBasePath = expandBase ? ExpandPath(platform, basePath, platform.CurrentDirectory, expandHome, false) : basePath;
+            // expand base path (the current directory is absolute already):
+            string expandedBasePath;
+            if (basePath == null) {
+                expandedBasePath = RubyUtils.CanonicalizePath(platform.CurrentDirectory);
+            } else {
+                basePath = RubyUtils.CanonicalizePath(basePath);
+                expandedBasePath = expandBase ? ExpandPath(platform, basePath, null, expandHome, false) : basePath;
+            }
 
             char drive;
             string relativePath;
@@ -2289,10 +2873,13 @@ namespace IronRuby.Runtime {
         /// Writes binary content of <see cref="MutableString"/> into the given buffer.
         /// </summary>
         public static void Write(this Stream/*!*/ stream, MutableString/*!*/ str, int start, int count) {
-            int byteCount;
-            byte[] bytes = str.GetByteArray(out byteCount);
+            int offset, byteCount;
+            byte[] bytes = str.GetByteArray(out offset, out byteCount);
+            if (start < 0 || count < 0) {
+                throw new ArgumentOutOfRangeException(start < 0 ? "start" : "count");
+            }
             if (start < byteCount) {
-                stream.Write(bytes, start, Math.Min(byteCount - start, count));
+                stream.Write(bytes, offset + start, Math.Min(byteCount - start, count));
             }
         }
 

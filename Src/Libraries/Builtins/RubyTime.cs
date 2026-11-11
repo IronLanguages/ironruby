@@ -14,21 +14,11 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections;
-using System.Collections.Generic;
-using System.IO;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-using System.Text;
 using System.Numerics;
-using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
 using System.Globalization;
 using System.Security;
 using System.Text.RegularExpressions;
-using System.Diagnostics;
 
 namespace IronRuby.Builtins {
     #region RubyTime
@@ -153,14 +143,6 @@ namespace IronRuby.Builtins {
             return TimeSpan.FromSeconds((double)UtcOffsetSeconds);
         }
 
-        public static string GetCurrentZoneName() {
-            return _CurrentTimeZone.GetAbbreviation((long)(DateTime.UtcNow - Epoch).TotalSeconds);
-        }
-
-        public bool GetCurrentDst(RubyContext/*!*/ context) {
-            return IsDaylightSavingTime;
-        }
-
         public static DateTime ToUniversalTime(DateTime dateTime) {
             if (dateTime.Kind == DateTimeKind.Utc) {
                 return dateTime;
@@ -248,12 +230,12 @@ namespace IronRuby.Builtins {
             return new RubyTime(ClampSeconds(whole), sub, kind, fixedOffset);
         }
 
+        // Seconds since the epoch are kept in a long; half its range leaves room for
+        // the arithmetic on them.  MRI keeps a bignum and has no such limit.
         private static long ClampSeconds(BigInteger value) {
-            if (value > new BigInteger(Int64.MaxValue / 2)) {
-                throw new OverflowException();
-            }
-            if (value < new BigInteger(Int64.MinValue / 2)) {
-                throw new OverflowException();
+            if (value > new BigInteger(Int64.MaxValue / 2) || value < new BigInteger(Int64.MinValue / 2)) {
+                throw RubyExceptions.CreateRangeError(String.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    "time {0} out of Time range", value));
             }
             return (long)value;
         }
@@ -474,10 +456,6 @@ namespace IronRuby.Builtins {
             set { InitializeFromDateTime(value); }
         }
 
-        internal void SetDateTime(DateTime value) {
-            InitializeFromDateTime(value);
-        }
-
         public long TicksSinceEpoch {
             get { return _seconds * TicksPerSecond + SubsecTicks(_subsec); }
         }
@@ -496,10 +474,6 @@ namespace IronRuby.Builtins {
 
         public DateTimeKind Kind {
             get { return _zoneKind == RubyTimeZoneKind.Utc ? DateTimeKind.Utc : DateTimeKind.Local; }
-        }
-
-        internal static long ToTicks(long seconds, long microseconds) {
-            return seconds * 10000000 + microseconds * 10;
         }
 
         internal static DateTime AddSeconds(DateTime dateTime, double seconds) {

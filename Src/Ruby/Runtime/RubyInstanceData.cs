@@ -14,7 +14,6 @@
  * ***************************************************************************/
 
 using System.Collections.Generic;
-using Microsoft.Scripting;
 using System.Threading;
 using IronRuby.Builtins;
 using Microsoft.Scripting.Utils;
@@ -23,7 +22,7 @@ using System;
 
 namespace IronRuby.Runtime {
     /// <summary>
-    /// Stores the per-instance data that all Ruby objects need (frozen?, tainted?, untrusted?, instance_variables, etc)
+    /// Stores the per-instance data that all Ruby objects need (frozen?, instance_variables, etc)
     /// Stored in a lookaside weak hashtable for types that don't implement IRubyObject (i.e. .NET types).
     /// </summary>
     /// <remarks>
@@ -90,7 +89,6 @@ namespace IronRuby.Runtime {
 
         // The values are unused if the object itself implements IRubyObjectState.
         internal bool _frozen;
-        private bool _tainted, _untrusted;
 
         internal object[]/*!*/ _ivars = InstanceVariableShape.EmptySlots;
         private RubyClass _immediateClass;
@@ -146,26 +144,15 @@ namespace IronRuby.Runtime {
             _objectId = id;
         }
 
+        /// <summary>Fresh data, for an <see cref="IRubyInstanceDataOwner"/> (OwnedInstanceData).</summary>
+        internal static RubyInstanceData/*!*/ Create() {
+            return new RubyInstanceData();
+        }
+
         internal RubyInstanceData() {
         }
 
         #region Flags
-
-        public bool IsTainted {
-            get { return _tainted; }
-            set {
-                Mutate();
-                _tainted = value;
-            }
-        }
-
-        public bool IsUntrusted {
-            get { return _untrusted; }
-            set {
-                Mutate();
-                _untrusted = value;
-            }
-        }
 
         public bool IsFrozen {
             get { return _frozen; }
@@ -173,12 +160,6 @@ namespace IronRuby.Runtime {
 
         public void Freeze() {
             _frozen = true;
-        }
-
-        private void Mutate() {
-            if (_frozen) {
-                throw RubyExceptions.CreateObjectFrozenError();
-            }
         }
 
         #endregion
@@ -350,11 +331,6 @@ namespace IronRuby.Runtime {
                 var state = var.Value as IPerObjectState;
                 dup.SetInstanceVariable(var.Key, state != null ? state.CopyFor(copy) : var.Value, null);
             }
-        }
-
-        internal bool IsInstanceVariableDefined(string/*!*/ name) {
-            object value;
-            return TryGetInstanceVariable(name, out value);
         }
 
         internal string/*!*/[]/*!*/ GetInstanceVariableNames() {
@@ -613,6 +589,14 @@ namespace IronRuby.Runtime {
         /// </summary>
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
         internal bool TrySetCached(InstanceVariableSite.Entry/*!*/ entry, object value, RubyObject/*!*/ owner) {
+            return TrySetCached(entry, value, owner.ImmediateClass);
+        }
+
+        /// <param name="ownerClass">
+        /// The owner's immediate class, whose instances' usual number of variables sizes the table
+        /// made for the first one; null to go by the site's alone.
+        /// </param>
+        internal bool TrySetCached(InstanceVariableSite.Entry/*!*/ entry, object value, RubyClass ownerClass) {
             object[] s = _ivars;
             object shape = ShapeOf(s);
             if (shape != entry.Shape) {
@@ -640,7 +624,7 @@ namespace IronRuby.Runtime {
             if (s.Length == 1) {
                 // the object's first variable
                 // the class may have learnt since the site was filled that its instances get more
-                var first = new object[Math.Max(entry.Capacity, owner.ImmediateClass.InstanceVariableCapacity) + 1];
+                var first = new object[Math.Max(entry.Capacity, ownerClass != null ? ownerClass.InstanceVariableCapacity : 0) + 1];
                 first[0] = entry.Next;
                 first[1] = value;
                 return Interlocked.CompareExchange(ref _ivars, first, s) == s;

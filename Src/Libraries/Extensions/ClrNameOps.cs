@@ -14,22 +14,22 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections.Generic;
-using System.Text;
-using System.Threading;
-using Microsoft.Scripting.Utils;
-using IronRuby.Builtins;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting;
 using System.Runtime.CompilerServices;
-using IronRuby.Runtime.Calls;
 
 namespace IronRuby.Builtins {
     using BinaryOpStorageWithScope = CallSiteStorage<Func<CallSite, RubyScope, object, object, object>>;
 
     [RubyClass("Name", Extends = typeof(ClrName), DefineIn = typeof(IronRubyOps.Clr))]
     public static class ClrNameOps {
+        // A name as a method name is given - String, Symbol or #to_str - and nil a TypeError like any other
+        // non-name; the CLR constructor took nil as a null string and threw ArgumentNullException (#141).
+        [RubyConstructor]
+        public static ClrName/*!*/ Create(RubyClass/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name) {
+            return new ClrName(name);
+        }
+
         [RubyMethod("inspect")]
         public static MutableString/*!*/ Inspect(ClrName/*!*/ self) {
             return ClrString.Inspect(self.MangledName);
@@ -53,7 +53,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("to_sym")]
-        [RubyMethod("intern", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("intern")]
         public static RubySymbol/*!*/ ToSymbol(RubyContext/*!*/ context, ClrName/*!*/ self) {
             return context.EncodeIdentifier(self.MangledName);
         }
@@ -146,20 +146,20 @@ namespace IronRuby.Builtins {
         // []
 
         // encoding aware
-        [RubyMethod("empty?", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("empty?")]
         public static bool IsEmpty(ClrName/*!*/ self) {
             return self.MangledName.Length == 0;
         }
 
         // encoding aware
-        [RubyMethod("encoding", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("encoding")]
         public static RubyEncoding/*!*/ GetEncoding(ClrName/*!*/ self) {
             return RubyEncoding.UTF8;
         }
 
         // encoding aware
-        [RubyMethod("size", Compatibility = RubyCompatibility.Ruby19)]
-        [RubyMethod("length", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("size")]
+        [RubyMethod("length")]
         public static int GetLength(ClrName/*!*/ self) {
             return self.MangledName.Length;
         }

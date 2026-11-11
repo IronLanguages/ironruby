@@ -13,16 +13,19 @@
  *
  * ***************************************************************************/
 
-using System;
-using Microsoft.Scripting.Runtime;
-using System.Numerics;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Generation;
+using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {
-    [RubyClass("Float", Extends = typeof(double), Inherits = typeof(Numeric)), Includes(typeof(ClrFloat), Copy = true), Includes(typeof(Precision))]
+    [RubyClass("Float", Extends = typeof(double), Inherits = typeof(Numeric)), Includes(typeof(ClrFloat), Copy = true)]
     [UndefineMethod("new", IsStatic = true)]
     public static class FloatOps {
+        /// <summary>numeric_to_c: self + 0i (complex.rb's Numeric#to_c, for a Float).</summary>
+        [RubyMethod("to_c")]
+        public static RubyComplex/*!*/ ToComplex(RubyContext/*!*/ context, double self) {
+            return new RubyComplex(context.GetClass(typeof(RubyComplex)), self, ScriptingRuntimeHelpers.Int32ToObject(0));
+        }
+
         #region Constants
 
         /// <summary>
@@ -63,13 +66,13 @@ namespace IronRuby.Builtins {
         /// The maximum size of the exponent (base 10)
         /// </summary>
         [RubyConstant]
-        public const double MAX_10_EXP = 308;
+        public const int MAX_10_EXP = 308;
 
         /// <summary>
         /// The minimum size the the exponent (base 10)
         /// </summary>
         [RubyConstant]
-        public const double MIN_10_EXP = -307;
+        public const int MIN_10_EXP = -307;
 
         /// <summary>
         /// The maximum size of the exponent (base 2)
@@ -89,11 +92,27 @@ namespace IronRuby.Builtins {
         [RubyConstant]
         public const int RADIX = 2;
 
+        #endregion
+
+        #region -@
+
         /// <summary>
-        /// Rounding mode used by Float
+        /// Numeric#-@ computes 0 - self, which is 0.0 for -0.0 and 0.0 alike; a Float negates
+        /// its sign bit, so that -(0.0) is -0.0 and 1 / -x is -Infinity, as in MRI.
         /// </summary>
-        [RubyConstant]
-        public const int ROUNDS = 1;
+        [RubyMethod("-@")]
+        public static double UnaryMinus(double self) {
+            return -self;
+        }
+
+        /// <summary>
+        /// Float#eql? is true only for another Float of the same value. The CLR's Double.Equals,
+        /// which Object#eql? would otherwise use, considers NaN equal to itself; Ruby does not.
+        /// </summary>
+        [RubyMethod("eql?")]
+        public static bool Eql(double self, object other) {
+            return other is double && self == (double)other;
+        }
 
         #endregion
     }

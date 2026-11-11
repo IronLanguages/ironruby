@@ -15,10 +15,7 @@
 
 using System;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Generation;
 using System.Numerics;
-using Microsoft.Scripting.Utils;
-using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {
 

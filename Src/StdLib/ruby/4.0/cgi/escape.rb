@@ -48,7 +48,7 @@ module CGI::Escape
     str.valid_encoding? ? str : str.force_encoding(string.encoding)
   end
 
-  # CRuby implements the two URI-component methods below in C, where they begin with
+  # IronRuby: CRuby implements the two URI-component methods below in C, where they begin with
   # StringValue() - so an object answering #to_str is accepted and anything else is a
   # TypeError. This file stands in for that extension and has to do the same.
   def __string_value__(string) # :nodoc:

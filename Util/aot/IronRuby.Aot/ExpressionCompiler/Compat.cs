@@ -161,27 +161,5 @@ namespace IronRuby.Aot.Compiler {
     }
 }
 
-namespace IronRuby.Aot.Runtime {
-    /// <summary>
-    /// The closure object nested lambdas are bound to: .NET Core no longer exposes
-    /// System.Runtime.CompilerServices.Closure, and a saved assembly must reference a public type.
-    /// </summary>
-    public sealed class Closure {
-        public readonly object[] Constants;
-        public readonly object[] Locals;
-
-        public Closure(object[] constants, object[] locals) {
-            Constants = constants;
-            Locals = locals;
-        }
-    }
-
-    public static class RuntimeOps {
-        public static System.Runtime.CompilerServices.IRuntimeVariables CreateRuntimeVariables() =>
-            throw new NotSupportedException("RuntimeVariablesExpression is not supported by the AOT prototype");
-        public static System.Runtime.CompilerServices.IRuntimeVariables CreateRuntimeVariables(object[] data, long[] indexes) =>
-            throw new NotSupportedException("RuntimeVariablesExpression is not supported by the AOT prototype");
-        public static Expression Quote(Expression expression, object hoistedLocals, object[] locals) =>
-            throw new NotSupportedException("Quote is not supported by the AOT prototype");
-    }
-}
+// Closure and RuntimeOps, which the saved IL references, live in IronRuby.dll (IronRuby.Runtime.Precompiled)
+// so that a saved assembly needs nothing but IronRuby at run time.

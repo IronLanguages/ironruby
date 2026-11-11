@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using Microsoft.Scripting;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
@@ -30,7 +26,8 @@ namespace IronRuby.Compiler.Ast {
             : base(null, location) {
         }
 
-        // see Ruby Language.doc/Runtime/Control Flow Implementation/Redo
+        // redo, by where it stands: in eval, in a while/until loop, in a block or in a method body; the
+        // runtime halves are in RubyOps.FlowControl.cs
         // a class body inside the loop or block has to be left first
         private static MSA.Expression/*!*/ LoopRedo(AstGenerator/*!*/ gen, MSA.Expression value) {
             var module = gen.GetModuleBodyToEscape(true);

@@ -69,11 +69,56 @@ namespace IronRuby.Prism {
             bool encodingLocked, bool lazyDefBodies) {
 
             byte[] sourceBytes = sourceEncoding.GetBytes(source);
-            PrismParseResult result = PrismLoader.LoadParse(
-                ParseSerializedBytes(sourceBytes, BuildOptionsData(path, startLine, outerLocals, frozenStringLiteral, encodingName,
-                    commandLine, mainScript, encodingLocked)), lazyDefBodies);
+            bool timed = IronRuby.Runtime.PhaseTimer.Enter(IronRuby.Runtime.PhaseTimer.PrismNative);
+            byte[] serialized;
+            byte[] optionsData = BuildOptionsData(path, startLine, outerLocals, frozenStringLiteral, encodingName,
+                commandLine, mainScript, encodingLocked);
+            try {
+                serialized = ParseSerializedBytes(sourceBytes, optionsData);
+            } finally {
+                IronRuby.Runtime.PhaseTimer.Exit(timed);
+            }
+            timed = IronRuby.Runtime.PhaseTimer.Enter(IronRuby.Runtime.PhaseTimer.PrismLoad);
+            PrismParseResult result;
+            try {
+                result = PrismLoader.LoadParse(serialized, lazyDefBodies);
+            } finally {
+                IronRuby.Runtime.PhaseTimer.Exit(timed);
+            }
             result.DataOffset = ComputeDataOffset(result.DataLocation, sourceBytes);
+            if (result.Errors.Count > 0) {
+                // kept for FormatErrors, which parses again to have prism lay the errors out
+                result.ErrorSource = new PrismErrorSource(sourceBytes, optionsData, sourceEncoding);
+            }
             return result;
+        }
+
+        /// <summary>
+        /// The errors of a failed parse the way MRI's SyntaxError#message carries them: prism's own
+        /// layout (pm_errors_format) of a "file:line: syntax error(s) found" header and the lines
+        /// the errors are on, each marked under the code with its message. <paramref name="formatType"/>
+        /// is pm_errors_format_type_t (1 plain, 2 bold, 3 color - MRI colors it when $stderr is a
+        /// terminal); <paramref name="startLine"/> numbers the first line of the source, which may be
+        /// zero or negative for an eval. Answers null when the parse had no errors, or when its
+        /// first error is not a syntax error (prism's argument and load levels), which is then
+        /// reported on its own.
+        /// </summary>
+        public static string FormatErrors(PrismParseResult/*!*/ result, int formatType, int startLine) {
+            var source = result.ErrorSource;
+            if (source == null) {
+                return null;
+            }
+            byte[] options = (byte[])source.Options.Clone();
+            // pm_options_t's serialized form starts with the path (length and bytes), then the line
+            int lineOffset = 4 + BitConverter.ToInt32(options, 0);
+            BitConverter.TryWriteBytes(new Span<byte>(options, lineOffset, 4), startLine);
+            int level = PrismSerialize.ErrorsFormat(source.Source, options, formatType, out byte[] formatted);
+            if (level != 0) {
+                return null;
+            }
+            // the buffer starts with the name of the source's encoding and a NUL
+            int start = Array.IndexOf(formatted, (byte)0) + 1;
+            return source.Encoding.GetString(formatted, start, formatted.Length - start);
         }
 
         /// <summary>
@@ -113,6 +158,10 @@ namespace IronRuby.Prism {
         }
 
         private static byte[]/*!*/ ParseSerializedBytes(byte[]/*!*/ bytes, byte[] optionsData) {
+            return PrismNative.WithParserStack(bytes.Length, () => ParseSerializedBytesHere(bytes, optionsData));
+        }
+
+        private static byte[]/*!*/ ParseSerializedBytesHere(byte[]/*!*/ bytes, byte[] optionsData) {
             IntPtr buffer = IntPtr.Zero;
             GCHandle pinned = GCHandle.Alloc(bytes, GCHandleType.Pinned);
             GCHandle options = optionsData != null ? GCHandle.Alloc(optionsData, GCHandleType.Pinned) : default;
@@ -178,6 +227,7 @@ namespace IronRuby.Prism {
                 writer.Write((byte)(mainScript ? 1 : 0));  // main script
                 writer.Write((byte)0);      // partial script
                 writer.Write((byte)0);      // freeze
+                writer.Write((byte)0);      // attach comments
                 if (outerLocals != null) {
                     writer.Write(1);        // one scope
                     writer.Write(outerLocals.Count);

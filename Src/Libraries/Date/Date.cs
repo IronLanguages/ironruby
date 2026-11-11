@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Date for IronRuby.
  *
@@ -19,7 +19,6 @@
 
 using System;
 using System.Collections;
-using System.Collections.Generic;
 using System.Globalization;
 using System.Numerics;
 using System.Runtime.InteropServices;
@@ -56,13 +55,11 @@ namespace IronRuby.StandardLibrary.Date {
             _sg = DateMath.ITALY;
         }
 
-#if FEATURE_SERIALIZATION
         protected RubyDate(SerializationInfo/*!*/ info, StreamingContext context)
             : base(info, context) {
             _sf = Frac.Zero;
             _sg = DateMath.ITALY;
         }
-#endif
 
         protected override RubyObject/*!*/ CreateInstance() {
             return new RubyDate(ImmediateClass.NominalClass);
@@ -685,45 +682,17 @@ namespace IronRuby.StandardLibrary.Date {
 
         #region iteration
 
-        [RubyMethod("step")]
-        public static object Step(BlockParam block, RubyDate/*!*/ self, object limit,
-            [DefaultProtocol, DefaultParameterValue(1)]int step) {
-
-            if (step == 0) {
-                throw RubyExceptions.CreateArgumentError("step can't be 0");
-            }
-            if (block == null) {
-                throw RubyExceptions.CreateArgumentError("no block given");
-            }
-            var limitDate = limit as RubyDate;
-            long limitJd = limitDate != null ? limitDate._jd : ToLong(limit);
-            long jd = self._jd;
-            while (step > 0 ? jd <= limitJd : jd >= limitJd) {
-                object result;
-                if (block.Yield(self.Derive(jd), out result)) {
-                    return result;
-                }
-                jd += step;
-            }
-            return self;
-        }
-
-        [RubyMethod("upto")]
-        public static object UpTo(BlockParam block, RubyDate/*!*/ self, object limit) {
-            return Step(block, self, limit, 1);
-        }
-
-        [RubyMethod("downto")]
-        public static object DownTo(BlockParam block, RubyDate/*!*/ self, object limit) {
-            return Step(block, self, limit, -1);
-        }
+        // step, upto and downto are in date.rb: MRI's d_lite_step compares the dates with <=> and adds
+        // the step with +, so a DateTime stops at its limit's time and a step may be a fraction of a
+        // day - which a loop over Julian day numbers here could not do.
 
         #endregion
 
         #region comparison
 
         [RubyMethod("<=>")]
-        public static object Compare(RubyDate/*!*/ self, object other) {
+        public static object Compare(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ comparisonStorage,
+            BinaryOpStorage/*!*/ quo, RubyDate/*!*/ self, object other) {
             var otherDate = other as RubyDate;
             if (otherDate != null) {
                 return ScriptingRuntimeHelpers.Int32ToObject(self.Ajd.CompareTo(otherDate.Ajd));
@@ -739,7 +708,16 @@ namespace IronRuby.StandardLibrary.Date {
                 }
                 return ScriptingRuntimeHelpers.Int32ToObject(self.Ajd.ToDouble().CompareTo(d));
             }
-            return null;
+            // cmp_gen: any other Numeric (a Rational, a BigDecimal) compares with the ajd.
+            RubyContext context = comparisonStorage.Context;
+            if (context.IsKindOf(other, context.GetClass(typeof(IronRuby.Builtins.Numeric)))) {
+                var site = comparisonStorage.GetCallSite("<=>");
+                return site.Target(site, MakeRational(quo, self.Ajd), other);
+            }
+            // ... and it ends in rb_num_coerce_cmp: anything else is asked to
+            // #coerce.  ActiveSupport::Duration answers that way, so `time_with_zone <= 1.hour`
+            // (through DateTime#<=>) compares instead of failing.
+            return Protocols.CoerceAndCompare(coercionStorage, comparisonStorage, self, other);
         }
 
         [RubyMethod("===")]
@@ -927,9 +905,14 @@ namespace IronRuby.StandardLibrary.Date {
 
         [RubyMethod("iso8601")]
         [RubyMethod("xmlschema")]
-        [RubyMethod("rfc3339")]
         public static MutableString/*!*/ Iso8601(RubyDate/*!*/ self) {
             return MutableString.CreateAscii(DateFormatter.Format(self, "%Y-%m-%d"));
+        }
+
+        // Date#rfc3339 is a date and time, unlike #iso8601: MRI's is strftime('%Y-%m-%dT%H:%M:%S%:z')
+        [RubyMethod("rfc3339")]
+        public static MutableString/*!*/ Rfc3339(RubyDate/*!*/ self) {
+            return MutableString.CreateAscii(DateFormatter.Format(self, "%Y-%m-%dT%H:%M:%S%:z"));
         }
 
         [RubyMethod("rfc2822")]

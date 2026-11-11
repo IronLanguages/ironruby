@@ -10,8 +10,8 @@ Gem::Specification.new do |s|
   s.required_rubygems_version = Gem::Requirement.new(">= 0".freeze)
   s.require_paths = ["lib".freeze]
   s.authors = ["IronRuby".freeze]
-  s.description = "Puma, with its HTTP parser in C#; single mode only, no TLS.  Provided by IronRuby itself.".freeze
-  s.summary = "Puma, with its HTTP parser in C#; single mode only, no TLS".freeze
+  s.description = "Puma, with its HTTP parser and TLS engine in C#; single mode only.  Provided by IronRuby itself.".freeze
+  s.summary = "Puma, with its HTTP parser and TLS engine in C#; single mode only".freeze
   s.homepage = "https://github.com/IronLanguages/ironruby".freeze
   s.licenses = ["Ruby".freeze, "BSD-2-Clause".freeze]
   s.metadata = { "ironruby_pinned".freeze => "true".freeze }
@@ -64,5 +64,6 @@ Gem::Specification.new do |s|
     "lib/puma/util.rb".freeze,
     "lib/rack/handler/puma.rb".freeze,
   ]
-  s.add_runtime_dependency "nio4r".freeze, ["~> 2.0".freeze]
+
+  s.add_runtime_dependency("nio4r".freeze, ["~> 2.0".freeze])
 end

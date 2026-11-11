@@ -13,15 +13,10 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Threading;
 using System.Runtime.CompilerServices;
@@ -54,7 +49,6 @@ namespace IronRuby.Compiler.Ast {
         private readonly bool _traceable;
         private readonly bool _savingToDisk;
 
-        private IList<MSA.Expression> _fileInitializers; // lazy
         private MSA.Expression _sourcePathConstant; // lazy
 
         internal AstGenerator(RubyContext/*!*/ context, RubyCompilerOptions/*!*/ options, MSA.SymbolDocumentInfo document, RubyEncoding/*!*/ encoding,
@@ -72,11 +66,7 @@ namespace IronRuby.Compiler.Ast {
             _profiler = context.RubyOptions.Profile ? Profiler.Instance : null;
             _savingToDisk = context.RubyOptions.SavePath != null;
             _printInteractiveResult = printInteractiveResult;
-#if FEATURE_REFEMIT && FEATURE_FILESYSTEM
             _debugCompiler = Snippets.Shared.SaveSnippets;
-#else
-            _debugCompiler = false;
-#endif
         }
 
         public RubyCompilerOptions/*!*/ CompilerOptions { 
@@ -89,10 +79,6 @@ namespace IronRuby.Compiler.Ast {
 
         public Profiler Profiler {
             get { return _profiler; }
-        }
-
-        public bool DebugCompiler {
-            get { return _debugCompiler; }
         }
 
         public bool TraceEnabled {
@@ -125,10 +111,29 @@ namespace IronRuby.Compiler.Ast {
             get { return _savingToDisk; }
         }
 
+        private int _isCoreLibrary;
+
+        /// <summary>
+        /// The code is the core library written in Ruby (RubyStackTraceBuilder.IsInternalFile): it
+        /// stands in for CRuby's C code, which Ractor isolation does not apply to, so its variable
+        /// and constant sites are marked to go unchecked (RactorIsolation).
+        /// </summary>
+        internal bool IsCoreLibrary {
+            get {
+                if (_isCoreLibrary == 0) {
+                    _isCoreLibrary = RubyStackTraceBuilder.IsInternalFile(SourcePath) ? 1 : -1;
+                }
+                return _isCoreLibrary > 0;
+            }
+        }
+
+        // The file name of code that has no path (see RubyContext.GetSourceDocument).
+        internal const string PathlessSourceName = "(eval)";
+
         public string SourcePath {
             get {
                 if (_document == null) {
-                    return "(eval)";
+                    return PathlessSourceName;
                 }
                 string path = _document.FileName;
                 RubyUtils.DecodeEvalLineOffset(ref path);
@@ -159,19 +164,6 @@ namespace IronRuby.Compiler.Ast {
 
         internal RubyContext/*!*/ Context {
             get { return _context; }
-        }
-
-        internal void AddFileInitializer(MSA.Expression/*!*/ expression) {
-            if (_fileInitializers == null) {
-                _fileInitializers = new List<MSA.Expression>();
-            }
-            _fileInitializers.Add(expression);
-        }
-
-        internal IList<MSA.Expression>/*!*/ FileInitializers {
-            get {
-                return (IList<MSA.Expression>)_fileInitializers ?? AstFactory.EmptyExpressions;
-            }
         }
 
         #region Lexical Scopes
@@ -208,6 +200,14 @@ namespace IronRuby.Compiler.Ast {
                 get { return _parentLoop; }
                 set { _parentLoop = value; }
             }
+
+            /// <summary>
+            /// The variable of the frame's line record for the loop's statements, once the interpreter has compiled the loop
+            /// (see SourceLineMarker), and the variable scope it belongs to: statements of another scope - a class body
+            /// written in the loop - are not the loop's frame's.
+            /// </summary>
+            public MSA.Expression LoopLineVariable;
+            public ScopeBuilder LoopLineScope;
 
             public LoopScope(MSA.Expression/*!*/ redoVariable, MSA.Expression/*!*/ resultVariable, MSA.LabelTarget/*!*/ breakLabel, MSA.LabelTarget/*!*/ continueLabel) {
                 Assert.NotNull(redoVariable, resultVariable, breakLabel, continueLabel);
@@ -344,6 +344,20 @@ namespace IronRuby.Compiler.Ast {
             // A block literal (or lambda) is nested in this one: its Proc captures this block's scope.
             public bool HasNestedBlock;
 
+            // The lexical depth of the block's own scope (LexicalScope.Depth): a local defined at a
+            // smaller depth belongs to an enclosing scope.
+            internal int LexicalDepth;
+
+            // The enclosing scopes' locals the block uses (BlockDispatcher.OuterVariableNames), and
+            // for each how often its scope assigns it.
+            internal List<string> OuterVariables;
+            internal List<LocalAssignmentCount> OuterVariableAssignments;
+            internal List<string> AssignedOuterVariables;
+
+            // The module body the block is in, if any: a module body starts a new local scope
+            // without leaving the blocks around it.
+            internal ModuleScope EnclosingModule;
+
             public BlockScope(ScopeBuilder/*!*/ builder, MSA.Expression/*!*/ selfVariable, MSA.ParameterExpression/*!*/ runtimeScopeVariable,
                 MSA.Expression/*!*/ bfcVariable, MSA.LabelTarget/*!*/ redoLabel)
                 : base(builder, selfVariable, runtimeScopeVariable) {
@@ -411,7 +425,6 @@ namespace IronRuby.Compiler.Ast {
         }
 
         public sealed class ModuleScope : VariableScope {
-            private readonly bool _isSingleton;
             private ModuleScope _parentModule;
 
             // The label of the body's frame, and the block the definition is written in - blocks
@@ -490,13 +503,8 @@ namespace IronRuby.Compiler.Ast {
                 set { _parentModule = value; }
             }
 
-            public bool IsSingleton {
-                get { return _isSingleton; }
-            }
-
-            public ModuleScope(ScopeBuilder/*!*/ builder, MSA.Expression/*!*/ selfVariable, MSA.ParameterExpression/*!*/ runtimeScopeVariable, bool isSingleton)
+            public ModuleScope(ScopeBuilder/*!*/ builder, MSA.Expression/*!*/ selfVariable, MSA.ParameterExpression/*!*/ runtimeScopeVariable)
                 : base(builder, selfVariable, runtimeScopeVariable) {
-                _isSingleton = isSingleton;
             }
         }
 
@@ -615,12 +623,83 @@ namespace IronRuby.Compiler.Ast {
             block.ParentLoop = _currentLoop;
             block.ParentBlock = _currentBlock;
             block.ParentVariableScope = _currentVariableScope;
+            block.EnclosingModule = _currentModule;
             
             _currentElement = block;
             _currentRescue = null;
             _currentLoop = null;
             _currentBlock = block;
             _currentVariableScope = block;
+        }
+
+        /// <summary>
+        /// Records a use of a local defined at <paramref name="definitionDepth"/> in every block of the
+        /// current frame the local is from outside of (-1, a local of the eval's runtime scope, is
+        /// outside of all of them). The block chain ends at a method or module body.
+        /// </summary>
+        internal void NoteLocalVariableUse(string/*!*/ name, int definitionDepth, bool isAssignment, LocalAssignmentCount assignments) {
+            if (_currentVariableScope is ModuleScope) {
+                return;
+            }
+            for (var block = _currentBlock;
+                block != null && block.EnclosingModule == _currentModule && block.LexicalDepth > definitionDepth;
+                block = block.ParentBlock) {
+                var names = block.OuterVariables ??= new List<string>();
+                if (!names.Contains(name)) {
+                    names.Add(name);
+                    (block.OuterVariableAssignments ??= new List<LocalAssignmentCount>()).Add(assignments);
+                }
+                if (isAssignment) {
+                    var assigned = block.AssignedOuterVariables ??= new List<string>();
+                    if (!assigned.Contains(name)) {
+                        assigned.Add(name);
+                    }
+                }
+            }
+        }
+
+        // Set while parameters are bound, which the scope counts as one assignment each (CountParameterAssignments).
+        internal bool BindingParameters;
+
+        /// <summary>
+        /// The assignments the code makes of the local in slot <paramref name="closureIndex"/> of the
+        /// scope at <paramref name="definitionDepth"/>, counted as they are compiled: CRuby's lvar_states,
+        /// by which a shareable proc refuses an outer variable that "may be reassigned". Null for a
+        /// local of the eval's runtime scope.
+        /// </summary>
+        internal LocalAssignmentCount GetLocalAssignments(int definitionDepth, int closureIndex) {
+            if (definitionDepth < 0 || closureIndex < 0) {
+                return null;
+            }
+            var scope = CurrentScope;
+            while (scope != null && scope.LexicalDepth > definitionDepth) {
+                scope = scope.Parent;
+            }
+            return (scope != null && scope.LexicalDepth == definitionDepth) ? scope.GetLocalAssignments(closureIndex) : null;
+        }
+
+        internal void NoteLocalAssignment(LocalAssignmentCount assignments) {
+            if (assignments != null && !BindingParameters) {
+                assignments.Count++;
+            }
+        }
+
+        /// <summary>Each parameter of <paramref name="parameters"/> is assigned once, by the call.</summary>
+        internal void CountParameterAssignments(Parameters/*!*/ parameters) {
+            foreach (var lvalue in parameters.Mandatory) {
+                CountParameterAssignment(lvalue as LocalVariable);
+            }
+            foreach (var optional in parameters.Optional) {
+                CountParameterAssignment(optional.Left as LocalVariable);
+            }
+            CountParameterAssignment(parameters.Unsplat as LocalVariable);
+            CountParameterAssignment(parameters.Block);
+        }
+
+        private void CountParameterAssignment(LocalVariable parameter) {
+            if (parameter != null) {
+                NoteLocalAssignment(GetLocalAssignments(parameter.DefinitionLexicalDepth, parameter.ClosureIndex));
+            }
         }
 
         public void LeaveBlockDefinition() {
@@ -683,11 +762,10 @@ namespace IronRuby.Compiler.Ast {
             ScopeBuilder/*!*/ locals,
             MSA.Expression/*!*/ selfVariable,
             MSA.ParameterExpression/*!*/ runtimeScopeVariable, 
-            bool isSingleton,
             string frameLabel) {
             Assert.NotNull(locals, selfVariable, runtimeScopeVariable);
 
-            ModuleScope module = new ModuleScope(locals, selfVariable, runtimeScopeVariable, isSingleton);
+            ModuleScope module = new ModuleScope(locals, selfVariable, runtimeScopeVariable);
             module.FrameLabel = frameLabel;
             module.OuterBlock = _currentBlock;
             module.OuterLoop = _currentLoop;
@@ -708,28 +786,6 @@ namespace IronRuby.Compiler.Ast {
             _currentElement = oldModule.Parent;
             _currentVariableScope = oldModule.ParentVariableScope;
             _currentModule = oldModule.ParentModule;
-        }
-
-        public void EnterFileInitializer(
-            ScopeBuilder/*!*/ locals,
-            MSA.Expression/*!*/ selfVariable,
-            MSA.ParameterExpression/*!*/ runtimeScopeVariable) {
-
-            VariableScope scope = new VariableScope(locals, selfVariable, runtimeScopeVariable);
-
-            scope.Parent = _currentElement;
-            scope.ParentVariableScope = _currentVariableScope;
-
-            _currentElement = scope;
-            _currentVariableScope = scope;
-        }
-
-        public void LeaveFileInitializer() {
-            Debug.Assert(_currentElement == _currentVariableScope);
-            VariableScope oldScope = _currentVariableScope;
-
-            _currentElement = oldScope.Parent;
-            _currentVariableScope = oldScope.ParentVariableScope;
         }
 
         /// <summary>
@@ -759,7 +815,11 @@ namespace IronRuby.Compiler.Ast {
         internal string/*!*/ TopLevelFrameLabel {
             get {
                 switch (CompilerOptions.FactoryKind) {
-                    case TopScopeFactoryKind.Main: return "<main>";
+                    // Hosted code (ScriptEngine.Execute, ScriptSource.Execute) is labelled as the main script, as
+                    // RubyScope.FrameLabel already does for its scope (issue 158): it used to get "#", which put
+                    // "block in #" and an unlabelled top-level frame into its backtraces.
+                    case TopScopeFactoryKind.Main:
+                    case TopScopeFactoryKind.Hosted: return "<main>";
                     case TopScopeFactoryKind.File:
                     case TopScopeFactoryKind.WrappedFile: return "<top (required)>";
                     default:
@@ -874,6 +934,12 @@ namespace IronRuby.Compiler.Ast {
 
             Assert.NotNull(statements);
 
+            // Every body nested in another - a block's, a loop's, a branch's - comes through here, and the
+            // nesting can be deeper than a thread's stack goes (see StackGuard).
+            if (!StackGuard.IsSufficient) {
+                return StackGuard.RunOnFreshStack(() => TransformStatements(prologue, statements, epilogue, resultOperation));
+            }
+
             int count = statements.Count + (prologue != null ? 1 : 0) + (epilogue != null ? 1 : 0);
 
             if (count == 0) {
@@ -944,6 +1010,10 @@ namespace IronRuby.Compiler.Ast {
         }
 
         private MSA.Expression/*!*/ TransformStatementsToExpression(Statements statements, bool toBoolean, bool positive) {
+            // (see TransformStatements)
+            if (!StackGuard.IsSufficient) {
+                return StackGuard.RunOnFreshStack(() => TransformStatementsToExpression(statements, toBoolean, positive));
+            }
 
             if (statements == null || statements.Count == 0) {
                 return toBoolean ? AstUtils.Constant(!positive) : AstUtils.Constant(null);
@@ -1047,10 +1117,6 @@ namespace IronRuby.Compiler.Ast {
             return result;
         }
 
-        public MSA.Expression/*!*/ TransformToHashConstructor(IList<Maplet>/*!*/ maplets) {
-            return MakeHashOpCall(TransformMapletsToExpressions(maplets));
-        }
-
         internal MSA.Expression/*!*/ MakeHashOpCall(IEnumerable<MSA.Expression>/*!*/ expressions) {
             return Methods.MakeHash.OpCall(CurrentScopeVariable, AstUtils.NewArrayHelper(typeof(object), expressions));
         }
@@ -1109,11 +1175,16 @@ namespace IronRuby.Compiler.Ast {
         }
 
         internal MSA.Expression/*!*/ AddDebugInfo(MSA.Expression/*!*/ expression, SourceSpan location) {
+            var loop = _currentLoop;
+            return AddDebugInfo(expression, location, (loop != null && loop.LoopLineScope == CurrentScope) ? loop.LoopLineVariable : null);
+        }
+
+        /// <param name="loopLineVariable">The line record variable of the loop the statement is in (see LoopScope.LoopLineVariable).</param>
+        internal MSA.Expression/*!*/ AddDebugInfo(MSA.Expression/*!*/ expression, SourceSpan location, MSA.Expression loopLineVariable) {
             if (_document != null) {
                 // TODO: should we add clearance for non-goto expressions?
-                // return AstUtils.AddDebugInfo(expression, _document, location.Start, location.End);
                 var sequencePoint = Ast.DebugInfo(_document, location.Start.Line, location.Start.Column, location.End.Line, location.End.Column);
-                return Ast.Block(sequencePoint, expression);
+                return Ast.Block(sequencePoint, SourceLineMarker.Create(location.Start.Line, loopLineVariable, CurrentScope.EnsureDepth > 0), expression);
             } else {
                 return expression;
             }

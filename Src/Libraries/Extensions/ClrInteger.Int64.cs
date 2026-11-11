@@ -16,7 +16,6 @@
 using System;
 using System.Numerics;
 using IronRuby.Runtime;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 
@@ -80,6 +79,56 @@ namespace IronRuby.Builtins {
                 return Protocols.Normalize(-(BigInteger)Int64.MinValue);
             }
             return Narrow(-x);
+        }
+
+        /// <summary>
+        /// self shifted left by 0 &lt; shift bits, as an Int32 / Int64 / BigInteger: with machine
+        /// arithmetic when no significant bit is shifted out of a long.
+        /// </summary>
+        internal static object/*!*/ LeftShiftWide(long self, int shift) {
+            System.Diagnostics.Debug.Assert(shift > 0);
+            if (shift < 63) {
+                long r = self << shift;
+                if ((r >> shift) == self) {
+                    return Narrow(r);
+                }
+            }
+            return Protocols.Normalize(ShiftLeftOrFail(self, shift));
+        }
+
+        #endregion
+
+        #region << >> ~
+
+        // Without these a long receiver converts to BigInteger and back for every shift.
+        // Shifts towards the least significant bits are arithmetic (they round towards -Infinity),
+        // as Ruby's are; widths beyond 63 bits and Int32.MinValue go to the BigInteger overloads.
+
+        [RubyMethod("<<")]
+        public static object/*!*/ LeftShift(long self, int shift) {
+            if (shift > 0) {
+                return LeftShiftWide(self, shift);
+            }
+            if (shift > -64) {
+                return Narrow(self >> -shift);
+            }
+            return LeftShift((BigInteger)self, shift);
+        }
+
+        [RubyMethod(">>")]
+        public static object/*!*/ RightShift(long self, int shift) {
+            if (shift >= 0) {
+                return Narrow((shift < 64) ? self >> shift : (self < 0 ? -1 : 0));
+            }
+            if (shift != Int32.MinValue) {
+                return LeftShiftWide(self, -shift);
+            }
+            return RightShift((BigInteger)self, shift);
+        }
+
+        [RubyMethod("~")]
+        public static object/*!*/ OnesComplement(long self) {
+            return Narrow(~self);
         }
 
         #endregion
@@ -213,7 +262,7 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region abs, zero?, to_f, quo
+        #region abs, zero?, to_f
 
         [RubyMethod("abs")]
         [RubyMethod("magnitude")]
@@ -229,11 +278,6 @@ namespace IronRuby.Builtins {
         [RubyMethod("to_f")]
         public static double ToFloat(long self) {
             return (double)self;
-        }
-
-        [RubyMethod("quo")]
-        public static double Quotient(long self, long other) {
-            return (double)self / (double)other;
         }
 
         #endregion

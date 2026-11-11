@@ -28,8 +28,9 @@ module RbConfig
   unsigned_max = ->(bytes) { (1 << (bytes * 8)) - 1 }
 
   limits = {}
-  # IronRuby's immediate integers are System.Int32; wider values are BigIntegers.
-  limits["FIXNUM_MIN"], limits["FIXNUM_MAX"] = signed[4]
+  # An Integer is a System.Int32 or a System.Int64 until arithmetic overflows Int64 into a
+  # BigInteger, so Int64 is IronRuby's Fixnum range, as long is JRuby's.
+  limits["FIXNUM_MIN"], limits["FIXNUM_MAX"] = signed[8]
   if unsigned_char
     limits["CHAR_MIN"], limits["CHAR_MAX"] = 0, 255
   else

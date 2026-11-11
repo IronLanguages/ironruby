@@ -13,51 +13,22 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
-using System.Globalization;
 using System.Diagnostics;
 using System.Text;
-using System.Reflection;
 using System.Collections;
 using System.Collections.Generic;
 using System.Dynamic;
+using System.Numerics;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
-using Microsoft.Scripting;
 
 namespace IronRuby.Runtime {
     public static class Utils {
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2105:ArrayFieldsShouldNotBeReadOnly")]
-        public static readonly byte[] EmptyBytes = new byte[0];
-
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2105:ArrayFieldsShouldNotBeReadOnly")]
-        public static readonly char[] EmptyChars = new char[0];
-        
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2105:ArrayFieldsShouldNotBeReadOnly")]
-        public static readonly MemberInfo[] EmptyMemberInfos = new MemberInfo[0];
-
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2105:ArrayFieldsShouldNotBeReadOnly")]
-        public static readonly Delegate[] EmptyDelegates = new Delegate[0];
-
-        public static int IndexOf(this string[]/*!*/ array, string/*!*/ value, StringComparer/*!*/ comparer) {
-            ContractUtils.RequiresNotNull(array, "array");
-            ContractUtils.RequiresNotNull(value, "value");
-            ContractUtils.RequiresNotNull(comparer, "comparer");
-
-            for (int i = 0; i < array.Length; i++) {
-                if (comparer.Equals(array[i], value)) {
-                    return i;
-                }
-            }
-
-            return -1;
-        }
+        public static readonly byte[] EmptyBytes = Array.Empty<byte>();
+        public static readonly char[] EmptyChars = Array.Empty<char>();
 
         public static bool IsAscii(this string/*!*/ str) {
             return System.Text.Ascii.IsValid(str);
@@ -76,12 +47,7 @@ namespace IronRuby.Runtime {
         }
 
         internal static bool IsBinary(this string/*!*/ str) {
-            for (int i = 0; i < str.Length; i++) {
-                if (str[i] > 0xff) {
-                    return false;
-                }
-            }
-            return true;
+            return str.AsSpan().IndexOfAnyExceptInRange('\0', '\u00ff') < 0;
         }
 
         internal static int GetCharacterCount(this string/*!*/ str) {
@@ -123,9 +89,9 @@ namespace IronRuby.Runtime {
             return str.Length == 0 ? -1 : str[str.Length - 1];
         }
 
-        internal static IEnumerable<byte>/*!*/ EnumerateAsBytes(char[]/*!*/ data, int count) {
+        internal static IEnumerable<byte>/*!*/ EnumerateAsBytes(char[]/*!*/ data, int start, int count) {
             for (int i = 0; i < count; i++) {
-                yield return (byte)data[i];
+                yield return (byte)data[start + i];
             }
         }
 
@@ -135,9 +101,9 @@ namespace IronRuby.Runtime {
             }
         }
 
-        internal static IEnumerable<T>/*!*/ Enumerate<T>(T[]/*!*/ data, int count) {
+        internal static IEnumerable<T>/*!*/ Enumerate<T>(T[]/*!*/ data, int start, int count) {
             for (int i = 0; i < count; i++) {
-                yield return data[i];
+                yield return data[start + i];
             }
         }
 
@@ -180,10 +146,9 @@ namespace IronRuby.Runtime {
         }
 
         internal static void Fill<T>(T[]/*!*/ array, int index, T item, int repeatCount) {
-            // TODO: can be optimized for big repeatCount:
-            for (int i = index; i < index + repeatCount; i++) {
-                array[i] = item;
-            }
+            // a block fill (vectorized where it can be; an element store at a time for an array
+            // whose runtime type is not exactly T[])
+            Array.Fill(array, item, index, repeatCount);
         }
 
         private static void Fill(byte[]/*!*/ src, int srcStart, byte[]/*!*/ dst, int dstStart, int count, int repeatCount) {
@@ -197,13 +162,6 @@ namespace IronRuby.Runtime {
                     }
                 }
             }
-        }
-
-        private static int GetByteCount(string/*!*/ str, int start, int count, Encoding/*!*/ encoding, out char[]/*!*/ chars) {
-            // TODO: we can special case this for some encodings and calculate the byte count w/o copying the content: 
-            chars = new char[count];
-            str.CopyTo(start, chars, 0, count);
-            return encoding.GetByteCount(chars, 0, chars.Length);
         }
 
         internal static T[]/*!*/ Concatenate<T>(T[]/*!*/ array1, T[]/*!*/ array2) {
@@ -225,8 +183,17 @@ namespace IronRuby.Runtime {
             return result;
         }
 
+        /// <summary>
+        /// A new array for a copy that fills every item of it. Not zeroed first (unless T holds
+        /// references): for a long string the zeroing of a large object heap array cost as much as
+        /// the copy itself.
+        /// </summary>
+        internal static T[]/*!*/ NewArrayToFill<T>(int length) {
+            return GC.AllocateUninitializedArray<T>(length);
+        }
+
         internal static T[]/*!*/ Concatenate<T>(T[]/*!*/ array1, int itemCount1, T[]/*!*/ array2, int itemCount2) {
-            T[] result = new T[itemCount1 + itemCount2];
+            T[] result = NewArrayToFill<T>(itemCount1 + itemCount2);
             Array.Copy(array1, 0, result, 0, itemCount1);
             Array.Copy(array2, 0, result, itemCount1, itemCount2);
             return result;
@@ -253,10 +220,10 @@ namespace IronRuby.Runtime {
         }
 
         internal static int Append(ref byte[]/*!*/ array, int itemCount, string/*!*/ other, int start, int count, Encoding/*!*/ encoding) {
-            char[] appendChars;
-            int newCount = itemCount + GetByteCount(other, start, count, encoding, out appendChars);
+            var chars = other.AsSpan(start, count);
+            int newCount = itemCount + encoding.GetByteCount(chars);
             Resize(ref array, newCount);
-            encoding.GetBytes(appendChars, 0, appendChars.Length, array, itemCount);
+            encoding.GetBytes(chars, array.AsSpan(itemCount));
             return newCount;
         }
 
@@ -301,41 +268,12 @@ namespace IronRuby.Runtime {
             return itemCount + count;
         }
 
-        internal static int InsertAt(ref byte[]/*!*/ array, int itemCount, int index, string/*!*/ other, int start, int count, Encoding/*!*/ encoding) {
-            char[] insertChars;
-            int insertedCount = GetByteCount(other, start, count, encoding, out insertChars);
-            ResizeForInsertion(ref array, itemCount, index, insertedCount);
-            encoding.GetBytes(insertChars, 0, insertChars.Length, array, itemCount);
-            return itemCount + insertedCount;
-        }
-
-        internal static int InsertAt(ref byte[]/*!*/ array, int itemCount, int index, char[]/*!*/ other, int start, int count, Encoding/*!*/ encoding) {
-            int insertedCount = encoding.GetByteCount(other, start, count);
-            ResizeForInsertion(ref array, itemCount, index, insertedCount);
-            encoding.GetBytes(other, start, count, array, itemCount);
-            return itemCount + insertedCount;
-        }
-
-        internal static int InsertAt(ref byte[]/*!*/ array, int itemCount, int index, char other, int repeatCount, Encoding/*!*/ encoding) {
-            if (repeatCount == 0) {
-                return itemCount;
-            }
-
-            char[] chars = new char[] { other };
-            int charSize = encoding.GetByteCount(chars, 0, 1);
-            int insertedCount = charSize * repeatCount;
-
-            ResizeForInsertion(ref array, itemCount, index, insertedCount);
-
-            // first character:
-            encoding.GetBytes(chars, 0, 1, array, itemCount);
-            Fill(array, itemCount, array, itemCount + charSize, charSize, repeatCount - 1);
-            return itemCount + insertedCount;
-        }
-
         internal static int Remove<T>(ref T[]/*!*/ array, int itemCount, int start, int count) {
             T[] a;
             int remaining = itemCount - count;
+            if (count == 0) {
+                return itemCount;
+            }
             if (remaining > MinBufferSize && remaining < itemCount / 2) {
                 a = new T[remaining];
                 Array.Copy(array, 0, a, 0, start);
@@ -348,15 +286,40 @@ namespace IronRuby.Runtime {
             return remaining;
         }
 
+        /// <summary>
+        /// <see cref="Remove{T}"/> for an array that is shared with another string (copy-on-write) and
+        /// so must not be written to; the string's items are array[offset, offset + itemCount).
+        /// Removing from the end keeps the array, which stays shared. Any other removal copies the
+        /// items that remain into an array of their own, at offset 0, which is no longer shared.
+        /// (Moving the offset instead would change two fields under a reader that takes no lock.)
+        /// </summary>
+        internal static int RemoveShared<T>(ref T[]/*!*/ array, ref int offset, int itemCount, int start, int count, ref bool shared) {
+            int remaining = itemCount - count;
+            if (count == 0) {
+                return itemCount;
+            }
+            if (start == remaining) {
+                return remaining;
+            }
+            // the same capacity Remove would leave (zeroed: a write past the end relies on that)
+            var a = new T[remaining > MinBufferSize && remaining < itemCount / 2 ? remaining : itemCount];
+            Array.Copy(array, offset, a, 0, start);
+            Array.Copy(array, offset + start + count, a, start, remaining - start);
+            array = a;
+            offset = 0;
+            shared = false;
+            return remaining;
+        }
+
         internal static T[]/*!*/ GetSlice<T>(this T[]/*!*/ array, int start, int count) {
-            var copy = new T[count];
+            var copy = NewArrayToFill<T>(count);
             Array.Copy(array, start, copy, 0, count);
             return copy;
         }
 
         internal static T[]/*!*/ GetSlice<T>(this T[]/*!*/ array, int arrayLength, int start, int count) {
             count = NormalizeCount(arrayLength, start, count);
-            var copy = new T[count];
+            var copy = NewArrayToFill<T>(count);
             if (count > 0) {
                 Array.Copy(array, start, copy, 0, count);
             }
@@ -368,10 +331,37 @@ namespace IronRuby.Runtime {
             return count > 0 ? str.Substring(start, count) : String.Empty;
         }
 
-        internal static string/*!*/ GetStringSlice(this char[]/*!*/ chars, int arrayLength, int start, int count) {
-            count = NormalizeCount(arrayLength, start, count);
-            return count > 0 ? new String(chars, start, count) : String.Empty;
+        internal static string/*!*/ GetStringSlice(ReadOnlySpan<char> chars, int start, int count) {
+            count = NormalizeCount(chars.Length, start, count);
+            return count > 0 ? new String(chars.Slice(start, count)) : String.Empty;
         }
+
+        /// <summary>
+        /// A copy of data[start, start + count), or of what there is of it (see NormalizeCount).
+        /// </summary>
+        internal static T[]/*!*/ GetSlice<T>(ReadOnlySpan<T> data, int start, int count) {
+            count = NormalizeCount(data.Length, start, count);
+            if (count <= 0) {
+                return Array.Empty<T>();
+            }
+            var copy = NewArrayToFill<T>(count);
+            data.Slice(start, count).CopyTo(copy);
+            return copy;
+        }
+
+        /// <summary>
+        /// Whether a slice of <paramref name="count"/> items of a string's array, of length
+        /// <paramref name="arrayLength"/>, shares the array (copy-on-write, see MutableString.Content.Clone)
+        /// rather than copying them - s[0, n], s[n..], a #strip, #chomp or #byteslice. Only a long
+        /// slice that keeps at least half of the array does: a short one is cheap to copy, and a small
+        /// slice must not keep a large array alive - also not by slicing a slice, which is why this is
+        /// the array's length and not the string's.
+        /// </summary>
+        internal static bool IsSharedSlice(int arrayLength, int count) {
+            return count >= SharedSliceMinLength && count >= arrayLength - (arrayLength >> 1);
+        }
+
+        internal const int SharedSliceMinLength = 256;
 
         internal static int NormalizeCount(int arrayLength, int start, int count) {
             if (count > arrayLength - start) {
@@ -388,308 +378,173 @@ namespace IronRuby.Runtime {
             }
         }
 
-        internal static int IndexOf(byte[]/*!*/ array, int arrayLength, char value, int start, int count) {
-            int end = start + NormalizeCount(arrayLength, start, count);
-            for (int i = start; i < end; i++) {
-                if (array[i] == value) {
-                    return i;
-                }
-            }
+        // The searches below are ordinal: an element matches when its numeric value is equal,
+        // so a byte b matches the char (char)b and nothing else. They all go through the
+        // runtime's vectorized span searches; a needle of the other element type is converted
+        // first - widened, or narrowed after checking that it can match a byte at all.
 
-            return -1;
+        /// <summary>
+        /// The index of the first occurrence of value in data[start, start + count), or -1.
+        /// An empty value is found at start.
+        /// </summary>
+        private static int IndexOf<T>(ReadOnlySpan<T> data, ReadOnlySpan<T> value, int start, int count) where T : IEquatable<T> {
+            count = NormalizeCount(data.Length, start, count);
+            if (value.Length == 0) {
+                return count >= 0 ? start : -1;
+            }
+            if (count < value.Length) {
+                return -1;
+            }
+            int i = data.Slice(start, count).IndexOf(value);
+            return i < 0 ? -1 : start + i;
         }
 
-        internal static int IndexOf(char[]/*!*/ array, int arrayLength, byte value, int start, int count) {
-            int end = start + NormalizeCount(arrayLength, start, count);
-            for (int i = start; i < end; i++) {
-                if (array[i] == value) {
-                    return i;
-                }
+        /// <summary>
+        /// The index of the last occurrence of value that lies entirely within
+        /// data[start - count + 1, start], or -1. An empty value is found at start.
+        /// </summary>
+        private static int LastIndexOf<T>(ReadOnlySpan<T> data, ReadOnlySpan<T> value, int start, int count) where T : IEquatable<T> {
+            NormalizeLastIndexOfIndices(data.Length, ref start, ref count);
+            if (value.Length == 0) {
+                return start;
             }
+            if (count < value.Length) {
+                return -1;
+            }
+            int finish = start - count + 1;
+            int i = data.Slice(finish, count).LastIndexOf(value);
+            return i < 0 ? -1 : finish + i;
+        }
 
-            return -1;
+        private static char[]/*!*/ Widen(byte[]/*!*/ bytes) {
+            var result = new char[bytes.Length];
+            Encoding.Latin1.GetChars(bytes, result);
+            return result;
+        }
+
+        /// <summary>
+        /// The bytes equal to the chars of str, or null if a char is above ÿ and so can't
+        /// be equal to any byte.
+        /// </summary>
+        private static byte[] Narrow(string/*!*/ str) {
+            if (str.AsSpan().IndexOfAnyExceptInRange('\0', 'ÿ') >= 0) {
+                return null;
+            }
+            var result = new byte[str.Length];
+            Encoding.Latin1.GetBytes(str, result);
+            return result;
+        }
+
+        internal static int IndexOf(ReadOnlySpan<byte> data, char value, int start, int count) {
+            if (value > 0xff) {
+                return -1;
+            }
+            byte b = (byte)value;
+            return IndexOf(data, new ReadOnlySpan<byte>(ref b), start, count);
+        }
+
+        internal static int IndexOf(ReadOnlySpan<char> data, byte value, int start, int count) {
+            char c = (char)value;
+            return IndexOf(data, new ReadOnlySpan<char>(ref c), start, count);
         }
 
         internal static int IndexOf(string/*!*/ str, byte value, int start, int count) {
-            int end = start + NormalizeCount(str.Length, start, count);
-            for (int i = start; i < end; i++) {
-                if (str[i] == value) {
-                    return i;
-                }
-            }
-
-            return -1;
+            char c = (char)value;
+            return IndexOf(str.AsSpan(), new ReadOnlySpan<char>(ref c), start, count);
         }
 
         /// <summary>
         /// Implements the same behavior as String.IndexOf on ASCII strings.
         /// </summary>
-        internal static int IndexOf(byte[]/*!*/ array, int arrayLength, string/*!*/ str, int start, int count) {
-            count = NormalizeCount(arrayLength, start, count);
-
-            int finish = start + count - str.Length;
-            for (int i = start; i <= finish; i++) {
-                bool match = true;
-                for (int j = 0; j < str.Length; j++) {
-                    if (str[j] != array[i + j]) {
-                        match = false;
-                        break;
-                    }
-                }
-
-                if (match) {
-                    return i;
-                }
+        internal static int IndexOf(ReadOnlySpan<byte> data, string/*!*/ str, int start, int count) {
+            byte[] bytes = Narrow(str);
+            if (bytes == null) {
+                return -1;
             }
-            return -1;
+            return IndexOf(data, bytes, start, count);
         }
 
         /// <summary>
         /// Implements the same behavior as String.IndexOf on ASCII strings.
         /// </summary>
-        internal static int IndexOf(char[]/*!*/ array, int arrayLength, string/*!*/ str, int start, int count) {
-            count = NormalizeCount(arrayLength, start, count);
-
-            int finish = start + count - str.Length;
-            for (int i = start; i <= finish; i++) {
-                bool match = true;
-                for (int j = 0; j < str.Length; j++) {
-                    if (str[j] != array[i + j]) {
-                        match = false;
-                        break;
-                    }
-                }
-
-                if (match) {
-                    return i;
-                }
-            }
-            return -1;
+        internal static int IndexOf(ReadOnlySpan<char> data, string/*!*/ str, int start, int count) {
+            return IndexOf(data, str.AsSpan(), start, count);
         }
 
         /// <summary>
         /// Implements the same behavior as String.IndexOf on ASCII strings.
         /// </summary>
-        internal static int IndexOf(byte[]/*!*/ array, int arrayLength, byte[]/*!*/ bytes, int start, int count) {
-            count = NormalizeCount(arrayLength, start, count);
-
-            int finish = start + count - bytes.Length;
-            for (int i = start; i <= finish; i++) {
-                bool match = true;
-                for (int j = 0; j < bytes.Length; j++) {
-                    if (bytes[j] != array[i + j]) {
-                        match = false;
-                        break;
-                    }
-                }
-
-                if (match) {
-                    return i;
-                }
-            }
-            return -1;
+        internal static int IndexOf(ReadOnlySpan<byte> data, byte[]/*!*/ bytes, int start, int count) {
+            return IndexOf(data, new ReadOnlySpan<byte>(bytes), start, count);
         }
 
         /// <summary>
         /// Implements the same behavior as String.IndexOf on ASCII strings.
         /// </summary>
-        internal static int IndexOf(char[]/*!*/ array, int arrayLength, byte[]/*!*/ bytes, int start, int count) {
-            count = NormalizeCount(arrayLength, start, count);
-
-            int finish = start + count - bytes.Length;
-            for (int i = start; i <= finish; i++) {
-                bool match = true;
-                for (int j = 0; j < bytes.Length; j++) {
-                    if (bytes[j] != array[i + j]) {
-                        match = false;
-                        break;
-                    }
-                }
-
-                if (match) {
-                    return i;
-                }
-            }
-            return -1;
+        internal static int IndexOf(ReadOnlySpan<char> data, byte[]/*!*/ bytes, int start, int count) {
+            return IndexOf(data, new ReadOnlySpan<char>(Widen(bytes)), start, count);
         }
 
         /// <summary>
         /// Implements the same behavior as String.IndexOf on ASCII strings.
         /// </summary>
         internal static int IndexOf(string/*!*/ str, byte[]/*!*/ bytes, int start, int count) {
-            count = NormalizeCount(str.Length, start, count);
-
-            int finish = start + count - bytes.Length;
-            for (int i = start; i <= finish; i++) {
-                bool match = true;
-                for (int j = 0; j < bytes.Length; j++) {
-                    if (bytes[j] != str[i + j]) {
-                        match = false;
-                        break;
-                    }
-                }
-
-                if (match) {
-                    return i;
-                }
-            }
-            return -1;
+            return IndexOf(str.AsSpan(), Widen(bytes), start, count);
         }
 
-        internal static int LastIndexOf(char[]/*!*/ array, int arrayLength, byte value, int start, int count) {
-            NormalizeLastIndexOfIndices(arrayLength, ref start, ref count);
-            int end = start - count;
-            for (int i = start; i > end; i--) {
-                if (array[i] == value) {
-                    return i;
-                }
-            }
-
-            return -1;
+        internal static int LastIndexOf(ReadOnlySpan<char> data, byte value, int start, int count) {
+            char c = (char)value;
+            return LastIndexOf(data, new ReadOnlySpan<char>(ref c), start, count);
         }
 
         internal static int LastIndexOf(string/*!*/ str, byte value, int start, int count) {
-            NormalizeLastIndexOfIndices(str.Length, ref start, ref count);
-            int end = start - count;
-            for (int i = start; i > end; i--) {
-                if (str[i] == value) {
-                    return i;
-                }
-            }
-
-            return -1;
+            char c = (char)value;
+            return LastIndexOf(str.AsSpan(), new ReadOnlySpan<char>(ref c), start, count);
         }
 
         /// <summary>
         /// Implements the same behavior as String.LastIndexOf on ASCII strings.
         /// </summary>
-        internal static int LastIndexOf(byte[]/*!*/ array, int arrayLength, string/*!*/ value, int start, int count) {
-            NormalizeLastIndexOfIndices(arrayLength, ref start, ref count);
-            int finish = start - count + 1;
-
-            if (value.Length == 0) {
-                return start;
+        internal static int LastIndexOf(ReadOnlySpan<byte> data, string/*!*/ value, int start, int count) {
+            byte[] bytes = Narrow(value);
+            if (bytes == null) {
+                // (an empty value is always narrowed, so this can't skip its answer, start)
+                return -1;
             }
-
-            for (int i = start - value.Length + 1; i >= finish; i--) {
-                bool match = true;
-                for (int j = 0; j < value.Length; j++) {
-                    if (value[j] != array[i + j]) {
-                        match = false;
-                        break;
-                    }
-                }
-
-                if (match) {
-                    return i;
-                }
-            }
-            return -1;
+            return LastIndexOf(data, new ReadOnlySpan<byte>(bytes), start, count);
         }
 
-        internal static int LastIndexOf(char[]/*!*/ array, int arrayLength, string/*!*/ value, int start, int count) {
-            NormalizeLastIndexOfIndices(arrayLength, ref start, ref count);
-            int finish = start - count + 1;
-
-            if (value.Length == 0) {
-                return start;
-            }
-
-            for (int i = start - value.Length + 1; i >= finish; i--) {
-                bool match = true;
-                for (int j = 0; j < value.Length; j++) {
-                    if (value[j] != array[i + j]) {
-                        match = false;
-                        break;
-                    }
-                }
-
-                if (match) {
-                    return i;
-                }
-            }
-            return -1;
+        internal static int LastIndexOf(ReadOnlySpan<char> data, string/*!*/ value, int start, int count) {
+            return LastIndexOf(data, value.AsSpan(), start, count);
         }
 
         /// <summary>
         /// Implements the same behavior as String.LastIndexOf on ASCII strings.
         /// </summary>
-        internal static int LastIndexOf(byte[]/*!*/ array, int arrayLength, byte[]/*!*/ value, int start, int count) {
-            NormalizeLastIndexOfIndices(arrayLength, ref start, ref count);
-            int finish = start - count + 1;
-
-            if (value.Length == 0) {
-                return start;
-            }
-
-            for (int i = start - value.Length + 1; i >= finish; i--) {
-                bool match = true;
-                for (int j = 0; j < value.Length; j++) {
-                    if (value[j] != array[i + j]) {
-                        match = false;
-                        break;
-                    }
-                }
-
-                if (match) {
-                    return i;
-                }
-            }
-            return -1;
+        internal static int LastIndexOf(ReadOnlySpan<byte> data, byte[]/*!*/ value, int start, int count) {
+            return LastIndexOf(data, new ReadOnlySpan<byte>(value), start, count);
         }
 
         /// <summary>
         /// Implements the same behavior as String.LastIndexOf on ASCII strings.
         /// </summary>
-        internal static int LastIndexOf(char[]/*!*/ array, int arrayLength, byte[]/*!*/ value, int start, int count) {
-            NormalizeLastIndexOfIndices(arrayLength, ref start, ref count);
-            int finish = start - count + 1;
-
-            if (value.Length == 0) {
-                return start;
-            }
-
-            for (int i = start - value.Length + 1; i >= finish; i--) {
-                bool match = true;
-                for (int j = 0; j < value.Length; j++) {
-                    if (value[j] != array[i + j]) {
-                        match = false;
-                        break;
-                    }
-                }
-
-                if (match) {
-                    return i;
-                }
-            }
-            return -1;
+        internal static int LastIndexOf(ReadOnlySpan<char> data, byte[]/*!*/ value, int start, int count) {
+            return LastIndexOf(data, new ReadOnlySpan<char>(Widen(value)), start, count);
         }
 
         /// <summary>
         /// Implements the same behavior as String.LastIndexOf on ASCII strings.
         /// </summary>
         internal static int LastIndexOf(string/*!*/ str, byte[]/*!*/ value, int start, int count) {
-            NormalizeLastIndexOfIndices(str.Length, ref start, ref count);
-            int finish = start - count + 1;
+            return LastIndexOf(str.AsSpan(), Widen(value), start, count);
+        }
 
-            if (value.Length == 0) {
-                return start;
-            }
-
-            for (int i = start - value.Length + 1; i >= finish; i--) {
-                bool match = true;
-                for (int j = 0; j < value.Length; j++) {
-                    if (value[j] != str[i + j]) {
-                        match = false;
-                        break;
-                    }
-                }
-
-                if (match) {
-                    return i;
-                }
-            }
-            return -1;
+        // Ordinal comparison: the difference of the first elements that differ, or else -1, 0 or +1
+        // as the first sequence is shorter than, as long as or longer than the second.
+        internal static int ValueCompareTo<T>(ReadOnlySpan<T> data, ReadOnlySpan<T> other) where T : IBinaryInteger<T> {
+            int min = Math.Min(data.Length, other.Length);
+            int i = data.Slice(0, min).CommonPrefixLength(other.Slice(0, min));
+            return (i < min) ? Int32.CreateTruncating(data[i]) - Int32.CreateTruncating(other[i]) : data.Length.CompareTo(other.Length);
         }
 
         internal static int ValueCompareTo(this byte[]/*!*/ array, int itemCount, byte[]/*!*/ other) {
@@ -697,115 +552,29 @@ namespace IronRuby.Runtime {
         }
 
         internal static int ValueCompareTo(this byte[]/*!*/ array, int itemCount, byte[]/*!*/ other, int otherCount) {
-            int min = itemCount;
-            int defaultResult;
-            if (min < otherCount) {
-                defaultResult = -1;
-            } else if (min > otherCount) {
-                min = otherCount;
-                defaultResult = +1;
-            } else {
-                defaultResult = 0;
-            }
-
-            int i = new ReadOnlySpan<byte>(array, 0, min).CommonPrefixLength(new ReadOnlySpan<byte>(other, 0, min));
-            if (i < min) {
-                return (int)array[i] - other[i];
-            }
-
-            return defaultResult;
+            return ValueCompareTo(new ReadOnlySpan<byte>(array, 0, itemCount), new ReadOnlySpan<byte>(other, 0, otherCount));
         }
 
         internal static int ValueCompareTo(this char[]/*!*/ array, int itemCount, char[]/*!*/ other, int otherCount) {
-            int min = itemCount;
-            int defaultResult;
-            if (min < otherCount) {
-                defaultResult = -1;
-            } else if (min > otherCount) {
-                min = otherCount;
-                defaultResult = +1;
-            } else {
-                defaultResult = 0;
-            }
-
-            int i = new ReadOnlySpan<char>(array, 0, min).CommonPrefixLength(new ReadOnlySpan<char>(other, 0, min));
-            if (i < min) {
-                return (int)array[i] - other[i];
-            }
-
-            return defaultResult;
+            return ValueCompareTo(new ReadOnlySpan<char>(array, 0, itemCount), new ReadOnlySpan<char>(other, 0, otherCount));
         }
 
         internal static int ValueCompareTo(this char[]/*!*/ array, int itemCount, string/*!*/ other) {
-            int min = itemCount, defaultResult;
-            if (min < other.Length) {
-                defaultResult = -1;
-            } else if (min > other.Length) {
-                min = other.Length;
-                defaultResult = +1;
-            } else {
-                defaultResult = 0;
-            }
-
-            int i = new ReadOnlySpan<char>(array, 0, min).CommonPrefixLength(other.AsSpan(0, min));
-            if (i < min) {
-                return (int)array[i] - other[i];
-            }
-
-            return defaultResult;
-        }
-
-        internal static int ValueCompareTo(this byte[]/*!*/ array, int itemCount, string/*!*/ other) {
-            int min = itemCount;
-            int defaultResult;
-            if (min < other.Length) {
-                defaultResult = -1;
-            } else if (min > other.Length) {
-                min = other.Length;
-                defaultResult = +1;
-            } else {
-                defaultResult = 0;
-            }
-
-            for (int i = 0; i < min; i++) {
-                if (array[i] != other[i]) {
-                    return (int)array[i] - other[i];
-                }
-            }
-
-            return defaultResult;
+            return ValueCompareTo(new ReadOnlySpan<char>(array, 0, itemCount), other.AsSpan());
         }
 
         internal static int ValueCompareTo(this string/*!*/ str, string/*!*/ other) {
-            int min = str.Length, defaultResult;
-            if (min < other.Length) {
-                defaultResult = -1;
-            } else if (min > other.Length) {
-                min = other.Length;
-                defaultResult = +1;
-            } else {
-                defaultResult = 0;
-            }
-
-            int i = str.AsSpan(0, min).CommonPrefixLength(other.AsSpan(0, min));
-            if (i < min) {
-                return (int)str[i] - other[i];
-            }
-
-            return defaultResult;
+            return ValueCompareTo(str.AsSpan(), other.AsSpan());
         }
 
-        internal static bool SubstringEquals(string/*!*/ name, int start, int count, string/*!*/ other) {
-            if (count != other.Length) {
-                return false;
-            }
-
-            for (int i = 0; i < count; i++) {
-                if (name[start + i] != other[i]) {
-                    return false;
+        internal static int ValueCompareTo(ReadOnlySpan<byte> data, string/*!*/ other) {
+            int min = Math.Min(data.Length, other.Length);
+            for (int i = 0; i < min; i++) {
+                if (data[i] != other[i]) {
+                    return (int)data[i] - other[i];
                 }
             }
-            return true;
+            return data.Length.CompareTo(other.Length);
         }
 
         internal static bool ValueEquals<T>(T[] array, int arrayCount, T[] other, int otherCount) {
@@ -823,14 +592,6 @@ namespace IronRuby.Runtime {
             }
 
             return true;
-        }
-
-        public static TOutput[]/*!*/ ConvertAll<TInput, TOutput>(this TInput[]/*!*/ array, Func<TInput, TOutput>/*!*/ converter) {
-            var result = new TOutput[array.Length];
-            for (int i = 0; i < array.Length; i++) {
-                result[i] = converter(array[i]);
-            }
-            return result;
         }
 
         internal static void AddRange(IList/*!*/ list, IList/*!*/ range) {
@@ -897,14 +658,6 @@ namespace IronRuby.Runtime {
             return result;
         }
 
-        internal static void CopyTupleFields(MutableTuple/*!*/ src, MutableTuple/*!*/ dst) {
-            Debug.Assert(src.Capacity == dst.Capacity);
-            for (int i = 0; i < src.Capacity; i++) {
-                dst.SetValue(i, src.GetValue(i));
-            }
-        }
-
-#if FEATURE_ENCODING
         private sealed class CheckDecoderFallback : DecoderFallback {
             public bool HasInvalidCharacters { get; private set; }
 
@@ -1012,40 +765,37 @@ namespace IronRuby.Runtime {
         }
 
         internal static bool ContainsInvalidCharacters(char[]/*!*/ chars, int start, int count, Encoding/*!*/ encoding) {
+            return ContainsInvalidCharacters(new ReadOnlySpan<char>(chars, start, count), encoding);
+        }
+
+        internal static bool ContainsInvalidCharacters(ReadOnlySpan<char> chars, Encoding/*!*/ encoding) {
             // Every byte of a single byte encoding is valid in Ruby, see RubyOnlyEncodings.IsValid.
             if (encoding.IsSingleByte && encoding.CodePage != RubyEncoding.CodePageAscii && encoding.CodePage != RubyEncoding.CodePageBinary) {
                 return false;
+            }
+
+            // Validity is a matter of shape there, and a sequence of the right shape that names no
+            // character is held as escaped bytes, which no encoder takes: ask the bytes instead.
+            if (encoding is IStructuredEncoding) {
+                byte[] bytes;
+                try {
+                    bytes = RubyEncoding.GetRubyEncoding(encoding.CodePage).EscapingEncoding.GetBytes(chars.ToArray());
+                } catch (EncoderFallbackException) {
+                    return true;
+                }
+                return ContainsInvalidCharacters(bytes, 0, bytes.Length, encoding);
             }
 
             var encoder = encoding.GetEncoder();
             var fallback = new CheckEncoderFallback();
             encoder.Fallback = fallback;
             try {
-                encoder.GetByteCount(chars, start, count, true);
+                encoder.GetByteCount(chars, true);
             } catch (EncoderFallbackException) {
                 return true;
             }
             return fallback.HasInvalidCharacters;
         }
-#else
-        internal static bool ContainsInvalidCharacters(byte[]/*!*/ bytes, int start, int count, Encoding/*!*/ encoding) {
-            try {
-                encoding.GetCharCount(bytes, start, count);
-                return true;
-            } catch (DecoderFallbackException){
-                return false;
-            }
-        }
-
-        internal static bool ContainsInvalidCharacters(char[]/*!*/ chars, int start, int count, Encoding/*!*/ encoding) {
-            try {
-                encoding.GetByteCount(chars, start, count);
-                return true;
-            } catch (EncoderFallbackException) {
-                return false;
-            }
-        }
-#endif
     }
 }
 

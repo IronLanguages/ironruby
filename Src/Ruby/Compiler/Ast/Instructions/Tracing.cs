@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using IronRuby.Builtins;
@@ -141,6 +137,14 @@ namespace IronRuby.Compiler.Ast {
         private readonly TraceEvents _events;
         private readonly string _path;
         private readonly int _line;
+
+        internal MSA.Expression/*!*/ Scope { get { return _scope; } }
+        internal MSA.Expression/*!*/ Value { get { return _value; } }
+
+        /// <summary>The same hook with other operands (see MethodDefinition.LightFrameRewriter).</summary>
+        internal TraceReturnExpression/*!*/ Update(MSA.Expression/*!*/ scope, MSA.Expression/*!*/ value) {
+            return scope == _scope && value == _value ? this : new TraceReturnExpression(scope, value, _events, _path, _line);
+        }
 
         public TraceReturnExpression(MSA.Expression/*!*/ scope, MSA.Expression/*!*/ value, TraceEvents events, string path, int line) {
             _scope = scope;

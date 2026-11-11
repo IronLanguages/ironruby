@@ -89,7 +89,8 @@ namespace IronRuby.Wasm {
                     _resolverInstalled = true;
                 }
 
-                RubyContext.AlternativeParser = legacyParser ? RubyContext.LegacyParser : IronRuby.Prism.PrismAstBridge.Parse;
+                // prism is the only parser since the legacy one was removed; the option is accepted and ignored
+                RubyContext.AlternativeParser = IronRuby.Prism.PrismAstBridge.Parse;
 
                 var setup = new ScriptRuntimeSetup();
                 var ruby = Ruby.CreateRubySetup();

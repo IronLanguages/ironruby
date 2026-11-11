@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Linq;
@@ -41,11 +37,17 @@ using IronRuby.Runtime.Conversions;
 
 namespace IronRuby.Builtins {
     using Ast = Expression;
-    using Utils = IronRuby.Runtime.Utils;
 	using AstUtils = Microsoft.Scripting.Ast.Utils;
 
     public sealed partial class RubyClass : RubyModule, IDuplicable {
         public const string/*!*/ MainSingletonName = "__MainSingleton";
+
+        /// <summary>
+        /// The singleton class of a hosted scope's main object that its top-level `def's define their methods in
+        /// (see RubyTopLevelScope.CreateHostedTopLevelScope), so that the host can read them from the scope. Such a
+        /// method is a top-level method to the Ruby code, and its frames are labelled as CRuby labels one: "Object#foo".
+        /// </summary>
+        internal bool IsHostedTopLevelMethodOwner { get; set; }
 
         // Level in class hierarchy (0 == BasicObject)
         private readonly int _level;
@@ -117,7 +119,16 @@ namespace IronRuby.Builtins {
         /// </summary>
         internal bool HasAdoptedInstances { get; set; }
 
-        // Increased each time an extension method is defined on interfaces or generic definitions included in this class.
+        /// <summary>
+        /// Set on the class of a CLR type that is not an IRubyObject once an object of that type has been given a
+        /// class of its own in its instance data: a singleton class (extend, def obj.m) or an adopted class
+        /// (RubyContext.NoteOwnClassNoLock). Until then the immediate class of every object of the type is this class,
+        /// and RubyContext.GetImmediateClassOf answers it without looking the object's instance data up.
+        /// </summary>
+        internal volatile bool HasInstancesWithOwnClass;
+
+
+        // Increased each time an extension method is defined on this class or on interfaces or generic definitions included in it.
         internal int _extensionVersion;
 
         #endregion
@@ -172,10 +183,79 @@ namespace IronRuby.Builtins {
             }
         }
         
+        #region Hooks
+
+        /// <summary>
+        /// The hooks the runtime calls on a module, a class or an object (<see cref="RubyContext.CallHook"/>).
+        /// </summary>
+        internal enum Hook {
+            MethodAdded,
+            MethodRemoved,
+            MethodUndefined,
+            SingletonMethodAdded,
+            SingletonMethodRemoved,
+            SingletonMethodUndefined,
+            ConstantAdded,
+            Inherited,
+        }
+
+        internal static readonly string/*!*/[]/*!*/ HookNames = new[] {
+            Symbols.MethodAdded,
+            Symbols.MethodRemoved,
+            Symbols.MethodUndefined,
+            Symbols.SingletonMethodAdded,
+            Symbols.SingletonMethodRemoved,
+            Symbols.SingletonMethodUndefined,
+            Symbols.ConstantAdded,
+            Symbols.Inherited,
+        };
+
+        // What IsDefaultHook answered for an object whose immediate class this is, valid while the method version is the
+        // one in the upper 32 bits: bit h is set once hook h has been resolved, bit 16 + h if it resolved to the built-in
+        // empty method. Every definition in a class asks, so a repeated question costs the version check alone - no
+        // lookup-cache hit, and no class-hierarchy lock for a class whose lookup cache is full. Replaced as a whole; two
+        // racing fills may drop each other's bits, which only costs a resolution later.
+        private long _hookAnswers;
+
+        /// <summary>
+        /// True if calling <paramref name="hook"/> on an object whose immediate class this is would run the built-in method,
+        /// which does nothing: the method an implicit-self call finds - every visibility, no refinements - is an empty library
+        /// method that takes one argument. See <see cref="RubyContext.IsDefaultHook"/>.
+        /// </summary>
+        internal bool IsDefaultHook(Hook hook) {
+            long answers = Volatile.Read(ref _hookAnswers);
+            if ((int)(answers >> 32) == Version.Method && (answers & (1L << (int)hook)) != 0) {
+                return (answers & (1L << (16 + (int)hook))) != 0;
+            }
+            return ResolveHook(hook);
+        }
+
+        private bool ResolveHook(Hook hook) {
+            int version;
+            CachedMethodLookup lookup = GetMethodLookup(HookNames[(int)hook], out version);
+            var method = lookup.Info as RubyLibraryMethodInfo;
+            bool isDefault = lookup.Found && method != null && method.IsEmptyUnary;
+
+            // The lookup's answer stays right while the version does (-1: it must not be kept).
+            if (version >= 0) {
+                long answers = Volatile.Read(ref _hookAnswers);
+                long bits = ((int)(answers >> 32) == version) ? answers & 0xffffffffL : 0;
+                bits |= (1L << (int)hook) | (isDefault ? 1L << (16 + (int)hook) : 0);
+                Volatile.Write(ref _hookAnswers, ((long)version << 32) | bits);
+            }
+            return isDefault;
+        }
+
+        #endregion
+
         // RubyClass, RubyClass -> object
         private CallSite<Func<CallSite, object, object, object>> _classInheritedCallbackSite;
 
         internal void ClassInheritedEvent(RubyClass/*!*/ subClass) {
+            if (Context.IsDefaultHook(this, Hook.Inherited)) {
+                return;
+            }
+
             if (_classInheritedCallbackSite == null) {
                 Interlocked.CompareExchange(
                     ref _classInheritedCallbackSite,
@@ -200,7 +280,7 @@ namespace IronRuby.Builtins {
 
             // not called on singleton classes:
             if (IsSingletonClass) {
-                Context.Send(ref _singletonMethodAddedCallbackSite, Symbols.SingletonMethodAdded, _singletonClassOf, name);
+                Context.CallHook(ref _singletonMethodAddedCallbackSite, Hook.SingletonMethodAdded, _singletonClassOf, name);
             } else {
                 base.MethodAdded(name);
             }
@@ -210,7 +290,7 @@ namespace IronRuby.Builtins {
             Assert.NotNull(name);
 
             if (IsSingletonClass) {
-                Context.Send(ref _singletonMethodRemovedCallbackSite, Symbols.SingletonMethodRemoved, _singletonClassOf, name);
+                Context.CallHook(ref _singletonMethodRemovedCallbackSite, Hook.SingletonMethodRemoved, _singletonClassOf, name);
             } else {
                 base.MethodRemoved(name);
             }
@@ -220,7 +300,7 @@ namespace IronRuby.Builtins {
             Assert.NotNull(name);
 
             if (IsSingletonClass) {
-                Context.Send(ref _singletonMethodUndefinedCallbackSite, Symbols.SingletonMethodUndefined, _singletonClassOf, name);
+                Context.CallHook(ref _singletonMethodUndefinedCallbackSite, Hook.SingletonMethodUndefined, _singletonClassOf, name);
             } else {
                 base.MethodUndefined(name);
             }
@@ -301,10 +381,11 @@ namespace IronRuby.Builtins {
             }
 
             if (_underlyingSystemType == null) {
-                Interlocked.Exchange(ref _underlyingSystemType, 
+                Type baseType = _superClass != null ? _superClass.GetUnderlyingSystemType() : typeof(BasicObject);
+                Interlocked.Exchange(ref _underlyingSystemType,
                     RubyTypeDispenser.GetOrCreateType(
-                        _superClass != null ? _superClass.GetUnderlyingSystemType() : typeof(BasicObject), 
-                        GetImplementedInterfaces(),
+                        baseType,
+                        GetImplementedInterfaces(baseType),
                         _superClass != null && (_superClass.Restrictions & ModuleRestrictions.NoOverrides) != 0
                     )
                 );
@@ -342,7 +423,7 @@ namespace IronRuby.Builtins {
             _isSingletonClass = isSingletonClass;
             _isRubyClass = isRubyClass;
             _singletonClassOf = singletonClassOf;
-            _factories = factories ?? Utils.EmptyDelegates;
+            _factories = factories ?? Array.Empty<Delegate>();
 
             if (superClass != null) {
                 _level = superClass.Level + 1;
@@ -353,7 +434,7 @@ namespace IronRuby.Builtins {
                 // cannot happen before anyone looks a method up, but Class#subclasses reads
                 // the same list and has to see a class nobody has touched yet.
                 using (context.ClassHierarchyLocker()) {
-                    InitializeDependencies();
+                    InitializeDependencies(true);
                 }
             } else {
                 _level = 0;
@@ -363,25 +444,26 @@ namespace IronRuby.Builtins {
         #region Versioning
 
         internal override void InitializeDependencies() {
+            InitializeDependencies(false);
+        }
+
+        // isNew: called from the constructor, so no module can have this class in its list yet
+        // and the duplicate check - a walk over every live subclass of Object - is skipped.
+        private void InitializeDependencies(bool isNew) {
             Context.RequiresClassHierarchyLock();
             if (!_dependenciesInitialized) {
                 _dependenciesInitialized = true;
 
                 // super -> class dependency:
                 if (_superClass != null) {
-                    _superClass.AddDependentClass(this);
+                    _superClass.AddDependentClass(this, isNew);
                 }
 
                 // mixin -> class dependency:
-                AddAsDependencyOf(Mixins);
-            }
-        }
-
-        internal void AddAsDependencyOf(IList<RubyModule/*!*/>/*!*/ modules) {
-            Context.RequiresClassHierarchyLock();
-
-            for (int i = 0; i < modules.Count; i++) {
-                modules[i].AddDependentClass(this);
+                var mixins = Mixins;
+                for (int i = 0; i < mixins.Length; i++) {
+                    mixins[i].AddDependentClass(this, isNew);
+                }
             }
         }
 
@@ -474,8 +556,22 @@ namespace IronRuby.Builtins {
             //   - We could optimize a bit if the definition overrides a method group thata hasn't been used in a call site.
             //     In that case we wouldn't need to invalidate any rules. This is rare and we would still need to invalidate groups. So we don't do that.
             // - No CLR singletons special casing - extension methods can't be added on singletons.
+            //
+            // A group is stored under the name it was looked up by, which for a CLR method is either its own name (Describe)
+            // or the mangled one (describe, see TryGetClrMember).
+            var names = new HashSet<string>();
             foreach (var extension in extensions) {
-                InvalidateGroupsInSubClasses(extension.Method.Name, Int32.MaxValue);
+                string name = extension.Method.Name;
+                names.Add(name);
+
+                string mangled = RubyUtils.TryMangleName(name);
+                if (mangled != null) {
+                    names.Add(mangled);
+                }
+            }
+
+            foreach (var name in names) {
+                InvalidateGroupsInSubClasses(name, Int32.MaxValue);
             }
         }
 
@@ -588,26 +684,46 @@ namespace IronRuby.Builtins {
             RubyMemberInfo result = null;
             bool skipHidden = false;
 
-            if (ForEachAncestor((module) => {
-                if (modulesToSkip > 0) {
-                    modulesToSkip--;
-                    return false;
+            // ForEachAncestor's walk (prepends, the module, its mixins; then the superclass) without its closure,
+            // which was allocated for every method definition
+            for (RubyClass c = this; c != null; c = c.SuperClass) {
+                foreach (RubyModule p in c.Prepends) {
+                    if (IsOverriddenIn(p, name, ref modulesToSkip, ref skipHidden, ref result)) {
+                        return DefinedOrNull(result);
+                    }
                 }
-
-                // Skips modules whose method tables are not initialized as well as CLR methods that are not yet loaded to method tables.
-                // We can do so because such methods were not used in any cache.
-                //
-                // Skips super-forwarder since the forwarded super ancestor would be used in a site/group, not the forwarder itself.
-                // If the forwarded ancestor is overridden the forwarder will forward to the override.
-                //
-                // Skips "hidden" sentinels and hidden non-removable methods.
-                return module.TryGetDefinedMethod(name, ref skipHidden, out result) && !result.IsSuperForwarder;
-            })) {
-                // includes private methods:
-                return result != null && !result.IsUndefined ? result : null;
+                if (IsOverriddenIn(c, name, ref modulesToSkip, ref skipHidden, ref result)) {
+                    return DefinedOrNull(result);
+                }
+                foreach (RubyModule m in c.Mixins) {
+                    if (IsOverriddenIn(m, name, ref modulesToSkip, ref skipHidden, ref result)) {
+                        return DefinedOrNull(result);
+                    }
+                }
             }
 
             return null;
+        }
+
+        private static bool IsOverriddenIn(RubyModule/*!*/ module, string/*!*/ name, ref int modulesToSkip, ref bool skipHidden, ref RubyMemberInfo result) {
+            if (modulesToSkip > 0) {
+                modulesToSkip--;
+                return false;
+            }
+
+            // Skips modules whose method tables are not initialized as well as CLR methods that are not yet loaded to method tables.
+            // We can do so because such methods were not used in any cache.
+            //
+            // Skips super-forwarder since the forwarded super ancestor would be used in a site/group, not the forwarder itself.
+            // If the forwarded ancestor is overridden the forwarder will forward to the override.
+            //
+            // Skips "hidden" sentinels and hidden non-removable methods.
+            return module.TryGetDefinedMethod(name, ref skipHidden, out result) && !result.IsSuperForwarder;
+        }
+
+        private static RubyMemberInfo DefinedOrNull(RubyMemberInfo result) {
+            // includes private methods:
+            return result != null && !result.IsUndefined ? result : null;
         }
 
         // Returns max level in which a group has been invalidated.
@@ -652,7 +768,8 @@ namespace IronRuby.Builtins {
 
         public void InitializeClassCopy(RubyClass/*!*/ rubyClass) {
             if (!_isUninitializedCopy) {
-                throw RubyExceptions.CreateTypeError("already initialized class");
+                // MRI 4.0: a class that already exists is left as it is, no TypeError (#138)
+                return;
             }
             _isUninitializedCopy = false;
 
@@ -694,15 +811,37 @@ namespace IronRuby.Builtins {
             );
 
             if (!IsSingletonClass) {
-                // singleton members are copied here, not in InitializeCopy:
+                // singleton members are copied here, not in InitializeCopy, and the singleton class's
+                // own instance variables with them (rb_singleton_class_clone):
                 result.ImmediateClass.InitializeMembersFrom(ImmediateClass);
+                if (ImmediateClass.IsSingletonClass && result.ImmediateClass.IsSingletonClass) {
+                    Context.CopyInstanceData(ImmediateClass, result.ImmediateClass, false);
+                }
 
-                // copy instance variables and taint flag:
+                // copy instance variables:
                 Context.CopyInstanceData(this, result, false);
             }
             
             // members initialized in InitializeClassFrom (invoked by "initialize_copy")
             return result;
+        }
+
+        /// <summary>
+        /// MRI's rb_check_inheritable: what `class X &lt; S` and Class.new(S) accept as S.
+        /// </summary>
+        internal static RubyClass/*!*/ CheckInheritable(RubyContext/*!*/ context, object superClassObject) {
+            RubyClass superClass = superClassObject as RubyClass;
+            if (superClass == null) {
+                throw RubyExceptions.CreateTypeError("superclass must be an instance of Class (given an instance of {0})",
+                    context.GetClassDisplayName(superClassObject));
+            }
+            if (superClass.IsSingletonClass) {
+                throw RubyExceptions.CreateTypeError("can't make subclass of singleton class");
+            }
+            if (superClass == context.ClassClass) {
+                throw RubyExceptions.CreateTypeError("can't make subclass of Class");
+            }
+            return superClass;
         }
 
         // implements Class#new
@@ -714,17 +853,7 @@ namespace IronRuby.Builtins {
             // The argument is checked here rather than by the binder so that what it is wrong
             // about can be said the way MRI says it - and so that nil, which is a perfectly good
             // conversion to "no class", is refused rather than taken as Object.
-            RubyClass superClass = null;
-            if (superClassObject != Missing.Value) {
-                superClass = superClassObject as RubyClass;
-                if (superClass == null) {
-                    throw RubyExceptions.CreateTypeError("superclass must be an instance of Class (given an instance of {0})",
-                        context.GetClassDisplayName(superClassObject));
-                }
-                if (superClass.IsSingletonClass) {
-                    throw RubyExceptions.CreateTypeError("can't make subclass of singleton class");
-                }
-            }
+            RubyClass superClass = (superClassObject != Missing.Value) ? CheckInheritable(context, superClassObject) : null;
 
             RubyModule owner = scope.GetInnerMostModuleForConstantLookup();
             
@@ -815,9 +944,11 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// Stores unsucessfull look-ups of CLR type members.
         /// Reflection is not efficient at caching look-ups and we do multiple of them (due to mangling) each time a method is being resolved.
-        /// { (declaring-type, method-name, isStatic) -> (type-extension-version) }
+        /// { (declaring-type, method-name, isStatic, privateBinding) -> (type-extension-version) }
+        /// The cache is shared by all runtimes in the process, and a member that is missing without PrivateBinding
+        /// (a private field, say) exists with it, so the key includes that setting.
         /// </summary>
-        private static Dictionary<Key<Type, string, bool>, int> _clrFailedMemberLookupCache = new Dictionary<Key<Type, string, bool>, int>();
+        private static Dictionary<(Type, string, bool, bool), int> _clrFailedMemberLookupCache = new Dictionary<(Type, string, bool, bool), int>();
 
         /// <summary>
         /// GetRuntimeMethods includes
@@ -832,10 +963,10 @@ namespace IronRuby.Builtins {
         /// </summary>
         private static readonly TypeMemberCache<MethodInfo> _clrMethodsByName = new TypeMemberCache<MethodInfo>(RuntimeReflectionExtensions.GetRuntimeMethods);
         
-        private static bool IsFailureCached(Type/*!*/ type, string/*!*/ methodName, bool isStatic, int extensionVersion) {
+        private static bool IsFailureCached(Type/*!*/ type, string/*!*/ methodName, bool isStatic, bool privateBinding, int extensionVersion) {
             // check for cached lookup failure (if the cache is available):
             bool result = false;
-            var key = Key.Create(type, methodName, isStatic);
+            var key = (type, methodName, isStatic, privateBinding);
 
             var cache = Interlocked.Exchange(ref _clrFailedMemberLookupCache, null);
             if (cache != null) {
@@ -861,11 +992,11 @@ namespace IronRuby.Builtins {
             return result;
         }
 
-        private static void CacheFailure(Type/*!*/ type, string/*!*/ methodName, bool isStatic, int extensionVersion) {
+        private static void CacheFailure(Type/*!*/ type, string/*!*/ methodName, bool isStatic, bool privateBinding, int extensionVersion) {
             // store failure to the cache if the cache is not owned by another thread:
             var cache = Interlocked.Exchange(ref _clrFailedMemberLookupCache, null);
             if (cache != null) {
-                cache[Key.Create(type, methodName, isStatic)] = extensionVersion;
+                cache[(type, methodName, isStatic, privateBinding)] = extensionVersion;
                 Interlocked.Exchange(ref _clrFailedMemberLookupCache, cache);
             }
         }
@@ -887,7 +1018,7 @@ namespace IronRuby.Builtins {
             // Note: We don't cache results as this API is not used so frequently (e.g. for regular method dispatch).
             
             if (asType != null && !asType.IsAssignableFrom(type)) {
-                throw RubyExceptions.CreateNameError(String.Format("`{0}' does not inherit from `{1}'", cls.Name, Context.GetTypeName(asType, true)));
+                throw RubyExceptions.CreateNameError(String.Format("'{0}' does not inherit from '{1}'", cls.Name, Context.GetTypeName(asType, true)));
             }
 
             method = null;
@@ -911,7 +1042,8 @@ namespace IronRuby.Builtins {
         protected override bool TryGetClrMember(Type/*!*/ type, string/*!*/ name, bool mapNames, bool unmangleNames, out RubyMemberInfo method) {
             Context.RequiresClassHierarchyLock();
 
-            if (IsFailureCached(type, name, _isSingletonClass, _extensionVersion)) {
+            bool privateBinding = Context.DomainManager.Configuration.PrivateBinding;
+            if (IsFailureCached(type, name, _isSingletonClass, privateBinding, _extensionVersion)) {
                 method = null;
                 return false;
             }
@@ -920,7 +1052,7 @@ namespace IronRuby.Builtins {
                 return true;
             }
 
-            CacheFailure(type, name, _isSingletonClass, _extensionVersion);
+            CacheFailure(type, name, _isSingletonClass, privateBinding, _extensionVersion);
             method = null;
             return false;
         }
@@ -968,29 +1100,90 @@ namespace IronRuby.Builtins {
                 string propertyName = name.Substring(0, name.Length - 1);
                 string altName = unmangleNames ? RubyUtils.TryUnmangleMethodName(propertyName) : null;
                 
-                // property setter:
-                if (TryGetClrProperty(type, bindingFlags, inherited, true, name, propertyName, altName, out method)) return true;
+                if (TryGetClrSetter(type, bindingFlags, inherited, name, propertyName, altName, out method)) return true;
 
-                // writeable field:
-                if (TryGetClrField(type, bindingFlags, inherited, true, propertyName, altName, out method)) return true;
+                string irregularName = unmangleNames ? GetIrregularlyMangledName(type, propertyName) : null;
+                if (irregularName != null && TryGetClrSetter(type, bindingFlags, inherited, name, propertyName, irregularName, out method)) return true;
             } else {
                 string altName = unmangleNames ? RubyUtils.TryUnmangleMethodName(name) : null;
 
-                // method:
-                if (TryGetClrMethod(type, bindingFlags, inherited, false, name, null, name, altName, out method)) return true;
-                
-                // getter:
-                if (TryGetClrProperty(type, bindingFlags, inherited, false, name, name, altName, out method)) return true;
+                if (TryGetClrGetter(type, bindingFlags, inherited, name, altName, out method)) return true;
 
-                // event:
-                if (TryGetClrEvent(type, bindingFlags, inherited, name, altName, out method)) return true;
-
-                // field:
-                if (TryGetClrField(type, bindingFlags, inherited, false, name, altName, out method)) return true;
+                string irregularName = unmangleNames ? GetIrregularlyMangledName(type, name) : null;
+                if (irregularName != null && TryGetClrGetter(type, bindingFlags, inherited, name, irregularName, out method)) return true;
             }
 
             method = null;
             return false;
+        }
+
+        private bool TryGetClrSetter(Type/*!*/ type, BindingFlags bindingFlags, bool inherited, string/*!*/ name, string/*!*/ propertyName,
+            string altName, out RubyMemberInfo method) {
+
+            // property setter:
+            if (TryGetClrProperty(type, bindingFlags, inherited, true, name, propertyName, altName, out method)) return true;
+
+            // writeable field:
+            return TryGetClrField(type, bindingFlags, inherited, true, propertyName, altName, out method);
+        }
+
+        private bool TryGetClrGetter(Type/*!*/ type, BindingFlags bindingFlags, bool inherited, string/*!*/ name, string altName, 
+            out RubyMemberInfo method) {
+
+            // method:
+            if (TryGetClrMethod(type, bindingFlags, inherited, false, name, null, name, altName, out method)) return true;
+                
+            // getter:
+            if (TryGetClrProperty(type, bindingFlags, inherited, false, name, name, altName, out method)) return true;
+
+            // event:
+            if (TryGetClrEvent(type, bindingFlags, inherited, name, altName, out method)) return true;
+
+            // field:
+            return TryGetClrField(type, bindingFlags, inherited, false, name, altName, out method);
+        }
+
+        /// <summary>
+        /// { type -> { mangled name -> CLR member name } } for the members of the type whose names mangle to a name that
+        /// doesn't unmangle back to them.
+        /// </summary>
+        private static readonly ConditionalWeakTable<Type, Dictionary<string, string>> _irregularlyMangledNames = 
+            new ConditionalWeakTable<Type, Dictionary<string, string>>();
+
+        /// <summary>
+        /// Mangling is not one-to-one: JrConnect and JRConnect both mangle to jr_connect, which unmangles to JRConnect;
+        /// updateTransferData mangles to update_transfer_data, which unmangles to UpdateTransferData. #methods lists a CLR
+        /// member under its mangled name, so a member whose mangled name doesn't unmangle back to it is looked up through
+        /// this map. A member that the name does unmangle to wins.
+        /// </summary>
+        private static string GetIrregularlyMangledName(Type/*!*/ type, string/*!*/ rubyName) {
+            string result;
+            return RubyUtils.HasUnmangledName(rubyName) &&
+                _irregularlyMangledNames.GetValue(type, MakeIrregularlyMangledNames).TryGetValue(rubyName, out result) ? result : null;
+        }
+
+        private static Dictionary<string, string>/*!*/ MakeIrregularlyMangledNames(Type/*!*/ type) {
+            var names = new HashSet<string>();
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.FlattenHierarchy;
+            foreach (MemberInfo member in type.GetMembers(flags)) {
+                var method = member as MethodInfo;
+                if (method != null ? !method.IsSpecialName : member is PropertyInfo || member is FieldInfo || member is EventInfo) {
+                    names.Add(member.Name);
+                }
+            }
+
+            var result = new Dictionary<string, string>();
+            foreach (string name in names) {
+                string mangled, unmangled;
+                string existing;
+                if (RubyUtils.HasMangledName(name) && (mangled = RubyUtils.TryMangleName(name)) != null &&
+                    (unmangled = RubyUtils.TryUnmangleName(mangled)) != name && (unmangled == null || !names.Contains(unmangled)) &&
+                    // several members can mangle to the same name, pick one independently of reflection's order:
+                    (!result.TryGetValue(mangled, out existing) || String.CompareOrdinal(name, existing) < 0)) {
+                    result[mangled] = name;
+                }
+            }
+            return result;
         }
 
         protected override IEnumerable<string/*!*/>/*!*/ EnumerateClrMembers(Type/*!*/ type) {
@@ -1006,13 +1199,14 @@ namespace IronRuby.Builtins {
             foreach (MethodInfo method in type.GetDeclaredMethods()) {
                 if (IsVisible(method.Attributes, method.DeclaringType, false)) {
                     if (method.IsSpecialName) {
-                        var name = RubyUtils.MapOperator(method);
+                        // operators are invoked on instances (see TryGetClrMember), not on the class:
+                        var name = _isSingletonClass ? null : RubyUtils.MapOperator(method);
                         if (name != null) {
                             yield return name;
                         }
 
                         if (method.IsStatic == _isSingletonClass) {
-                            if (method.Name.StartsWith("get_")) {
+                            if (method.Name.StartsWith("get_", StringComparison.Ordinal)) {
                                 var propertyName = method.Name.Substring(4);
                                 yield return propertyName;
 
@@ -1021,7 +1215,7 @@ namespace IronRuby.Builtins {
                                 }
                             }
 
-                            if (method.Name.StartsWith("set_")) {
+                            if (method.Name.StartsWith("set_", StringComparison.Ordinal)) {
                                 var propertyName = method.Name.Substring(4);
                                 yield return propertyName + "=";
 
@@ -1099,7 +1293,7 @@ namespace IronRuby.Builtins {
             // If all CLR inherited members are to be returned we are done.
             // (creates a detached info; used by Kernel#clr_member)
             if (inherited) {
-                method = MakeGroup(initialMembers, initialMembers.Count, specialNameOnly, true);
+                method = MakeGroup(initialMembers, true);
                 return true;
             }
 
@@ -1117,7 +1311,9 @@ namespace IronRuby.Builtins {
                     // Skip classes that have no tracker, e.g. Fixnum(tracker) <: Integer(null) <: Numeric(null) <: Object(tracker).
                     // Skip CLR modules, their methods are not callable => do not include them into a method group.
                     // Skip all classes once hidden sentinel is encountered (no CLR overloads are visible since then).
-                    if (!skipHidden && module.TypeTracker != null && module.IsClass) {
+                    // Skip classes whose CLR type is not a CLR base of the type: System::Int16 <: Integer(Int32) must not merge
+                    // Int32.Parse/TryParse into Int16's overloads (that made Int16.TryParse("1") ambiguous).
+                    if (!skipHidden && module.TypeTracker != null && module.IsClass && module.TypeTracker.Type.IsAssignableFrom(type)) {
                         ancestors.Add((RubyClass)module);
                     }
                 }
@@ -1127,14 +1323,27 @@ namespace IronRuby.Builtins {
             });
 
             // (method clr name, parameter types) => (overload, owner)
-            Dictionary<Key<string, ValueArray<Type>>, ClrOverloadInfo> allMethods = null;
+            Dictionary<(string, ValueArray<Type>), ClrOverloadInfo> allMethods = null;
 
             if (inheritedRubyMember != null) {
                 // case [2.2.2]: add CLR methods from the Ruby member:
                 var inheritedGroup = inheritedRubyMember as RubyOverloadGroupInfo;
 
                 if (inheritedGroup != null) {
-                    AddMethodsOverwriteExisting(ref allMethods, inheritedGroup.MethodBases, inheritedGroup.OverloadOwners, specialNameOnly);
+                    // the same rule as for the ancestors above: only overloads that a CLR base of the type declares
+                    var owners = inheritedGroup.OverloadOwners;
+                    var methodBases = inheritedGroup.MethodBases;
+                    var inheritedOverloads = new List<OverloadInfo>(methodBases.Length);
+                    var inheritedOwners = new List<RubyOverloadGroupInfo>(methodBases.Length);
+                    for (int i = 0; i < methodBases.Length; i++) {
+                        var owner = (owners != null ? owners[i] : null) ?? inheritedGroup;
+                        var ownerTracker = owner.DeclaringModule.TypeTracker;
+                        if (ownerTracker == null || ownerTracker.Type.IsAssignableFrom(type)) {
+                            inheritedOverloads.Add(methodBases[i]);
+                            inheritedOwners.Add(owners != null ? owners[i] : null);
+                        }
+                    }
+                    AddMethodsOverwriteExisting(ref allMethods, inheritedOverloads, inheritedOwners.ToArray(), specialNameOnly);
                 } else if (inheritedRubyMember.IsRemovable) {
                     // The groups created below won't contain overloads defined above (if there are any).
                     // If this method is removed we need to invalidate them.
@@ -1166,7 +1375,7 @@ namespace IronRuby.Builtins {
                 // return the group, it will be stored in the method table by the caller:
                 method = MakeGroup(allMethods.Values);
             } else {
-                method = MakeGroup(initialMembers, initialMembers.Count, specialNameOnly, false);
+                method = MakeGroup(initialMembers, false);
             }
 
             return true;
@@ -1185,19 +1394,43 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            if ((bindingFlags & BindingFlags.Instance) != 0) {
+            if ((bindingFlags & BindingFlags.Instance) != 0 && HasClrExtensionMethods()) {
                 var extensions = GetClrExtensionMethods(type, memberName);
                 var altExtensions = (altName) != null ? GetClrExtensionMethods(type, altMemberName) : Enumerable.Empty<ExtensionMethodInfo>();
 
                 foreach (var extension in extensions.Concat(altExtensions)) {
-                    // TODO: inherit ExtensionMethodInfo <: OverloadInfo?
-                    yield return new ReflectionOverloadInfo(extension.Method);
+                    // Filtered like the type's own methods above. A property lookup (specialNameOnly) then skips
+                    // get_Weight(this Widget) as it skips an instance method named get_Weight: neither is an accessor.
+                    if (IsVisible(extension.Method.Attributes, extension.Method.DeclaringType, specialNameOnly)) {
+                        // TODO: inherit ExtensionMethodInfo <: OverloadInfo?
+                        yield return new ReflectionOverloadInfo(extension.Method);
+                    }
                 }
             }
         }
 
         private static IEnumerable<MethodInfo/*!*/>/*!*/ GetClrMethods(Type/*!*/ type, BindingFlags bindingFlags, bool inherited, string/*!*/ name) {
+            // Declared methods only, of a name the type does not declare: nothing, and no need to reflect over all of the
+            // type's methods (what _clrMethodsByName does on its first lookup in a type) to find that out - the misses of
+            // TryGetClrMember (see MayDeclareFieldOrEvent) are almost every lookup.
+            if (!inherited && !DeclaredMemberNames.MayDeclareMethod(type, name)) {
+                return Enumerable.Empty<MethodInfo>();
+            }
             return _clrMethodsByName.GetMembers(type, name, inherited).WithBindingFlags(bindingFlags);
+        }
+
+        // Whether this class or a module it mixes in has had CLR extension methods added (using_clr_extensions).
+        // Without any, the LINQ over ExtensionMethodInfo - a struct, so its iterator code is JIT-compiled - is skipped.
+        private bool HasClrExtensionMethods() {
+            if (_extensionMethods != null) {
+                return true;
+            }
+            foreach (var mixin in Mixins) {
+                if (mixin._extensionMethods != null) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private IEnumerable<ExtensionMethodInfo>/*!*/ GetClrExtensionMethods(Type/*!*/ type, string/*!*/ name) {
@@ -1213,10 +1446,14 @@ namespace IronRuby.Builtins {
                 }
             }
 
+            // The extensions of the interfaces the type implements: those of a generic interface definition (IEnumerable<T>)
+            // are bound against the type, those of an instantiation (Sum(this IEnumerable<int>)) apply to every type that
+            // implements it - IsExtensionOf only accepts the instantiation itself.
             foreach (var mixin in Mixins) {
                 if (mixin._extensionMethods != null && mixin._extensionMethods.TryGetValue(name, out extensions)) {
                     foreach (var extension in extensions) {
-                        if (extension.IsExtensionOf(type)) {
+                        if (extension.IsExtensionOf(type) ||
+                            !extension.ExtendedType.ContainsGenericParameters && extension.ExtendedType.IsAssignableFrom(type)) {
                             yield return extension;
                         }
                     }
@@ -1225,16 +1462,16 @@ namespace IronRuby.Builtins {
         }
 
         // Returns the number of methods newly added to the dictionary.
-        private bool AddMethodsOverwriteExisting(ref Dictionary<Key<string, ValueArray<Type>>, ClrOverloadInfo> methods,
+        private bool AddMethodsOverwriteExisting(ref Dictionary<(string, ValueArray<Type>), ClrOverloadInfo> methods,
             IEnumerable<OverloadInfo/*!*/>/*!*/ newOverloads, RubyOverloadGroupInfo/*!*/[] overloadOwners, bool specialNameOnly) {
 
             bool anyChange = false;
             int i = 0;
             foreach (var method in newOverloads) {
                 if (IsVisible(method.Attributes, method.DeclaringType, specialNameOnly)) {
-                    var paramTypes = Key.Create(method.Name, new ValueArray<Type>(ReflectionUtils.GetParameterTypes(method.Parameters)));
+                    var paramTypes = (method.Name, new ValueArray<Type>(ReflectionUtils.GetParameterTypes(method.Parameters)));
                     if (methods == null) {
-                        methods = new Dictionary<Key<string, ValueArray<Type>>, ClrOverloadInfo>();
+                        methods = new Dictionary<(string, ValueArray<Type>), ClrOverloadInfo>();
                     }
 
                     methods[paramTypes] = new ClrOverloadInfo {
@@ -1302,16 +1539,6 @@ namespace IronRuby.Builtins {
             return !field.IsInitOnly && !field.IsLiteral;
         }
 
-        private int GetVisibleMethodCount(IEnumerable<OverloadInfo/*!*/>/*!*/ members, bool specialNameOnly) {
-            int count = 0;
-            foreach (OverloadInfo method in members) {
-                if (IsVisible(method.Attributes, method.DeclaringType, specialNameOnly)) {
-                    count++;
-                }
-            }
-            return count;
-        }
-
         private RubyOverloadGroupInfo/*!*/ MakeGroup(ICollection<ClrOverloadInfo>/*!*/ allMethods) {
             var overloads = new OverloadInfo[allMethods.Count];
             var overloadOwners = new RubyOverloadGroupInfo[overloads.Length];
@@ -1336,37 +1563,13 @@ namespace IronRuby.Builtins {
             return result;
         }
 
-        private RubyMethodGroupInfo/*!*/ MakeGroup(IEnumerable<OverloadInfo/*!*/>/*!*/ members, int visibleMemberCount, bool specialNameOnly, bool isDetached) {
-            var allMethods = new OverloadInfo[visibleMemberCount];
-            int i = 0;
-            foreach (var method in members) {
-                if (IsVisible(method.Attributes, method.DeclaringType, specialNameOnly)) {
-                    allMethods[i++] = method;
-                }
-            }
-
+        // members are what GetClrMethods returned, already filtered
+        private RubyMethodGroupInfo/*!*/ MakeGroup(List<OverloadInfo/*!*/>/*!*/ members, bool isDetached) {
+            var allMethods = members.ToArray();
             return isDetached ? 
                 new RubyMethodGroupInfo(allMethods, this, _isSingletonClass) :
                 new RubyOverloadGroupInfo(allMethods, this, null, _isSingletonClass);
         }
-
-        // TODO: Indexers can be overloaded:
-        //private bool TryGetClrProperty(Type/*!*/ type, BindingFlags bindingFlags, string/*!*/ name, bool isWrite, out RubyMemberInfo method) {
-        //    Assert.NotNull(type, name);
-
-        //    PropertyInfo propertyInfo = type.GetProperty(name, bindingFlags);
-        //    if (propertyInfo != null) {
-        //        MethodInfo accessor = isWrite ? propertyInfo.GetSetMethod(false) : propertyInfo.GetGetMethod(false);
-        //        if (accessor != null) {
-        //            // TODO: define RubyPropertyInfo class
-        //            method = new RubyMethodGroupInfo(new MethodBase[] { accessor }, this, _isSingletonClass);
-        //            return true;
-        //        }
-        //    }
-
-        //    method = null;
-        //    return false;
-        //}
 
         private bool TryGetClrProperty(Type/*!*/ type, BindingFlags bindingFlags, bool inherited, bool isWrite, 
             string/*!*/ name, string/*!*/ clrName, string altClrName, out RubyMemberInfo method) {
@@ -1380,10 +1583,35 @@ namespace IronRuby.Builtins {
                 altName != null && TryGetClrField(type, bindingFlags, inherited, isWrite, altName, out method);
         }
 
+        /// <summary>
+        /// The names of the fields and events <paramref name="type"/> declares, of any visibility, static or instance.
+        /// A method name that is not in a class's method table is looked up as a CLR member of each CLR class on the way
+        /// up the hierarchy, and nearly every such lookup misses: Object alone sees hundreds of names (`require',
+        /// `method_added', ...) while the prelude loads. RuntimeType.GetField and GetEvent populate the type's member
+        /// cache for each name they are asked, so the misses were ~13 ms of `ir -e 1'; a name not in this set is not
+        /// asked for at all.
+        /// </summary>
+        private static bool MayDeclareFieldOrEvent(Type/*!*/ type, string/*!*/ name) {
+            return _declaredFieldAndEventNames.GetValue(type, static t => {
+                var names = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var field in t.GetFields(BindingFlags.DeclaredOnly | ReflectionUtils.AllMembers)) {
+                    names.Add(field.Name);
+                }
+                foreach (var e in t.GetEvents(BindingFlags.DeclaredOnly | ReflectionUtils.AllMembers)) {
+                    names.Add(e.Name);
+                }
+                return names;
+            }).Contains(name);
+        }
+
+        private static readonly ConditionalWeakTable<Type, HashSet<string>> _declaredFieldAndEventNames = new ConditionalWeakTable<Type, HashSet<string>>();
+
         private bool TryGetClrField(Type/*!*/ type, BindingFlags bindingFlags, bool inherited, bool isWrite, string/*!*/ name, out RubyMemberInfo method) {
             FieldInfo fieldInfo;
             if (inherited) {
                 fieldInfo = type.GetInheritedFields(name).WithBindingFlags(bindingFlags).FirstOrDefault();
+            } else if (!MayDeclareFieldOrEvent(type, name)) {
+                fieldInfo = null;
             } else {
                 fieldInfo = type.GetDeclaredField(name).WithBindingFlags(bindingFlags);
             }
@@ -1410,6 +1638,8 @@ namespace IronRuby.Builtins {
             EventInfo eventInfo;
             if (inherited) {
                 eventInfo = type.GetInheritedEvents(name).WithBindingFlags(bindingFlags).FirstOrDefault();
+            } else if (!MayDeclareFieldOrEvent(type, name)) {
+                eventInfo = null;
             } else {
                 eventInfo = type.GetDeclaredEvent(name).WithBindingFlags(bindingFlags);
             }
@@ -1429,6 +1659,19 @@ namespace IronRuby.Builtins {
         #region Dynamic operations
 
         /// <summary>
+        /// A Ruby subclass of a class whose CLR type is sealed (Integer, Symbol, Float) has no CLR type of its own
+        /// to allocate - nor, in MRI, an allocator. (Its type is made on first use, so this is where that fails.)
+        /// </summary>
+        private bool HasSealedClrBase() {
+            try {
+                GetUnderlyingSystemType();
+                return false;
+            } catch (NotSupportedException) {
+                return true;
+            }
+        }
+
+        /// <summary>
         /// Implements Class#allocate feature.
         /// </summary>  
         public void BuildObjectAllocation(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ methodName) {
@@ -1439,7 +1682,7 @@ namespace IronRuby.Builtins {
             if (!metaBuilder.Error) {
                 if (_isUninitializedAllocation) {
                     metaBuilder.SetError(Methods.MakeUninitializedClassInstantiatedError.OpCall());
-                } else if (!BuildAllocatorCall(metaBuilder, args, () => AstUtils.Constant(Name))) {
+                } else if (HasSealedClrBase() || !BuildAllocatorCall(metaBuilder, args, () => AstUtils.Constant(Name))) {
                     metaBuilder.SetError(Methods.MakeAllocatorUndefinedError.OpCall(Ast.Convert(args.TargetExpression, typeof(RubyClass))));
                 }
             }
@@ -1465,6 +1708,68 @@ namespace IronRuby.Builtins {
             } else {
                 RubyMethodGroupInfo.BuildCallNoFlow(metaBuilder, args, methodName, ctors, SelfCallConvention.NoSelf, true);
             }
+        }
+
+        /// <summary>
+        /// The construction BuildObjectConstructionNoFlow builds for a call of Class#new with <paramref name="count"/> arguments and
+        /// no block, in the cases it is the allocation of a RubyObject and maybe a call of a Ruby initializer of that arity and
+        /// nothing else; null otherwise.
+        /// </summary>
+        internal ObjectConstruction TryGetObjectConstruction(int count) {
+            if (IsSingletonClass || _isUninitializedAllocation || _structInfo != null || !(_isRubyClass || IsObjectClass) || IsException() ||
+                _factories.Length != 0) {
+                return null;
+            }
+
+            // A RubyObject - or an instance of the type generated for a class implementing CLR interfaces (one that mixes in
+            // Comparable or Enumerable is an IComparable or an IEnumerable, see GetImpliedClrInterface), allocated the same way.
+            Type type = GetUnderlyingSystemType();
+            Func<RubyClass, object> allocator = null;
+            if (type != typeof(object) && type != typeof(RubyObject) && (allocator = RubyTypeDispenser.TryGetObjectAllocator(type)) == null) {
+                return null;
+            }
+
+            int version;
+            RubyMemberInfo initializer;
+            using (Context.ClassHierarchyLocker()) {
+                version = Version.Method;
+                initializer = ResolveMethodForSiteNoLock(Symbols.Initialize, VisibilityContext.AllVisible).Info;
+            }
+
+            if (initializer == null) {
+                return null;
+            }
+
+            // Object#initialize and BasicObject#initialize: no arguments - construct (a RubyObject constructor, the same allocation)
+            if (initializer is RubyLibraryMethodInfo) {
+                return (count == 0 && (initializer.DeclaringModule.IsObjectClass || initializer.DeclaringModule.IsBasicObjectClass)) ?
+                    new ObjectConstruction(this, allocator, version, (Delegate)null, 0) : null;
+            }
+
+            // a Ruby initializer: allocate and call it (BuildOverriddenInitializerCall), unless it is empty
+            var method = initializer as RubyMethodInfo;
+            if (method == null || method.GetType() != typeof(RubyMethodInfo) || method.DefinitionName != Symbols.Initialize) {
+                return null;
+            }
+
+            // an empty one is not called at all, whatever the arguments: left to the rule
+            if (method.IsEmpty) {
+                return null;
+            }
+
+            // one of optional parameters or a rest parameter is called as the rule calls it (RubyMethodInfo.BuildCallNoFlow):
+            var parameters = method.Parameters;
+            if (parameters.Unsplat != null || parameters.Optional.Length > 0) {
+                var call = RubyMethodCallPlan.TryCreate(method, count, Symbols.Initialize);
+                return (call != null) ? new ObjectConstruction(this, allocator, version, call, count) : null;
+            }
+
+            if (parameters.Mandatory.Length != count) {
+                return null;
+            }
+
+            var body = method.GetDelegate();
+            return (body.GetType() == MemberDispatcher.GetRubyMethodDelegateType(count)) ? new ObjectConstruction(this, allocator, version, body, count) : null;
         }
 
         public void BuildObjectConstructionNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ methodName) {
@@ -1512,6 +1817,22 @@ namespace IronRuby.Builtins {
                     return;
                 }
 
+                Type clrBase;
+                if (!allocatorFound && isRubyInitializer && _isRubyClass && (clrBase = GetClrBaseType(type)) != null && !type.IsAbstract
+                    && (Context.GetModule(clrBase).Restrictions & ModuleRestrictions.NoNameMapping) == 0) {
+                    // The CLR base class has no parameterless constructor: initialize constructs the instance, with super
+                    // (see SuperCallAction), and it is an error if it does not.
+                    metaBuilder.Result = AstUtils.Convert(
+                        Ast.Call(RubyOps.AllocateUnconstructedMethod, Ast.Convert(args.TargetExpression, typeof(RubyClass)), AstUtils.Constant(type)),
+                        type
+                    );
+                    BuildOverriddenInitializerCall(metaBuilder, args, initializer);
+                    if (!metaBuilder.Error) {
+                        metaBuilder.Result = Ast.Call(RubyOps.EnsureConstructedMethod, AstUtils.Box(metaBuilder.Result), AstUtils.Constant(clrBase));
+                    }
+                    return;
+                }
+
                 if (!allocatorFound) {
                     metaBuilder.SetError(Methods.MakeMissingDefaultConstructorError.OpCall(
                         Ast.Convert(args.TargetExpression, typeof(RubyClass)),
@@ -1544,7 +1865,8 @@ namespace IronRuby.Builtins {
 
                     if (type.IsValueType) {
                         if (constructionOverloads.Length == 0 || GetConstructor(type) == null) {
-                            constructionOverloads = ArrayUtils.Append(constructionOverloads, new ReflectionOverloadInfo(Methods.CreateDefaultInstance));
+                            constructionOverloads = ArrayUtils.Append(constructionOverloads,
+                                new ReflectionOverloadInfo(RubyOps.CreateDefaultValueMethod.MakeGenericMethod(type)));
                         }
                     } else if (constructionOverloads.Length == 0) {
                         metaBuilder.SetError(Methods.MakeAllocatorUndefinedError.OpCall(Ast.Convert(args.TargetExpression, typeof(RubyClass))));
@@ -1625,6 +1947,20 @@ namespace IronRuby.Builtins {
                     metaBuilder.ControlFlowBuilder = RubyMethodInfo.RuleControlFlowBuilder;
                 }
             }
+        }
+
+        /// <summary>
+        /// The CLR class a type emitted for a Ruby class derives from, or null if it derives from no CLR class
+        /// (only from Object, through RubyObject).
+        /// </summary>
+        internal static Type GetClrBaseType(Type/*!*/ type) {
+            if (!typeof(IRubyObject).IsAssignableFrom(type)) {
+                return null;
+            }
+            while (type != null && typeof(IRubyObject).IsAssignableFrom(type)) {
+                type = type.BaseType;
+            }
+            return (type == null || type == typeof(object)) ? null : type;
         }
 
         public bool BuildAllocatorCall(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, Func<Expression>/*!*/ defaultExceptionMessage) {

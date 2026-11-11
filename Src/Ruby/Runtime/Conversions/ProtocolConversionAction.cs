@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections;
@@ -25,6 +21,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Dynamic;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
 using IronRuby.Compiler.Generation;
@@ -65,6 +62,17 @@ namespace IronRuby.Runtime.Conversions {
         public static RubyConversionAction/*!*/ GetConversionAction(RubyContext context, Type/*!*/ parameterType, bool allowProtocolConversions) {
             var factory = TryGetConversionAction(parameterType, allowProtocolConversions);
             return factory != null ? factory(context != null ? context.MetaBinderFactory : RubyMetaBinderFactory.Shared) : null;
+        }
+
+        /// <summary>
+        /// The conversion of an argument to a CLR method's parameter: GetConversionAction's, except that a String
+        /// parameter wants a String rather than a method name (<see cref="ConvertToClrStringAction"/>).
+        /// </summary>
+        internal static RubyConversionAction/*!*/ GetArgumentConversionAction(RubyContext context, Type/*!*/ parameterType, bool allowProtocolConversions) {
+            if (allowProtocolConversions && parameterType == typeof(string)) {
+                return ConvertToClrStringAction.Make(context);
+            }
+            return GetConversionAction(context, parameterType, allowProtocolConversions);
         }
 
         public static bool HasDefaultConversion(Type/*!*/ parameterType) {
@@ -180,6 +188,14 @@ namespace IronRuby.Runtime.Conversions {
             get { return Methods.CreateImplicitConversionError; }
         }
 
+        /// <summary>
+        /// True if a to_xxx the object defines is called without asking an overridden respond_to? first;
+        /// respond_to? is then only asked when there is no such method.
+        /// </summary>
+        internal virtual bool CallsDefinedMethodDirectly {
+            get { return false; }
+        }
+
         public override Type/*!*/ ReturnType {
             get { 
                 return (ConversionResultValidator != null) ? ConversionResultValidator.ReturnType : typeof(object); 
@@ -276,6 +292,13 @@ namespace IronRuby.Runtime.Conversions {
                             targetClass.Context.KernelModule
                         );
                     }
+                } else if (conversions.Length == 1 && conversions[0].CallsDefinedMethodDirectly) {
+                    var method = targetClass.ResolveMethodForSiteNoLock(conversions[0].ToMethodName, VisibilityContext.AllVisible).Info;
+                    if (method != null) {
+                        respondToMethod = MethodResolutionResult.NotFound;
+                        selectedConversion = conversions[0];
+                        conversionMethod = method;
+                    }
                 }
             }
 
@@ -353,6 +376,55 @@ namespace IronRuby.Runtime.Conversions {
         /// </summary>
         private static bool IsOverridden(RubyMemberInfo method, RubyModule builtinOwner) {
             return method != null && !(method.DeclaringModule == builtinOwner && method is RubyLibraryMethodInfo);
+        }
+
+        /// <summary>
+        /// The to_xxx method the default conversion to <paramref name="parameterType"/> calls (to_str for a String
+        /// parameter, to_int for an Int32 one, ...), or null if that conversion is not a single protocol method.
+        /// </summary>
+        internal static string GetDefaultConversionMethodName(RubyContext/*!*/ context, Type/*!*/ parameterType) {
+            var conversion = TryGetDefaultConversionAction(context, parameterType) as ProtocolConversionAction;
+            return (conversion != null) ? conversion.ToMethodName : null;
+        }
+
+        /// <summary>
+        /// Everything whose definition decides whether an object answers a default conversion (see <see cref="CanConvert"/>):
+        /// the to_xxx methods the conversions of TryGetDefaultConversionAction call, and the methods asked instead of them.
+        /// </summary>
+        internal static readonly string/*!*/[]/*!*/ DefaultConversionMethodNames = new[] {
+            Symbols.ToStr, Symbols.ToInt, Symbols.ToF, Symbols.ToAry, Symbols.ToHash,
+            Symbols.RespondTo, Symbols.MethodMissing, Symbols.RespondToMissing
+        };
+
+        /// <summary>
+        /// False if <see cref="BuildConversion"/> could only build the conversion error for an object of
+        /// <paramref name="targetClass"/>: the class has no <paramref name="methodName"/> and leaves respond_to? and
+        /// method_missing as Kernel and BasicObject define them, so nothing asks the object at run time.
+        /// The lookups are registered as BuildConversion's are: defining any of these methods later changes the
+        /// version of the class, which a rule that relies on the answer has to test.
+        /// </summary>
+        internal static bool CanConvert(RubyClass/*!*/ targetClass, string/*!*/ methodName) {
+            RubyContext context = targetClass.Context;
+            context.RequiresClassHierarchyLock();
+
+            var respondTo = targetClass.ResolveMethodForSiteNoLock(Symbols.RespondTo, VisibilityContext.AllVisible);
+            if (respondTo.Found && IsOverridden(respondTo.Info, context.KernelModule)) {
+                return true;
+            }
+
+            var methodMissing = targetClass.ResolveMethodForSiteNoLock(Symbols.MethodMissing, VisibilityContext.AllVisible);
+            if (!respondTo.Found) {
+                methodMissing.InvalidateSitesOnMissingMethodAddition(Symbols.RespondTo, context);
+            }
+
+            if (targetClass.ResolveMethodForSiteNoLock(methodName, VisibilityContext.AllVisible).Found) {
+                return true;
+            }
+            methodMissing.InvalidateSitesOnMissingMethodAddition(methodName, context);
+
+            // An object that has overridden method_missing is asked for the conversion anyway (MakeMethodMissingConversion).
+            // One that has overridden only respond_to_missing? is asked that, but nothing could answer the call then:
+            return IsOverridden(methodMissing.Info, context.BasicObjectClass) && !(methodMissing.Info is RubyScopeMethodMissingInfo);
         }
 
         /// <summary>
@@ -447,12 +519,17 @@ namespace IronRuby.Runtime.Conversions {
         // answers every call of a process that has one runtime; a second runtime just misses.
         private static TSelf _lastMade;
 
-        public static TSelf/*!*/ Make(RubyContext/*!*/ context) {
+        /// <summary>
+        /// The runtime's action; with a null <paramref name="context"/> the shared one (<see cref="MakeShared"/>),
+        /// which a shared composite conversion is made of.
+        /// </summary>
+        public static TSelf/*!*/ Make(RubyContext context) {
             TSelf last = _lastMade;
             if (last != null && ReferenceEquals(last.Context, context)) {
                 return last;
             }
-            return _lastMade = context.MetaBinderFactory.Conversion<TSelf>();
+            var factory = (context != null) ? context.MetaBinderFactory : RubyMetaBinderFactory.Shared;
+            return _lastMade = factory.Conversion<TSelf>();
         }
 
         [Emitted]
@@ -469,9 +546,13 @@ namespace IronRuby.Runtime.Conversions {
         }
     }
 
-    public abstract class ConvertToReferenceTypeAction<TSelf, TTargetType> : ProtocolConversionAction<TSelf>
+    public abstract class ConvertToReferenceTypeAction<TSelf, TTargetType> : ProtocolConversionAction<TSelf>, IImplicitConversion<TTargetType>
         where TSelf : ConvertToReferenceTypeAction<TSelf, TTargetType>, new()
         where TTargetType : class {
+
+        bool IImplicitConversion<TTargetType>.TryConvertImplicitly(object target, out TTargetType result) {
+            return TryConvertImplicitly(target, out result);
+        }
 
         internal protected override bool TryImplicitConversion(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args) {
             return TryImplicitConversionInternal(metaBuilder, args);
@@ -490,6 +571,91 @@ namespace IronRuby.Runtime.Conversions {
             }
             return false;
         }
+
+        /// <summary>
+        /// The conversion <see cref="TryImplicitConversion"/> builds into the rule for the target - it depends on the target's type
+        /// alone - made without the rule; false if it builds none (the rule then calls a conversion method, or raises).
+        /// </summary>
+        internal virtual bool TryConvertImplicitly(object target, out TTargetType result) {
+            if (target == null) {
+                result = null;
+                return true;
+            }
+            result = target as TTargetType;
+            return result != null;
+        }
+
+        // A conversion of a value that needs no conversion method - the commonest by far - goes without a rule: the dispatcher tests
+        // what the rule would (the target's exact type, see BuildConversion) and converts the same way.
+        protected override object BindPrecompiled(Type/*!*/ delegateType, object[]/*!*/ args) {
+            return (Context != null && (delegateType != typeof(Func<CallSite, object, TTargetType>) || ReturnType == typeof(TTargetType))) ?
+                ImplicitConversionDispatcher<TTargetType>.TryCreate(this, delegateType, args) : null;
+        }
+    }
+
+    internal sealed class ImplicitConversionDispatcher<TTargetType> where TTargetType : class {
+        private readonly IImplicitConversion<TTargetType>/*!*/ _conversion;
+
+        // the exact type of the values converted, null for nil:
+        private readonly Type _type;
+
+        // Whether a value of that type converts to itself (to_str of a String, to_proc of a Proc, ...), which depends on the type
+        // alone: the type test is then all the dispatcher does, as all the rule does - without the calls of the conversion, which
+        // cost a hot site more than the rule's test (an interface call and a cast, both in code shared by all target types).
+        private readonly bool _isIdentity;
+
+        private ImplicitConversionDispatcher(IImplicitConversion<TTargetType>/*!*/ conversion, object target, bool isIdentity) {
+            _conversion = conversion;
+            _type = (target != null) ? target.GetType() : null;
+            _isIdentity = isIdentity;
+        }
+
+        /// <summary>
+        /// The dispatcher of a site converting to TTargetType, or one whose result is an object (the rule's result, a reference
+        /// converted to object, is the same object) - if the conversion of the argument is implicit.
+        /// </summary>
+        internal static object TryCreate(IImplicitConversion<TTargetType>/*!*/ conversion, Type/*!*/ delegateType, object[]/*!*/ args) {
+            TTargetType result;
+            if (args.Length != 1 || delegateType != typeof(Func<CallSite, object, TTargetType>) && delegateType != typeof(Func<CallSite, object, object>) ||
+                RubyCallAction.IsForeignObject(args[0]) || !conversion.TryConvertImplicitly(args[0], out result)) {
+                return null;
+            }
+
+            var dispatcher = new ImplicitConversionDispatcher<TTargetType>(conversion, args[0], ReferenceEquals(result, args[0]));
+            return (delegateType == typeof(Func<CallSite, object, object>)) ?
+                (object)new Func<CallSite, object, object>(dispatcher.InvokeUntyped) :
+                new Func<CallSite, object, TTargetType>(dispatcher.Invoke);
+        }
+
+        private TTargetType Invoke(CallSite/*!*/ site, object target) {
+            if (target == null ? _type == null : target.GetType() == _type) {
+                if (_isIdentity) {
+                    return Unsafe.As<TTargetType>(target);
+                }
+                TTargetType result;
+                if (_conversion.TryConvertImplicitly(target, out result)) {
+                    return result;
+                }
+            }
+            return ((CallSite<Func<CallSite, object, TTargetType>>)site).Update(site, target);
+        }
+
+        private object InvokeUntyped(CallSite/*!*/ site, object target) {
+            if (target == null ? _type == null : target.GetType() == _type) {
+                if (_isIdentity) {
+                    return target;
+                }
+                TTargetType result;
+                if (_conversion.TryConvertImplicitly(target, out result)) {
+                    return result;
+                }
+            }
+            return ((CallSite<Func<CallSite, object, object>>)site).Update(site, target);
+        }
+    }
+
+    internal interface IImplicitConversion<TTargetType> where TTargetType : class {
+        bool TryConvertImplicitly(object target, out TTargetType result);
     }
 
     public abstract class TryConvertToReferenceTypeAction<TSelf, TTargetType> : ConvertToReferenceTypeAction<TSelf, TTargetType>
@@ -511,6 +677,9 @@ namespace IronRuby.Runtime.Conversions {
         protected override string/*!*/ ToMethodName { get { return Symbols.ToProc; } }
         protected override string/*!*/ TargetTypeName { get { return "Proc"; } }
         protected override MethodInfo ConversionResultValidator { get { return Methods.ToProcValidator; } }
+
+        // &obj: MRI's vm_to_proc calls a #to_proc the object has without asking respond_to?.
+        internal override bool CallsDefinedMethodDirectly { get { return true; } }
     }
 
     #region String, Path, Symbol, Regex
@@ -563,6 +732,11 @@ namespace IronRuby.Runtime.Conversions {
         protected override string/*!*/ ToMethodName { get { return Symbols.ToStr; } }
         protected override string/*!*/ TargetTypeName { get { return "Regexp"; } }
         protected override MethodInfo ConversionResultValidator { get { return Methods.ToRegexValidator; } }
+
+        // MRI's get_pat: something that is neither a Regexp nor a String was meant to be a Regexp.
+        protected override MethodInfo/*!*/ ConversionErrorFactory {
+            get { return Methods.CreateWrongArgumentTypeError; }
+        }
     }
 
     // TODO: remove (replace by MutableString/RubySymbol conversion)
@@ -591,10 +765,11 @@ namespace IronRuby.Runtime.Conversions {
         }
 
         internal protected override bool TryImplicitConversion(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args) {
-            if (base.TryImplicitConversion(metaBuilder, args)) {
-                return true;
-            }
+            return TryImplicitConversionInternal(metaBuilder, args) || TryConvertStringOrSymbol(metaBuilder, args);
+        }
 
+        // A String or a Symbol is a CLR string without a to_str call (also ConvertToClrStringAction's).
+        internal static bool TryConvertStringOrSymbol(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args) {
             object target = args.Target;
             var targetExpression = args.TargetExpression;
 
@@ -613,6 +788,47 @@ namespace IronRuby.Runtime.Conversions {
             // now reports one as "42 is not a symbol nor a string" like any other wrong type.
 
             return false;
+        }
+
+        internal override bool TryConvertImplicitly(object target, out string result) {
+            return base.TryConvertImplicitly(target, out result) || TryConvertStringOrSymbol(target, out result);
+        }
+
+        internal static bool TryConvertStringOrSymbol(object target, out string result) {
+            var str = target as MutableString;
+            if (str != null) {
+                result = RubyOps.ConvertMutableStringToClrString(str);
+                return true;
+            }
+
+            var symbol = target as RubySymbol;
+            if (symbol != null) {
+                result = RubyOps.ConvertSymbolToClrString(symbol);
+                return true;
+            }
+
+            result = null;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// What a CLR method's String parameter converts its argument with: a String or a Symbol, or else to_str, as
+    /// ConvertToSymbolAction does. A library method's string parameter is a method name, whose error MRI words
+    /// "1 is not a symbol nor a string"; a CLR method wanted a String: "no implicit conversion of Object into String"
+    /// (System::String.IsNullOrEmpty(Object.new), #141).
+    /// </summary>
+    public sealed class ConvertToClrStringAction : ConvertToReferenceTypeAction<ConvertToClrStringAction, string> {
+        protected override string/*!*/ ToMethodName { get { return Symbols.ToStr; } }
+        protected override string/*!*/ TargetTypeName { get { return "String"; } }
+        protected override MethodInfo ConversionResultValidator { get { return Methods.ToSymbolValidator; } }
+
+        internal protected override bool TryImplicitConversion(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args) {
+            return TryImplicitConversionInternal(metaBuilder, args) || ConvertToSymbolAction.TryConvertStringOrSymbol(metaBuilder, args);
+        }
+
+        internal override bool TryConvertImplicitly(object target, out string result) {
+            return base.TryConvertImplicitly(target, out result) || ConvertToSymbolAction.TryConvertStringOrSymbol(target, out result);
         }
     }
 
@@ -707,6 +923,18 @@ namespace IronRuby.Runtime.Conversions {
             if (args.Target == null && ConvertsNullToEmptyArray) {
                 // `*nil` is no elements at all - MRI 4.0 does not ask nil for #to_a
                 metaBuilder.Result = Ast.Convert(Methods.MakeArray0.OpCall(), typeof(IList));
+                return true;
+            }
+            return false;
+        }
+
+        internal override bool TryConvertImplicitly(object target, out IList result) {
+            result = target as IList;
+            if (result != null) {
+                return true;
+            }
+            if (target == null && ConvertsNullToEmptyArray) {
+                result = RubyOps.MakeArray0();
                 return true;
             }
             return false;
@@ -828,6 +1056,33 @@ namespace IronRuby.Runtime.Conversions {
     public sealed class ConvertToFixnumAction : ConvertToIntegerAction<ConvertToFixnumAction> {
         protected override string/*!*/ TargetTypeName { get { return "Integer"; } }
         protected override MethodInfo ConversionResultValidator { get { return Methods.ToFixnumValidator; } }
+
+        // A Fixnum converts to itself (TryImplicitConversion, on a test of its exact type), without a rule; a site whose result is
+        // an object gets it boxed, as the rule's result is:
+        protected override object BindPrecompiled(Type/*!*/ delegateType, object[]/*!*/ args) {
+            if (Context == null || args.Length != 1 || !(args[0] is int)) {
+                return null;
+            }
+            return (delegateType == typeof(Func<CallSite, object, int>)) ? _FixnumIdentity :
+                (delegateType == typeof(Func<CallSite, object, object>)) ? _BoxedFixnumIdentity : (object)null;
+        }
+
+        private static readonly Func<CallSite, object, int>/*!*/ _FixnumIdentity = ConvertFixnum;
+        private static readonly Func<CallSite, object, object>/*!*/ _BoxedFixnumIdentity = ConvertFixnumBoxed;
+
+        private static int ConvertFixnum(CallSite/*!*/ site, object target) {
+            if (target is int) {
+                return (int)target;
+            }
+            return ((CallSite<Func<CallSite, object, int>>)site).Update(site, target);
+        }
+
+        private static object ConvertFixnumBoxed(CallSite/*!*/ site, object target) {
+            if (target is int) {
+                return (object)(int)target;
+            }
+            return ((CallSite<Func<CallSite, object, object>>)site).Update(site, target);
+        }
     }
 
     public sealed class ConvertToByteAction : ConvertToIntegerAction<ConvertToByteAction> {
@@ -909,7 +1164,7 @@ namespace IronRuby.Runtime.Conversions {
     /// </summary>
     public sealed class ConvertToIAction : ConvertToIntegerValueAction<ConvertToIAction> {
         protected override string/*!*/ ToMethodName { get { return Symbols.ToI; } }
-        protected override MethodInfo ConversionResultValidator { get { return Methods.ToIntegerValidator; } }
+        protected override MethodInfo ConversionResultValidator { get { return Methods.ToIValidator; } }
 
         // Kernel#Integer(x) and "%d" % x end here; MRI words those "can't convert nil into
         // Integer", not "no implicit conversion ...".
@@ -946,6 +1201,13 @@ namespace IronRuby.Runtime.Conversions {
         }
 
         private static Expression FromString(CallArguments/*!*/ args) {
+            // A System::Char is a single-character string (see NumericTypeCode), so it takes the strict
+            // Float() parse a String does, not the lenient Char#to_f that made 'a' 0.0 (#153):
+            if (args.Target is char) {
+                return Ast.Call(Methods.ConvertStringToFloat, args.MetaContext.Expression,
+                    Ast.Call(AstUtils.Convert(args.TargetExpression, typeof(char)), typeof(char).GetMethod("ToString", Type.EmptyTypes)));
+            }
+
             var result = ImplicitConvert(typeof(MutableString), args);
             if (result != null) {
                 return Ast.Call(Methods.ConvertMutableStringToFloat, args.MetaContext.Expression, result);

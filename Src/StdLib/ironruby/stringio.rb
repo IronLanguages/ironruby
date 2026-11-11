@@ -16,31 +16,13 @@
 load_assembly 'IronRuby.Libraries', 'IronRuby.StandardLibrary.StringIO'
 
 # The byte and character side of StringIO, which the C# class does not carry: the same
-# shapes IO has in ruby4.rb, written against StringIO's own primitives.  #getc there still
-# answers a byte as an Integer, which was the 1.8 meaning.
+# shapes IO has in ruby4.rb, written against StringIO's own primitives.  #getc is the C#
+# one, a character in the stream's encoding; the C# #readchar still answers a byte as an
+# Integer, which was the 1.8 meaning, and is what #getbyte and #readbyte are made of.
 class StringIO
-  if instance_method(:getc).arity == 0
-    alias_method :__ir_getbyte__, :getc
-    private :__ir_getbyte__
-
-    # A character is as many bytes as its encoding needs, so read bytes until they make one.
-    def getc
-      first = __ir_getbyte__
-      return nil if first.nil?
-      return first if first.is_a?(::String)
-      enc = external_encoding || ::Encoding.default_external
-      bytes = [first]
-      char = nil
-      4.times do
-        char = bytes.pack("C*")
-        char.force_encoding(enc)
-        break if char.valid_encoding?
-        nxt = __ir_getbyte__
-        break if nxt.nil?
-        bytes << nxt
-      end
-      char
-    end
+  unless private_method_defined?(:__ir_readbyte__)
+    alias_method :__ir_readbyte__, :readchar
+    private :__ir_readbyte__
   end
 
   def readchar
@@ -49,16 +31,14 @@ class StringIO
     c
   end
 
+  # eof? first: it asks for a readable stream, as MRI's #getbyte does, and the byte reader
+  # raises rather than answer nil at the end.
   def getbyte
-    s = read(1)
-    return nil if s.nil? || s.empty?
-    s.getbyte(0)
+    eof? ? nil : __ir_readbyte__
   end unless method_defined?(:getbyte)
 
   def readbyte
-    b = getbyte
-    ::Kernel.raise(::EOFError, "end of file reached") if b.nil?
-    b
+    __ir_readbyte__
   end unless method_defined?(:readbyte)
 
   # ungetc takes a String as well as a codepoint, and a codepoint is a character in the
@@ -99,8 +79,10 @@ class StringIO
     nil
   end
 
+  # Without a block an Enumerator of the method, as MRI's (#<Enumerator: #<StringIO>:each_char>), and like
+  # MRI's of no known size.
   def each_char
-    return ::Enumerator.new { |y| each_char { |c| y << c } } unless block_given?
+    return to_enum(:each_char) { nil } unless block_given?
     while (c = getc)
       yield c
     end
@@ -108,7 +90,7 @@ class StringIO
   end unless method_defined?(:each_char)
 
   def each_codepoint
-    return ::Enumerator.new { |y| each_codepoint { |c| y << c } } unless block_given?
+    return to_enum(:each_codepoint) { nil } unless block_given?
     each_char { |c| yield c.ord }
     self
   end unless method_defined?(:each_codepoint)
@@ -174,7 +156,7 @@ class StringIO
   private :__ir_each_byte__
 
   def each_byte(&block)
-    return ::Enumerator.new { |y| each_byte { |b| y << b } } unless block
+    return to_enum(:each_byte) { nil } unless block
     __ir_each_byte__(&block)
   end
 
@@ -182,13 +164,16 @@ class StringIO
   private :__ir_each_line__
 
   def each_line(*args, **opts, &block)
-    unless block
-      return ::Enumerator.new { |y| each_line(*args, **opts) { |l| y << l } }
-    end
+    return to_enum(:each_line, *args, **opts) { nil } unless block
     __ir_each_line__(*args, **opts, &block)
   end
 
-  alias_method :each, :each_line
+  # one method in MRI, which a backtrace names by the name called
+  def each(*args, **opts, &block)
+    return to_enum(:each, *args, **opts) { nil } unless block
+    __ir_each_line__(*args, **opts, &block)
+  end
+  __ir_same_method__(:each, :each_line)
 end
 
 # StringIO.open closes the stream when its block is done and lets the string go with it, so

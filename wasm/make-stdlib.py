@@ -11,8 +11,6 @@ EXCLUDE = {
     'ruby/4.0': ['rubygems', 'rubygems.rb', 'prism', 'prism.rb', 'bundler', 'bundler.rb', 'rdoc',
                  'rdoc.rb', 'irb', 'irb.rb', 'reline', 'reline.rb', 'syntax_suggest',
                  'syntax_suggest.rb', 'mkmf.rb', 'bundled_gems.rb', 'gem_prelude.rb', 'un.rb'],
-    'ruby/1.9.1': ['rdoc', 'irb', 'irb.rb', 'mkmf.rb', 'rubygems', 'rubygems.rb', 'rake', 'rake.rb',
-                   'webrick', 'webrick.rb', 'drb', 'drb.rb', 'xmlrpc', 'test', 'minitest', 'rinda'],
     'ironruby': ['puma', 'puma.rb', 'nio', 'nio.rb', 'nio4r.rb', 'nio4r_ext.rb', 'websocket',
                  'ffi', 'ffi.rb', 'fiddle', 'fiddle.rb', 'PresentationCore.rb',
                  'PresentationFramework.rb', 'rack'],

@@ -20,8 +20,7 @@ Gem::Specification.new do |s|
     "lib/digest/bubblebabble.rb".freeze,
     "lib/digest/md5.rb".freeze,
     "lib/digest/sha1.rb".freeze,
-    "lib/digest/version.rb".freeze,
-    "lib/digest/hmac.rb".freeze,
     "lib/digest/sha2.rb".freeze,
+    "lib/digest/version.rb".freeze,
   ]
 end

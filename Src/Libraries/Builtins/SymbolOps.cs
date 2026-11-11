@@ -14,12 +14,9 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections.Generic;
-using Microsoft.Scripting;
 using IronRuby.Runtime;
 using IronRuby.Compiler;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -161,7 +158,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("to_sym")]
-        [RubyMethod("intern", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("intern")]
         public static RubySymbol/*!*/ ToSymbol(RubySymbol/*!*/ self) {
             return self;
         }
@@ -173,7 +170,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("to_proc")]
         public static Proc/*!*/ ToProc(RubyScope/*!*/ scope, RubySymbol/*!*/ self) {
-            return Proc.CreateMethodInvoker(scope, self.ToString());
+            return self.MethodInvoker ?? (self.MethodInvoker = Proc.CreateMethodInvoker(scope, self.ToString()));
         }
 
         #endregion
@@ -242,31 +239,43 @@ namespace IronRuby.Builtins {
 
         #region =~, match
 
-        [RubyMethod("=~", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("=~")]
         public static object Match(RubyScope/*!*/ scope, RubySymbol/*!*/ self, [NotNull]RubyRegex/*!*/ regex) {
             return MutableStringOps.Match(scope, self.String.Clone(), regex);
         }
 
-        [RubyMethod("=~", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("=~")]
         public static object Match(ClrName/*!*/ self, [NotNull]RubySymbol/*!*/ str) {
             throw RubyExceptions.CreateTypeError("type mismatch: Symbol given");
         }
 
-        [RubyMethod("=~", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("=~")]
         public static object Match(BinaryOpStorageWithScope/*!*/ storage, RubyScope/*!*/ scope, RubySymbol/*!*/ self, object obj) {
             return MutableStringOps.Match(storage, scope, self.String.Clone(), obj);
         }
 
-        [RubyMethod("match", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("match")]
         public static object Match(BinaryOpStorageWithScope/*!*/ storage, RubyScope/*!*/ scope, [Optional]BlockParam block,
             RubySymbol/*!*/ self, [NotNull]RubyRegex/*!*/ regex) {
             return MutableStringOps.Match(storage, scope, block, self.String.Clone(), regex);
         }
 
-        [RubyMethod("match", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("match")]
         public static object Match(BinaryOpStorageWithScope/*!*/ storage, RubyScope/*!*/ scope, [Optional]BlockParam block,
             RubySymbol/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ pattern) {
             return MutableStringOps.Match(storage, scope, block, self.String.Clone(), pattern);
+        }
+
+        [RubyMethod("match")]
+        public static object Match(RubyScope/*!*/ scope, [Optional]BlockParam block, RubySymbol/*!*/ self,
+            [NotNull]RubyRegex/*!*/ regex, [DefaultProtocol]int start) {
+            return MutableStringOps.Match(scope, block, self.String.Clone(), regex, start);
+        }
+
+        [RubyMethod("match")]
+        public static object Match(RubyScope/*!*/ scope, [Optional]BlockParam block, RubySymbol/*!*/ self,
+            [DefaultProtocol, NotNull]MutableString/*!*/ pattern, [DefaultProtocol]int start) {
+            return MutableStringOps.Match(scope, block, self.String.Clone(), pattern, start);
         }
 
         // Delegating from Ruby would put an extra frame between the =~ a Regexp prefix performs

@@ -13,12 +13,10 @@
  *
  * ***************************************************************************/
 
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Builtins {
 
@@ -39,9 +37,19 @@ namespace IronRuby.Builtins {
             throw RubyExceptions.CreateTypeError("already initialized class");
         }
 
+        // MRI's order: frozen, then the same class of object, then a copy only into the class #dup or
+        // #clone made - an existing class is left as it is (#138).
         [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
-        public static void InitializeCopy(RubyClass/*!*/ self, [NotNull]RubyClass/*!*/ other) {
-            self.InitializeClassCopy(other);
+        public static RubyClass/*!*/ InitializeCopy(RubyClass/*!*/ self, object other) {
+            if (self.IsFrozen) {
+                throw RubyExceptions.CreateObjectFrozenError(self.Context, self);
+            }
+            var otherClass = other as RubyClass;
+            if (otherClass == null || self.Context.GetClassOf(otherClass) != self.Context.GetClassOf(self)) {
+                throw RubyExceptions.CreateTypeError("initialize_copy should take same class object");
+            }
+            self.InitializeClassCopy(otherClass);
+            return self;
         }
         
         [RubyMethod("allocate")]
@@ -99,7 +107,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("attached_object")]
         public static object GetAttachedObject(RubyClass/*!*/ self) {
             if (!self.IsSingletonClass || self.IsDummySingletonClass) {
-                throw RubyExceptions.CreateTypeError("`{0}' is not a singleton class", self.GetNonNullName(self.Context));
+                throw RubyExceptions.CreateTypeError("'{0}' is not a singleton class", self.GetNonNullName(self.Context));
             }
             return self.SingletonClassOf;
         }

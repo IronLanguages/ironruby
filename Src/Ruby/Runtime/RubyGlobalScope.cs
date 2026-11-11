@@ -27,7 +27,6 @@ namespace IronRuby.Runtime {
     public sealed class RubyGlobalScope : ScopeExtension {
         private readonly RubyContext/*!*/ _context;
         private readonly RubyObject/*!*/ _mainObject;
-        private readonly bool _isHosted;
 
         // interlocked:
         private RubyTopLevelScope _topLocalScope;
@@ -44,22 +43,17 @@ namespace IronRuby.Runtime {
             get { return _mainObject; }
         }
 
-        public bool IsHosted {
-            get { return _isHosted; }
-        }
-
         public RubyTopLevelScope TopLocalScope {
             get { return _topLocalScope; }
         }
 
-        internal RubyGlobalScope(RubyContext/*!*/ context, Scope/*!*/ scope, RubyObject/*!*/ mainObject, bool isHosted)
+        internal RubyGlobalScope(RubyContext/*!*/ context, Scope/*!*/ scope, RubyObject/*!*/ mainObject)
             : base(scope) {
             Assert.NotNull(context, scope, mainObject);
             Debug.Assert(mainObject.ImmediateClass.IsSingletonClass);
                 
             _context = context;
             _mainObject = mainObject;
-            _isHosted = isHosted;
         }
 
         internal RubyTopLevelScope/*!*/ SetTopLocalScope(RubyTopLevelScope/*!*/ scope) {

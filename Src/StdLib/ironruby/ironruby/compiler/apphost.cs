@@ -60,7 +60,6 @@ namespace IronRuby.Compiled {
                 foreach (var dir in new[] {
                     Path.Combine(lib, "ironruby"),
                     Path.Combine(lib, "ruby", "4.0"),
-                    Path.Combine(lib, "ruby", "1.9.1"),
                 }) {
                     if (Directory.Exists(dir)) libraries.Add(dir);
                 }

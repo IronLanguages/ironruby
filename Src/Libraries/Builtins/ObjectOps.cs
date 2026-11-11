@@ -25,8 +25,8 @@ namespace IronRuby.Builtins {
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance | RubyMethodAttributes.Empty)]
         public static object Reinitialize(object self) {
             // takes no arguments: Object.new(1), and a `super` passing arguments up to here, are
-            // "wrong number of arguments (given 1, expected 0)" in MRI
-            return self;
+            // "wrong number of arguments (given 1, expected 0)" in MRI; answers nil, as MRI's does
+            return null;
         }
 
         [RubyConstant]
@@ -37,14 +37,5 @@ namespace IronRuby.Builtins {
 
         [RubyConstant]
         public readonly static object NIL = null;
-
-        // TODO: this is a hack to load 1.8 impl of Rational and Complex
-        // We should implement them as builtins.
-        [RubyConstant("___Numerics__")]
-        public static object Numerics(RubyModule/*!*/ self) {
-            self.SetAutoloadedConstant("Rational", MutableString.CreateAscii("rational18.rb"));
-            self.SetAutoloadedConstant("Complex", MutableString.CreateAscii("complex18.rb"));
-            return null;
-        }
     }
 }

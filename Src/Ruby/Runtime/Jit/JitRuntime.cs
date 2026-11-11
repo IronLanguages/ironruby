@@ -14,6 +14,9 @@ using IronRuby.Builtins;
 using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Runtime.Jit {
+    using MSA = System.Linq.Expressions;
+    using Ast = System.Linq.Expressions.Expression;
+
     /// <summary>
     /// Thrown by specialized code when an assumption it was compiled under no longer holds
     /// (Fixnum arithmetic overflowing into Bignum, a division by zero that has to raise).
@@ -30,22 +33,16 @@ namespace IronRuby.Runtime.Jit {
     }
 
     /// <summary>
-    /// Runtime helpers called from JIT-compiled code, plus the global kill switch.
+    /// Runtime helpers called from JIT-compiled code.
     /// </summary>
-    public static class JitRuntime {
-        /// <summary>
-        /// Set when something the JIT cannot reason about shows up (refinements). Specialized
-        /// code checks it on entry, so turning it on deoptimizes every specialization at once.
-        /// </summary>
-        internal static bool Disabled;
-
+    public static partial class JitRuntime {
         /// <summary>IR_JIT_VERBOSE=1 traces what gets specialized and what is rejected.</summary>
         internal static readonly bool Verbose = Environment.GetEnvironmentVariable("IR_JIT_VERBOSE") == "1";
 
         /// <summary>
         /// Statistics, printed by -X:JITStats.
         /// </summary>
-        internal static int Specialized, Rejected, Deopts, Invalidations, ScreenRejected;
+        internal static int Specialized, Rejected, Deopts, Invalidations, ScreenRejected, DeoptRetired, DeoptRetried;
         internal static long CompileTicks;
 
         /// <summary>
@@ -67,18 +64,14 @@ namespace IronRuby.Runtime.Jit {
             }
         }
 
-        internal static void Disable() {
-            Disabled = true;
-        }
-
         private static int _statsHooked;
 
         /// <summary>With IR_JIT_VERBOSE=1, print what the JIT did on the way out.</summary>
         internal static void HookStats() {
             if (!Verbose || System.Threading.Interlocked.Exchange(ref _statsHooked, 1) != 0) { return; }
             AppDomain.CurrentDomain.ProcessExit += (s, e) => {
-                Console.Error.WriteLine("[jit] specialized={0} rejected={1} screen-rejected={2} deopts={3} invalidations={4} compile={5:F1}ms",
-                    Specialized, Rejected, ScreenRejected, Deopts, Invalidations,
+                Console.Error.WriteLine("[jit] specialized={0} rejected={1} screen-rejected={2} deopts={3} invalidations={4} retired={5} retried={6} compile={7:F1}ms",
+                    Specialized, Rejected, ScreenRejected, Deopts, Invalidations, DeoptRetired, DeoptRetried,
                     CompileTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
                 PrintScreenReasons();
             };
@@ -119,6 +112,22 @@ namespace IronRuby.Runtime.Jit {
             int i = (int)r;
             if (i != r) { throw Deopt(); }
             return i;
+        }
+
+        /// <summary>
+        /// What a JIT-compiled method does before it calls itself (JitCompiler.StackCheckPlacer): a recursion too deep
+        /// is a SystemStackError (RubyOps.RequireSufficientStack). A JIT method makes no scope, so the check the
+        /// interpreter makes there is not made.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static unsafe void CheckStack() {
+            // StackLimit.IsSufficient written out, so the main thread's test is inlined whole into the method: a
+            // thread-static read there cost fib(30) more than half its time again
+            byte probe;
+            ulong sp = (ulong)&probe;
+            if (sp - StackLimit._mainLow >= StackLimit._mainSize && !StackLimit.IsSufficientOffMain(sp)) {
+                RubyOps.ThrowStackLevelTooDeep();
+            }
         }
 
         public static int SubInt(int a, int b) {
@@ -190,6 +199,21 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
+        /// A typed body's value as the object its entry returns: an Int32 or a Boolean comes out of
+        /// the shared boxes (the DLR's cache of small Integers, the two Booleans) rather than a new
+        /// box per call, the way every other place in the runtime makes one.
+        /// </summary>
+        internal static MSA.Expression/*!*/ BoxResult(MSA.Expression/*!*/ value) {
+            if (value.Type == typeof(int)) {
+                return Ast.Call(typeof(ScriptingRuntimeHelpers).GetMethod("Int32ToObject", new[] { typeof(int) }), value);
+            }
+            if (value.Type == typeof(bool)) {
+                return Ast.Call(typeof(ScriptingRuntimeHelpers).GetMethod("BooleanToObject", new[] { typeof(bool) }), value);
+            }
+            return Ast.Convert(value, typeof(object));
+        }
+
+        /// <summary>
         /// The one representation rule, as the specialized code sees it: a value that fits in an
         /// Int32 IS an Int32, boxed from the small-integer cache. Every long that leaves the
         /// specialized region - a return value, a store back into a locals tuple, an ivar write -
@@ -237,8 +261,14 @@ namespace IronRuby.Runtime.Jit {
 
         internal static Exception Deopt() {
             Deopts++;
+            _deoptThrown = System.Diagnostics.Stopwatch.GetTimestamp();
             return JitDeoptException.Instance;
         }
+
+        // When this thread last threw a deopt, for the method entry that catches it to know what
+        // the exception cost (EntryDeopted). Zero once taken.
+        [ThreadStatic]
+        private static long _deoptThrown;
 
         // ---- safe points -----------------------------------------------------------------
 
@@ -261,6 +291,25 @@ namespace IronRuby.Runtime.Jit {
             }
         }
 
+        /// <summary>
+        /// A loop's safe point in a specialized method. What is waiting runs here, and the body goes on -
+        /// unless <paramref name="deopt"/> says the body writes Hash or Array elements: a trap handler
+        /// run in the middle of those could change an element a later deopt takes back to what it was
+        /// before the handler ran. Such a body deopts instead (it is one that may: JitCompiler takes no
+        /// impure body that can deopt), and the generic body runs what is waiting at its first safe point.
+        /// </summary>
+        public static void MethodSafePoint(StrongBox<bool>/*!*/ deopt) {
+            if (RubyUtils.IsSafePointRequested) {
+                MethodSafePointSlow(deopt);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void MethodSafePointSlow(StrongBox<bool>/*!*/ deopt) {
+            if (deopt.Value) { throw SafePointDeopt(); }
+            RubyUtils.SafePoint();
+        }
+
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static Exception/*!*/ SafePointDeopt() {
             return JitDeoptException.Instance;
@@ -269,18 +318,29 @@ namespace IronRuby.Runtime.Jit {
         // ---- guards ----------------------------------------------------------------------
 
         /// <summary>
-        /// The entry guard: the global method version has not moved since specialization and
-        /// nothing has globally disabled the JIT. Any def/undef/alias/include/singleton-method
-        /// anywhere bumps RubyModule's global method version, so this one check covers method
-        /// redefinition, overriding in a subclass, and singleton methods.
+        /// The entry guard: the global method version has not moved since specialization. Any
+        /// def/undef/alias/include/singleton-method anywhere bumps RubyModule's global method
+        /// version, and so does a method coming or going in a refinement (it re-versions the
+        /// classes below the refined module), so this one check covers method redefinition,
+        /// overriding in a subclass, singleton methods and refinements.
         /// </summary>
         public static bool VersionOk(int snapshot) {
-            return !Disabled && RubyModule.GlobalMethodVersion == snapshot;
+            return RubyModule.GlobalMethodVersion == snapshot;
         }
 
         /// <summary>A method entry's VersionOk failed: it is stale for good (see JitStub.VersionChanged).</summary>
-        public static void EntryStale(object/*!*/ stub) {
-            ((JitStub)stub).VersionChanged();
+        public static void EntryStale(object/*!*/ specialization) {
+            var spec = (JitStub.Specialization)specialization;
+            spec.Stub.VersionChanged(spec);
+        }
+
+        /// <summary>A method entry's typed body deopted (see JitStub.OnDeopt).</summary>
+        public static void EntryDeopted(object/*!*/ specialization) {
+            long caught = System.Diagnostics.Stopwatch.GetTimestamp();
+            long thrown = _deoptThrown;
+            _deoptThrown = 0;
+            var spec = (JitStub.Specialization)specialization;
+            spec.Stub.OnDeopt(spec, (thrown != 0) ? caught - thrown : -1);
         }
 
         /// <summary>An outlined loop was compiled under an older method version; build it again.</summary>
@@ -347,7 +407,204 @@ namespace IronRuby.Runtime.Jit {
         // Each `@x` in a compiled body has an inline cache of its own: the same shape-checked fast
         // path as the interpreter's and the DLR compiler's (see RubyInstanceData).
         public static object GetIVar(RubyContext/*!*/ context, object self, InstanceVariableSite/*!*/ site) {
+            RequireIsolationCheckFree(context, self, site);
             return RubyOps.ReadInstanceVariable(context, self, site);
+        }
+
+        /// <summary>
+        /// An instance variable of anything but a plain Ruby object, in a non-main Ractor: the
+        /// generic code does what RactorIsolation says about it, raising from a frame of its own.
+        /// </summary>
+        private static void RequireIsolationCheckFree(RubyContext/*!*/ context, object self, InstanceVariableSite/*!*/ site) {
+            if (context.RactorsStarted && !(self is RubyObject) && !site.IsCoreLibrary && RactorIsolation.IsNonMain(context)) {
+                throw Deopt();
+            }
+        }
+
+        /// <summary>
+        /// `x', `self.x' or `o.x' in an outlined loop where x was, on the receiver, an attr_reader when
+        /// the loop was compiled (JitCompiler.EmitCall): one per such call. Or `o.x = v' where x= was
+        /// an attr_writer (JitCompiler.EmitAttributeWrite), if <see cref="Writer"/>.
+        /// </summary>
+        public sealed class SelfAttrSite {
+            internal readonly string/*!*/ Name;
+            internal readonly string/*!*/ VariableName;
+            internal readonly InstanceVariableSite/*!*/ Variable;
+            // `o.x' with an explicit receiver other than self can only call a public x.
+            internal readonly bool PublicOnly;
+            internal readonly bool Writer;
+
+            // The class the reader was last found on, under which global method version. Replaced
+            // as a whole, so a racing reader sees one consistent pair.
+            private sealed class Binding {
+                internal readonly RubyClass/*!*/ Class;
+                internal readonly int Version;
+                internal Binding(RubyClass/*!*/ cls, int version) { Class = cls; Version = version; }
+            }
+            private volatile Binding _bound;
+
+            internal SelfAttrSite(string/*!*/ name, string/*!*/ variableName, bool publicOnly)
+                : this(name, variableName, publicOnly, false) {
+            }
+
+            internal SelfAttrSite(string/*!*/ name, string/*!*/ variableName, bool publicOnly, bool writer) {
+                Name = name;
+                PublicOnly = publicOnly;
+                Writer = writer;
+                VariableName = variableName;
+                Variable = new InstanceVariableSite(variableName);
+            }
+
+            internal bool IsBoundTo(RubyClass/*!*/ cls) {
+                var b = _bound;
+                return b != null && b.Class == cls && b.Version == RubyModule.GlobalMethodVersion;
+            }
+
+            /// <summary>Whether Name is, on cls, the attr_reader (attr_writer) of VariableName.</summary>
+            internal bool Bind(RubyClass/*!*/ cls) {
+                int version = RubyModule.GlobalMethodVersion;
+                if ((Writer ? WriterVariable(cls, Name, PublicOnly) : ReaderVariable(cls, Name, PublicOnly)) != VariableName) { return false; }
+                _bound = new Binding(cls, version);
+                return true;
+            }
+
+            /// <summary>
+            /// The instance variable `name' reads on cls, if it is an attr_reader there (a public one,
+            /// if <paramref name="publicOnly"/>).
+            /// </summary>
+            internal static string ReaderVariable(RubyClass/*!*/ cls, string/*!*/ name, bool publicOnly) {
+                var resolved = cls.ResolveMethod(name, IronRuby.Runtime.Calls.VisibilityContext.AllVisible);
+                if (!resolved.Found || (publicOnly && !resolved.Info.IsPublic)) { return null; }
+                var reader = resolved.Info as IronRuby.Runtime.Calls.RubyAttributeReaderInfo;
+                return (reader != null) ? reader.InstanceVariableName : TrivialAccessorVariable(cls, resolved.Info, false);
+            }
+
+            /// <summary>
+            /// The instance variable `name' writes on cls, if it is an attr_writer there (or a Ruby method
+            /// that is one in all but name, see TrivialAccessorVariable).
+            /// </summary>
+            internal static string WriterVariable(RubyClass/*!*/ cls, string/*!*/ name, bool publicOnly) {
+                var resolved = cls.ResolveMethod(name, IronRuby.Runtime.Calls.VisibilityContext.AllVisible);
+                if (!resolved.Found || (publicOnly && !resolved.Info.IsPublic)) { return null; }
+                var writer = resolved.Info as IronRuby.Runtime.Calls.RubyAttributeWriterInfo;
+                return (writer != null) ? writer.InstanceVariableName : TrivialAccessorVariable(cls, resolved.Info, true);
+            }
+
+            /// <summary>
+            /// `def x; @x; end' reads @x and `def x=(v); @x = v; end' (by whatever names) writes it, as
+            /// attr_reader and attr_writer do, and nothing a call of either does is observable but that
+            /// - not even in a backtrace, since a read cannot raise and a write that would deopts to the
+            /// real call first. So an outlined loop reads or writes such a method's variable as it would
+            /// an attribute's, as TruffleRuby inlines trivial methods. Null if the method is not one.
+            /// </summary>
+            private static string TrivialAccessorVariable(RubyClass/*!*/ cls, IronRuby.Runtime.Calls.RubyMemberInfo/*!*/ info, bool writer) {
+                var method = info as IronRuby.Runtime.Calls.RubyMethodInfo;
+                // nor under coverage: the call counts the method and its line, which a read of the variable would not
+                if (method == null || cls.Context.RubyOptions.EnableTracing || cls.Context.RubyOptions.Profile ||
+                    method.Body.Coverage != null) { return null; }
+
+                var ast = method.GetSyntaxTree();
+                var parameters = ast.Parameters;
+                int arity = writer ? 1 : 0;
+                if (parameters.Mandatory.Length != arity || parameters.Optional.Length != 0 || parameters.Unsplat != null ||
+                    parameters.Block != null || parameters.SuperSplat != null) {
+                    return null;
+                }
+                var signature = parameters.Signature;
+                if (signature != null && (signature.TakesKeywords || signature.RefusesKeywords ||
+                    signature.MinPositionalCount != arity || signature.MaxPositionalCount != arity)) {
+                    return null;
+                }
+
+                var body = ast.Body;
+                if (body == null || body.RescueClauses != null && body.RescueClauses.Count != 0 || body.ElseStatements != null ||
+                    body.EnsureStatements != null || body.Statements.Count != 1) {
+                    return null;
+                }
+
+                var statement = body.Statements.First;
+                if (!writer) {
+                    var read = statement as IronRuby.Compiler.Ast.InstanceVariable;
+                    return (read != null) ? read.Name : null;
+                }
+
+                var assignment = statement as IronRuby.Compiler.Ast.SimpleAssignmentExpression;
+                var parameter = parameters.Mandatory[0] as IronRuby.Compiler.Ast.LocalVariable;
+                var target = (assignment != null && assignment.Operation == null) ? assignment.Left as IronRuby.Compiler.Ast.InstanceVariable : null;
+                var value = (target != null) ? assignment.Right as IronRuby.Compiler.Ast.LocalVariable : null;
+                return (parameter != null && value != null && value.Name == parameter.Name &&
+                    value.DefinitionLexicalDepth == parameter.DefinitionLexicalDepth) ? target.Name : null;
+            }
+        }
+
+        /// <summary>
+        /// The read an attr_reader does, as long as the method `site' names is still that reader on
+        /// self's class: re-checked against the class and the global method version on every read,
+        /// so a redefinition, a singleton method or a different self deopts to the generic loop,
+        /// which then makes the call. A read is not observable, so the deopt is invisible.
+        /// </summary>
+        public static object ReadSelfAttr(RubyContext/*!*/ context, object self, SelfAttrSite/*!*/ site) {
+            var obj = self as RubyObject;
+            RubyClass cls = (obj != null) ? obj.ImmediateClass : ClassOf(context, self);
+            if (!site.IsBoundTo(cls) && !site.Bind(cls)) {
+                throw Deopt();
+            }
+            if (obj != null) {
+                // RubyOps.ReadInstanceVariable's fast path, the RubyObject test already made
+                var data = obj._instanceData;
+                if (data == null) { return null; }
+                object[] slots = data._ivars;
+                var entry = site.Variable.Cache;
+                if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
+                    return RubyInstanceData.GetSlot(slots, entry.Index);
+                }
+                return data.GetInstanceVariable(site.Variable);
+            }
+            RequireIsolationCheckFree(context, self, site.Variable);
+            return RubyOps.ReadInstanceVariable(context, self, site.Variable);
+        }
+
+        /// <summary>
+        /// The write an attr_writer does, under the same checks as ReadSelfAttr's, of a variable the
+        /// object already has: the slot's old value goes into the undo log, so a deopt later in the
+        /// iteration takes the write back (JitUndoLog.Rollback) and the restart is invisible. Anything
+        /// else - a frozen object (whose FrozenError needs the real call), a variable to add (a shape
+        /// change), a full log, an object that is not a RubyObject - deopts before writing.
+        /// </summary>
+        public static void WriteSelfAttr(object self, object value, SelfAttrSite/*!*/ site, JitUndoLog/*!*/ log) {
+            var obj = self as RubyObject;
+            if (obj == null || (!site.IsBoundTo(obj.ImmediateClass) && !site.Bind(obj.ImmediateClass))) {
+                throw Deopt();
+            }
+            var data = obj._instanceData;
+            if (data == null || data._frozen || log.IsFull) {
+                throw Deopt();
+            }
+            object[] slots = data._ivars;
+            var shape = RubyInstanceData.ShapeOf(slots);
+            var variable = site.Variable;
+            var entry = variable.Cache;
+            int index;
+            if (shape == entry.Shape && entry.Next == null) {
+                index = entry.Index;
+            } else if (shape == entry.OtherShape) {
+                index = entry.OtherIndex;
+            } else {
+                var current = (InstanceVariableShape)shape;
+                index = current.IsSentinel ? 0 : current.IndexOf(variable.Name);
+                if (index == 0) {
+                    throw Deopt();
+                }
+                variable.Update(entry.Remember(current, index));
+            }
+            object old = RubyInstanceData.GetSlot(slots, index);
+            RubyInstanceData.SetSlot(slots, index, value);
+            if (RubyInstanceData.ShapeOf(slots) != shape) {
+                // the slots moved under the write (another thread added or removed a variable):
+                // make the write again where they are now; the variable exists, so it is a store
+                data.SetInstanceVariable(variable.Name, value);
+            }
+            log.Replaced(data, variable.Name, old);
         }
 
         public static object SetIVar(RubyContext/*!*/ context, object self, object value, InstanceVariableSite/*!*/ site) {
@@ -357,12 +614,16 @@ namespace IronRuby.Runtime.Jit {
                 if (!data._frozen && data.TrySetCached(site.Cache, value, obj)) {
                     return value;
                 }
+            } else if (RubyOps.TrySetRubyObjectInstanceVariable(self, value, site)) {
+                // an instance of a Ruby subclass of Array, Hash, Exception, Enumerator...
+                return value;
             }
             // A frozen receiver raises FrozenError, and a typed body has no frame to raise it from:
             // let the generic body run instead (see JitCompiler._ivarWrite).
             if (context.IsObjectFrozen(self)) {
                 throw Deopt();
             }
+            RequireIsolationCheckFree(context, self, site);
             context.SetInstanceVariable(self, value, site);
             return value;
         }
@@ -445,6 +706,19 @@ namespace IronRuby.Runtime.Jit {
 
         public static double GuardDouble(object value) {
             if (value is double) { return (double)value; }
+            throw Deopt();
+        }
+
+        // ---- Float#to_i (JitCompiler.EmitCall) -------------------------------------------
+
+        /// <summary>
+        /// Float#to_i of a Float whose Integer fits in an Int64; a NaN, an infinity (FloatDomainError)
+        /// or a Bignum is the generic loop's to produce.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static long FloatToLong(double value) {
+            // -2^63 <= value < 2^63, and false for NaN
+            if (value >= -9223372036854775808.0 && value < 9223372036854775808.0) { return (long)value; }
             throw Deopt();
         }
 

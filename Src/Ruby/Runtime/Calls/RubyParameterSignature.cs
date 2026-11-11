@@ -76,6 +76,11 @@ namespace IronRuby.Runtime.Calls {
         /// </summary>
         public string[] ImplicitParameterNames { get; set; }
 
+        /// <summary>The declared parameters, in order.</summary>
+        internal Parameter[]/*!*/ Parameters {
+            get { return _parameters; }
+        }
+
         /// <summary>Declares keyword parameters or a keyword splat.</summary>
         public bool TakesKeywords {
             get { return _hasKeywords || _hasKeywordRest; }
@@ -93,6 +98,19 @@ namespace IronRuby.Runtime.Calls {
             }
         }
 
+        /// <summary>The declared names of the required keyword parameters, in order.</summary>
+        public string[]/*!*/ RequiredKeywordNames {
+            get {
+                var names = new System.Collections.Generic.List<string>();
+                foreach (var parameter in _parameters) {
+                    if (parameter.Kind == "keyreq") {
+                        names.Add(parameter.Name);
+                    }
+                }
+                return names.ToArray();
+            }
+        }
+
         /// <summary>The bounds on the positional arguments alone; -1 as the maximum means unbounded.</summary>
         public int MinPositionalCount {
             get { return _leadingCount + _postCount; }
@@ -100,6 +118,24 @@ namespace IronRuby.Runtime.Calls {
 
         public int MaxPositionalCount {
             get { return _hasRest ? -1 : _leadingCount + _optionalCount + _postCount; }
+        }
+
+        /// <summary>
+        /// The "expected" part of MRI's argument_arity_error: the positional bounds ("1", "1..2" or
+        /// "1+"), then every required keyword, given or not: "1; required keyword: k".
+        /// </summary>
+        public string/*!*/ DescribeExpectedArguments() {
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            int min = MinPositionalCount, max = MaxPositionalCount;
+            string expected = (min == max) ? min.ToString(inv) : min.ToString(inv) + (max < 0 ? "+" : ".." + max.ToString(inv));
+
+            return expected + DescribeRequiredKeywords(RequiredKeywordNames);
+        }
+
+        /// <summary>The tail of MRI's argument_arity_error: "; required keyword: k", "; required keywords: k, j", or nothing.</summary>
+        public static string/*!*/ DescribeRequiredKeywords(System.Collections.Generic.IList<string> names) {
+            return (names == null || names.Count == 0) ? ""
+                : (names.Count == 1 ? "; required keyword: " : "; required keywords: ") + String.Join(", ", names);
         }
 
         public static readonly RubyParameterSignature/*!*/ Empty =

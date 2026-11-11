@@ -391,14 +391,14 @@ class Ripper
     def visit_SymbolNode(node)
       opening = node['opening_loc'] ? text(node['opening_loc']) : nil
       return [:dyna_symbol, list(:string, symbol_content(node))] if opening.nil? ? false : opening.size > 1
-      value = fname_token(node['value_loc'])
+      value = fname_token(node['content_loc'])
       return value if opening.nil?
       [:symbol_literal, [:symbol, value]]
     end
 
     # `:""` and `%s()` have no content event at all.
     def symbol_content(node)
-      location = node['value_loc']
+      location = node['content_loc']
       return [] if location.nil? || location[1] == 0
       [[:add, [:@tstring_content, text(location), pos(location[0])]]]
     end
@@ -425,7 +425,7 @@ class Ripper
         token = string_content_token(node)
         interpolating ? list(:word, [[:add, token]]) : token
       when 'SymbolNode'
-        token = [:@tstring_content, text(node['value_loc']), pos(node['value_loc'][0])]
+        token = [:@tstring_content, text(node['content_loc']), pos(node['content_loc'][0])]
         interpolating ? list(:word, [[:add, token]]) : token
       when 'InterpolatedStringNode', 'InterpolatedSymbolNode'
         list(:word, node['parts'].map { |part| [:add, string_part(part)] })
@@ -1278,7 +1278,7 @@ class Ripper
     end
 
     def alias_name(node)
-      return [:symbol_literal, fname_token(node['value_loc'])] if node['type'] == 'SymbolNode' && node['opening_loc'].nil?
+      return [:symbol_literal, fname_token(node['content_loc'])] if node['type'] == 'SymbolNode' && node['opening_loc'].nil?
       visit(node)
     end
 

@@ -13,18 +13,12 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using Microsoft.Scripting;
 using Microsoft.Scripting.Ast;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Compiler.Ast {
-    using Ast = Expression;
     using AstUtils = Microsoft.Scripting.Ast.Utils;
 
     public abstract class JumpStatement : Expression {
@@ -51,7 +45,7 @@ namespace IronRuby.Compiler.Ast {
             return gen.AddDebugInfo(TransformJump(gen), Location);
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             return Utils.Convert(Transform(gen), typeof(object));
         }
 

@@ -8,100 +8,21 @@
 # lives here rather than in a patched copy of the vendored files.
 
 module Gem
-  ##
-  # IronRuby ships the Ruby 4.0 standard library, so its gems live under
-  # <libdir>/ruby/gems/4.0.0 - not under RbConfig's "ruby_version", which is
-  # still the 1.9.1 the load path and the C# Loader use for the legacy tree.
-
-  def self.default_dir
-    @default_dir ||= File.join(RbConfig::CONFIG["rubylibprefix"], "gems", ruby_api_version)
-  end
+  # default_dir (<libdir>/ruby/gems/4.0.0), ruby_api_version and user_dir
+  # (~/.gem/ironruby/4.0.0, apart from the host Ruby's) are upstream's: they
+  # follow RbConfig's ruby_version, which is "4.0.0" as on CRuby 4.0.
 
   ##
-  # The API version gems are installed under.  RbConfig::CONFIG["ruby_version"]
-  # is "1.9.1" for the legacy standard library directory; the gem tree follows
-  # RUBY_VERSION instead, as it does on CRuby.
-
-  def self.ruby_api_version
-    @ruby_api_version ||= RUBY_VERSION.split(".").first(2).push(0).join(".")
-  end
-
-  ##
-  # Path for gems in the user's home directory.  Same layout as CRuby, but
-  # keyed by engine ("ironruby") and the 4.0.0 API version, so IronRuby's
-  # user gems never collide with the host Ruby's.
-
-  def self.user_dir
-    gem_dir = File.join(Gem.user_home, ".gem")
-    gem_dir = File.join(Gem.data_home, "gem") unless File.exist?(gem_dir)
-    File.join(gem_dir, ruby_engine, ruby_api_version)
-  end
-
-  ##
-  # Gem trees belonging to a matching host CRuby installation.
+  # No host CRuby's gems.
   #
-  # IronRuby is a drop-in for the CRuby release whose standard library it
-  # vendors, and pure-Ruby gems installed for that CRuby load unchanged here.
-  # Rather than force every user to set GEM_PATH, look for a `ruby` on PATH and
-  # offer its <prefix>/lib/ruby/gems/<api version> read-only, when the API
-  # version matches ours.  Set IRONRUBY_NO_HOST_GEMS=1 to opt out.
-  #
-  # What these trees may provide, and what they may not
-  # ----------------------------------------------------
-  # They are a convenience for *third-party* gems only.  Nothing IronRuby ships
-  # may come from them: not a default gem (the gemspecs in
-  # specifications/default, see default_specifications_dir) and not a bundled
-  # gem (the gems Util/install-bundled-gems.rb installs into default_dir -
-  # rake, rexml, minitest, csv, logger, ...).  IronRubyHostGemFilter at the end
-  # of this file drops the host's copy of every gem whose name IronRuby's own
-  # gem home has, whatever its version, so `require "rexml/document"` and
-  # `ir -S rake` resolve to the same files on every machine: the ones in this
-  # tree, or a newer release the user installed *for IronRuby*.
-  #
-  # That used to be otherwise.  Before the bundled gems were shipped here, a
-  # machine with CRuby 4.0 installed got rake 13 and rexml 3.4 from the host,
-  # and one without it - Windows, CI, most users - got a LoadError or a 1.9-era
-  # copy, with nothing in between to say which it was.
-  #
-  # Why this is still on by default
-  # -------------------------------
-  # Turning it into an opt-in was considered and not done.  With the filter it
-  # can no longer change what the standard library is, so what is left is the
-  # convenience - a Gemfile or a script that uses a gem the host CRuby already
-  # has works without installing it again for IronRuby - and the ruby-bench,
-  # Rails and popular-gem setups on this project's machines are built on it.
-  # IRONRUBY_NO_HOST_GEMS=1 is what makes a run behave like a machine with no
-  # CRuby at all, and is how the self-containment check is run.
-  #
-  # Bundler narrows GEM_HOME and GEM_PATH to its bundle_path on every command,
-  # which would hide these trees and default_dir alike; Gem.path below keeps
-  # both.
-
-  def self.host_ruby_dirs # :nodoc:
-    return @host_ruby_dirs if defined?(@host_ruby_dirs) && @host_ruby_dirs
-
-    @host_ruby_dirs = []
-    return @host_ruby_dirs if ENV["IRONRUBY_NO_HOST_GEMS"]
-
-    seen = {}
-    (ENV["PATH"] || "").split(File::PATH_SEPARATOR).each do |dir|
-      next if dir.empty?
-
-      exe = File.join(dir, "ruby#{RbConfig::CONFIG["EXEEXT"]}")
-      next unless File.file?(exe)
-
-      prefix = File.dirname(File.dirname(exe))
-      gems = File.join(prefix, "lib", "ruby", "gems", ruby_api_version)
-      next unless File.directory?(gems)
-      next if seen[gems]
-
-      seen[gems] = true
-      @host_ruby_dirs << gems
-    end
-    @host_ruby_dirs
-  rescue StandardError
-    @host_ruby_dirs = []
-  end
+  # IronRuby reads only its own gem trees: the user's (user_dir), GEM_HOME and
+  # GEM_PATH, and default_dir with the gems it ships.  It used to also offer a
+  # CRuby 4.0 found on PATH - its <prefix>/lib/ruby/gems/4.0.0 - for third-party
+  # gems, filtered so that none IronRuby ships came from there.  That still
+  # loaded that CRuby's code into IronRuby in ways no filter caught: its
+  # RubyGems plugins (rdoc's hooked rdoc 7.0.4 into every `gem install`), and
+  # gems installed for one interpreter running on the other.  A gem IronRuby
+  # needs is installed for IronRuby, with `igem install` or Bundler.
 
   ##
   # Where the default gems' specifications live.
@@ -124,16 +45,15 @@ module Gem
   ##
   # The standard library directories this interpreter was started with, in
   # $LOAD_PATH order.  -X:StdLib puts them at the front (behind -I, RUBYLIB and
-  # RUBYOPT's -I, which come first), which is where the Ruby 4.0 tree, the
-  # IronRuby tree and the legacy 1.9 tree all live.
+  # RUBYOPT's -I, which come first), which is where the Ruby 4.0 tree and the
+  # IronRuby tree live.
 
   def self.ironruby_stdlib_dirs # :nodoc:
-    @ironruby_stdlib_dirs ||= begin
+    @__ironruby_stdlib_dirs__ ||= begin
       lib = ironruby_lib_dir                                # <root>/Src/StdLib/ruby/4.0
       stdlib = File.expand_path("../..", lib)               # <root>/Src/StdLib
       [lib,
-       File.join(stdlib, "ironruby"),
-       File.join(stdlib, "ruby", RbConfig::CONFIG["ruby_version"])].select {|d| Dir.exist?(d) }
+       File.join(stdlib, "ironruby")].select {|d| Dir.exist?(d) }
     end
   end
 
@@ -180,7 +100,7 @@ module Gem
   # Returns name => Gem::Version.
 
   def self.ironruby_pinned_gems
-    @ironruby_pinned_gems ||= begin
+    @__ironruby_pinned_gems__ ||= begin
       pinned = {}
       begin
         Gem::Specification.default_stubs("*.gemspec").each do |stub|
@@ -206,33 +126,58 @@ module Gem
     path << user_dir if user_home && File.exist?(user_home)
     path << default_dir
     path << vendor_dir if vendor_dir && File.directory?(vendor_dir)
-    path.concat(host_ruby_dirs)
     path
   end
 
   ##
-  # IronRuby's own gem home and the host trees stay on Gem.path even when
-  # something narrows GEM_HOME and GEM_PATH - which Bundler does on every
-  # command, pinning both to its bundle_path (and GEM_PATH to nothing at all
-  # when a path is configured).  On CRuby that loses little, because
-  # bundle_path defaults to the very directory the bundled gems are in; here it
-  # would hide them, and a Gemfile that names rake or minitest would go to
-  # rubygems.org for a gem this tree already has.  default_dir holds the
-  # bundled gems IronRuby ships (Util/install-bundled-gems.rb) and the host
-  # trees are filtered (IronRubyHostGemFilter), so both are read-only extra
-  # sources, like a vendor directory, and appending them is always safe.  They
-  # go last, so a gem installed into GEM_HOME or GEM_PATH is found first.
+  # IronRuby's own gem home stays on Gem.path even when something narrows
+  # GEM_HOME and GEM_PATH - which Bundler does on every command, pinning both to
+  # its bundle_path (and GEM_PATH to nothing at all when a path is configured).
+  # On CRuby that loses little, because bundle_path defaults to the very
+  # directory the bundled gems are in; here it would hide them, and a Gemfile
+  # that names rake or minitest would go to rubygems.org for a gem this tree
+  # already has.  default_dir holds the bundled gems IronRuby ships
+  # (Util/install-bundled-gems.rb), so it is a read-only extra source, like a
+  # vendor directory, and appending it is always safe.  It goes last, so a gem
+  # installed into GEM_HOME or GEM_PATH is found first.
 
   def self.path
-    paths.path | [default_dir] | host_ruby_dirs
+    paths.path | [default_dir]
   end
 
   ##
-  # RbConfig.ruby names the `ir` apphost, which starts without the -X:UsePrism
-  # and -X:StdLib arguments that make it a Ruby 4 interpreter.  RubyGems and
+  # No documentation unless asked for, as on TruffleRuby: generating ri and
+  # rdoc takes longer than installing most gems, and is rarely read.  `gem
+  # install --document` (or a "gem: --document" line in ~/.gemrc) still builds
+  # it, through the hooks below.
+
+  def self.platform_defaults
+    { "gem" => "--no-document" }
+  end
+
+  # rdoc ships in IronRuby's standard library rather than as a gem, so no
+  # install wrote the plugin stub that registers its hooks on CRuby (rdoc's
+  # rubygems_plugin.rb, through <gem home>/plugins).  These register the same
+  # two, and load rdoc only when one runs.  RDoc::RubyGemsHook.generate reads
+  # the install's --document / --no-document itself.  ::RDoc, because inside
+  # Gem, RDoc is Gem::RDoc - rubygems/rdoc.rb's alias for the hook class.
+  done_installing do |installer, specs|
+    require "rdoc/rubygems_hook"
+    ::RDoc::RubyGemsHook.generate(installer, specs)
+  end
+
+  pre_uninstall do |uninstaller|
+    require "rdoc/rubygems_hook"
+    ::RDoc::RubyGemsHook.remove(uninstaller)
+  end
+
+  ##
+  # RbConfig.ruby names the `ironruby` apphost, which starts without the -X:StdLib
+  # argument that gives it Ruby 4's standard library.  RubyGems and
   # Bundler shell out to Gem.ruby to run binstubs and extconf.rb, so point it
-  # at the ir.sh (ir.cmd on Windows) wrapper next to the source tree when there
-  # is one.
+  # at the ironruby (ironruby.cmd on Windows) launcher next to the source tree
+  # when there is one - or at ir.sh (ir.cmd), its short name, in a tree from
+  # before the launcher was called ironruby.
 
   def self.ruby
     @ruby ||= begin
@@ -240,9 +185,8 @@ module Gem
       begin
         # <root>/Src/StdLib/ruby/4.0/rubygems/defaults/ironruby.rb -> <root>
         root = File.expand_path("../../../../../..", __dir__)
-        name = Gem.win_platform? ? "ir.cmd" : "ir.sh"
-        candidate = File.join(root, name)
-        wrapper = candidate if File.file?(candidate)
+        names = Gem.win_platform? ? %w[ironruby.cmd ir.cmd] : %w[ironruby ir.sh]
+        wrapper = names.map { |name| File.join(root, name) }.find { |candidate| File.file?(candidate) }
       rescue StandardError
         wrapper = nil
       end
@@ -255,10 +199,11 @@ module Gem
 
   ##
   # A binstub RubyGems writes gets `#!/usr/bin/env <ruby_install_name>` by
-  # default, and RbConfig's ruby_install_name here is "ir" - the apphost, which
-  # is not on PATH and which would start without the arguments that make it a
-  # Ruby 4 interpreter anyway.  Turn the env shebang off for every install, so
-  # the line becomes `#!<Gem.ruby>`, the ir.sh wrapper.  That also makes
+  # default, and RbConfig's ruby_install_name here is "ironruby" - which is the
+  # launcher only where its directory is on PATH, and otherwise the apphost,
+  # which would start without the arguments that make it a Ruby 4 interpreter.
+  # Turn the env shebang off for every install, so the line becomes
+  # `#!<Gem.ruby>`, the ironruby launcher.  That also makes
   # Bundler's CLI::Exec#ruby_shebang? recognise the binstub - it matches
   # "#!#{Gem.ruby}" - so `bundle exec <gem executable>` loads it in this process
   # instead of exec'ing it into whatever `ruby` is on PATH.
@@ -278,7 +223,7 @@ module Gem
   # gem index.  See BasicSpecification#ignored? below.
 
   def self.ironruby_ignored_gems # :nodoc:
-    @ironruby_ignored_gems ||= []
+    @__ironruby_ignored_gems__ ||= []
   end
 
   ##
@@ -287,22 +232,22 @@ module Gem
   # the file names rather than from the gemspecs, so that nothing is evaluated.
 
   def self.ironruby_default_gem_names # :nodoc:
-    @ironruby_default_gem_names ||=
+    @__ironruby_default_gem_names__ ||=
       Dir.glob(File.join(default_specifications_dir, "*.gemspec")).map do |file|
         File.basename(file, ".gemspec")[/\A(.+)-[^-]+\z/, 1]
       end.compact
   rescue StandardError
-    @ironruby_default_gem_names = []
+    @__ironruby_default_gem_names__ = []
   end
 
   ##
-  # Lazy loading of the host CRuby's default gemspecs.
+  # Lazy loading of the default gemspecs.
   #
   # Upstream's Gem::Specification.load_defaults evaluates every gemspec in
   # Gem.default_specifications_dir at boot, purely to feed
   # Gem.register_default_spec - which only wants, per gem, the list of paths
   # that `require` should map to it.  On CRuby that directory holds a handful
-  # of specs and the eval is compiled C; here it is the host's 46 default
+  # of specs and the eval is compiled C; here it is IronRuby's own default
   # gemspecs, and evaluating them is by far the largest single cost of
   # `require "rubygems"`.
   #
@@ -317,16 +262,17 @@ module Gem
   # Set IRONRUBY_NO_GEM_CACHE=1 to fall back to upstream's eager scan.
 
   IRONRUBY_DEFAULT_SPEC_INDEX_VERSION = 1 # :nodoc:
+  __hide_constant__ :IRONRUBY_DEFAULT_SPEC_INDEX_VERSION
 
   ##
   # The standard library this process is running out of.  A source tree can be
   # checked out many times over - every worktree on this box shares one home
-  # directory and one host CRuby - so it is part of the cache's identity: the
+  # directory - so it is part of the cache's identity: the
   # recorded feature paths point into *this* tree, and requiring another
   # worktree's copy of rubygems/dependency.rb would be a real bug.
 
   def self.ironruby_lib_dir # :nodoc:
-    @ironruby_lib_dir ||= File.expand_path("../..", __dir__)
+    @__ironruby_lib_dir__ ||= File.expand_path("../..", __dir__)
   end
 
   def self.ironruby_default_spec_index_file # :nodoc:
@@ -495,11 +441,9 @@ module Gem
     # RubyGems builds a gem's extensions lazily, the first time something
     # activates it - installing a gem builds its dependencies' extensions too.
     # On IronRuby that can only fail: there is no ruby.h and no CRuby ABI to
-    # compile against.  Worse, the gem whose extension is missing is usually one
-    # in the *host* CRuby's tree (which is offered read-only, see
-    # host_ruby_dirs), so the attempt writes a half-built Makefile and a
-    # gem_make.out into someone else's installation before it fails, and takes
-    # the whole `gem install` down with it.
+    # compile against.  The attempt writes a half-built Makefile and a
+    # gem_make.out into the gem's directory before it fails, and takes the whole
+    # `gem install` down with it.
     #
     # Doing nothing leaves the gem exactly as it is: its .rb files load, the
     # missing .so raises a plain LoadError if something really reaches for it,
@@ -554,14 +498,58 @@ module Gem
       nil
     end
   end
+  __hide_constant__ :IronRubyNoExtensionBuild
+
+  ##
+  # Gems that are C extensions upstream and that IronRuby has exactly one of,
+  # built in, at a newer major version than some popular gems were released
+  # for.  Such a gem cannot get the version it asks for here - there is no
+  # compiler for the C one - and the one here does what it uses, so a
+  # requirement on an older major version is read with its upper bound lifted -
+  # "~> 1.7" as ">= 1.7" - for these names only, from the given major version
+  # on, and only where the built-in version then satisfies it.  Only the bound
+  # "~>" implies is lifted: "< 4" written out is a gem saying 4 does not work.
+  #
+  # prism: IronRuby parses with it, at 2.x since it follows prism 2.0's
+  # serialization; its FFI backend would need a libprism 1.x beside that.
+  # rubocop-ast (~> 1.7), so rubocop and standard, and minitest 6 (~> 1.5),
+  # which every Rails app's tests pull in, ask for 1.x and use the Ruby API,
+  # which 2.0 kept for what they call: their exercises in Util/gems give the
+  # same output as on CRuby with prism 1.9.  0.x is an API from before 1.0.
+  #
+  # bigdecimal: the C# one in Src/Libraries presents as 4.0.1 and passes
+  # ruby/spec's library/bigdecimal.  ttfunk, so prawn, asks for ~> 3.1 and
+  # only tells a BigDecimal operand from the others by its class.  2.0 removed
+  # BigDecimal.new, so a requirement for 1.x is left alone.
+  IRONRUBY_LIFTED_REQUIREMENTS = { "prism" => 1, "bigdecimal" => 2 }.freeze # :nodoc:
+
+  module IronRubyBuiltInRequirement # :nodoc:
+    def requirement
+      requirement = super
+      from_major = IRONRUBY_LIFTED_REQUIREMENTS[name]
+      return requirement unless from_major
+      built_in = Gem.ironruby_pinned_gems[name]
+      return requirement if built_in.nil? || requirement.satisfied_by?(built_in)
+      return requirement if requirement.requirements.any? { |_, version| version.segments.first < from_major }
+
+      lifted = requirement.requirements.map do |op, version|
+        op == "~>" ? ">= #{version}" : "#{op} #{version}"
+      end
+      lifted = Gem::Requirement.new(lifted)
+      lifted.satisfied_by?(built_in) ? lifted : requirement
+    end
+  end
+  __hide_constant__ :IRONRUBY_LIFTED_REQUIREMENTS, :IronRubyBuiltInRequirement
 
   def self.const_added(name) # :nodoc:
     super
     # Registering an autoload fires this too; only a real class is prepended to.
     Installer.prepend(IronRubyNoExtensionBuild) if name == :Installer && !autoload?(:Installer)
+    Dependency.prepend(IronRubyBuiltInRequirement) if name == :Dependency && !autoload?(:Dependency)
   end
 
   Installer.prepend(IronRubyNoExtensionBuild) if const_defined?(:Installer, false) && !autoload?(:Installer)
+  Dependency.prepend(IronRubyBuiltInRequirement) if const_defined?(:Dependency, false) && !autoload?(:Dependency)
 
   class BasicSpecification; end
 
@@ -579,9 +567,9 @@ module Gem
     # and under `bundle exec` it reports false for exactly these gems.
 
     def ironruby_provided_library? # :nodoc:
-      return @ironruby_provided_library unless @ironruby_provided_library.nil?
+      return @__ironruby_provided_library__ unless @__ironruby_provided_library__.nil?
 
-      @ironruby_provided_library =
+      @__ironruby_provided_library__ =
         begin
           !default_gem? &&
             Gem.ironruby_default_gem_names.include?(name) &&
@@ -596,8 +584,8 @@ module Gem
     # running Ruby, and Gem::Dependency#matching_specs then rejects it.  On
     # IronRuby a C extension is never built, so that rule would make every gem
     # with an extension - and every gem that merely depends on one - impossible
-    # to activate: parser depends on racc, and racc's .so exists only for the
-    # host CRuby.  Most such gems carry a pure-Ruby fallback that the extension
+    # to activate: parser depends on racc, and racc's .so exists only for
+    # CRuby.  Most such gems carry a pure-Ruby fallback that the extension
     # merely accelerates (racc/parser.rb rescues the LoadError of racc/cparse),
     # and the ones that do not fail at require time with a plain LoadError for
     # the extension file, which is a better answer than refusing to resolve.
@@ -608,14 +596,14 @@ module Gem
     # The names are recorded so `gem env` and -w can report them.
 
     def ignored?
-      if @ironruby_ignored.nil?
-        @ironruby_ignored = ironruby_provided_library?
-        if @ironruby_ignored || super
+      if @__ironruby_ignored__.nil?
+        @__ironruby_ignored__ = ironruby_provided_library?
+        if @__ironruby_ignored__ || super
           Gem.ironruby_ignored_gems << full_name unless Gem.ironruby_ignored_gems.include?(full_name)
         end
       end
 
-      @ironruby_ignored
+      @__ironruby_ignored__
     end
 
     ##
@@ -657,65 +645,5 @@ module Gem
   end
 
   BasicSpecification.prepend(IronRubyProvidedGem)
-
-  ##
-  # A host CRuby's copy of a gem IronRuby ships is never used.
-  #
-  # host_ruby_dirs offers a matching CRuby's gem tree read-only, which is right
-  # for third-party pure-Ruby gems.  It also offers that CRuby's *installed*
-  # bigdecimal, json, psych and bundler, though, and an installed gem sorts
-  # ahead of a default gem of the same version - so the host's bigdecimal-4.0.1
-  # shadowed the one in Src/Libraries, and, worse, the host's bundler shadowed
-  # the bundler shipped here: a Gemfile.lock saying `BUNDLED WITH 4.0.12` made
-  # Bundler::SelfManager switch to the host's 4.0.12, an upstream release with
-  # none of IronRuby's carve-outs, which then dropped every extension gem from
-  # its index and aborted the bundle.
-  #
-  # The same goes for the bundled gems in default_dir, for a quieter reason: the
-  # host's rake-13.4.2 is newer than the rake-13.3.1 shipped here, so on a
-  # machine with CRuby it would win activation, and `ir -S rake` would run a
-  # different rake there than everywhere else.
-  #
-  # So drop the host's copy of every gem IronRuby has its own of - a default
-  # gem, or any gem in its own gem home - from the index entirely.  Only the
-  # host trees are filtered: a gem the user installed *for IronRuby* over a
-  # shipped one is still an upgrade and still wins, exactly as on CRuby.
-  #
-  # Defined ahead of rubygems/specification_record.rb (which reopens the class)
-  # and prepended, so the real definition cannot overwrite it.
-
-  ##
-  # The names of the gems in IronRuby's own gem home, default and installed:
-  # the ones a host tree may not provide.  Read from file names, so that
-  # nothing is evaluated.
-
-  def self.ironruby_own_gem_names # :nodoc:
-    @ironruby_own_gem_names ||= begin
-      installed = Dir.glob(File.join(default_dir, "specifications", "*.gemspec")).map do |file|
-        File.basename(file, ".gemspec")[/\A(.+)-[^-]+\z/, 1]
-      end
-      (ironruby_default_gem_names + installed.compact).uniq
-    end
-  rescue StandardError
-    @ironruby_own_gem_names = ironruby_default_gem_names
-  end
-
-  class SpecificationRecord; end
-
-  module IronRubyHostGemFilter # :nodoc:
-    private
-
-    def installed_stubs(pattern)
-      stubs = super
-      host = Gem.host_ruby_dirs
-      return stubs if host.empty?
-
-      names = Gem.ironruby_own_gem_names
-      return stubs if names.empty?
-
-      stubs.reject {|stub| host.include?(stub.base_dir) && names.include?(stub.name) }
-    end
-  end
-
-  SpecificationRecord.prepend(IronRubyHostGemFilter)
+  __hide_constant__ :IronRubyProvidedGem
 end

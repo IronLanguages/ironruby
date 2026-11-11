@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -14,11 +14,11 @@
  * ***************************************************************************/
 
 using System;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
 using System.Numerics;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
+using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Generation;
 using System.Runtime.CompilerServices;
 
@@ -72,7 +72,7 @@ namespace IronRuby.Builtins {
                 if (shift == Int32.MinValue) {
                     // Negating this one overflows, and the shift is further than any value
                     // reaches anyway.
-                    return ShiftedOutOfRange(Math.Sign(self), false);
+                    return self < 0 ? MinusOne : Zero;
                 } else {
                     return RightShift(self, -shift);
                 }
@@ -80,7 +80,7 @@ namespace IronRuby.Builtins {
                 
             // If 'self' has more than '31 - other' significant digits it will overflow:
             if (shift >= 31 || (self & ~((1 << (31 - shift)) - 1)) != 0) {
-                return Protocols.Normalize(((BigInteger)self) << shift);
+                return LeftShiftWide(self, shift);
             }
 
             return self << shift;
@@ -100,7 +100,7 @@ namespace IronRuby.Builtins {
         public static object/*!*/ RightShift(int self, int shift) {
             if (shift < 0) {
                 if (shift == Int32.MinValue) {
-                    return ShiftedOutOfRange(Math.Sign(self), true);
+                    return ShiftBeyondInt32(self, -(BigInteger)shift);
                 } else {
                     return LeftShift(self, -shift);
                 }
@@ -114,21 +114,80 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// A shift wider than any machine word still has an answer. Shifting towards the least
-        /// significant end for ever leaves 0, or -1 for a negative value, since the sign bit keeps
-        /// arriving; zero stays zero whichever way it goes. Only a non-zero value shifted that far
-        /// the *other* way has nowhere to go, and MRI calls that a RangeError rather than trying
-        /// to allocate the result.
+        /// self shifted left by <paramref name="leftShift"/> bits (right when it is negative), for a
+        /// width an Int32 does not hold. Shifting towards the least significant end past every bit
+        /// leaves 0, or -1 for a negative value, since the sign bit keeps arriving; zero stays zero
+        /// whichever way it goes.
+        /// <para>
+        /// The other way, MRI (big_shift2/big_shift3) allocates the result - 1 &lt;&lt; 2**31 is a
+        /// 256 MB Integer - up to a width of about 2**66, where it says "shift width too big"
+        /// (RangeError), and raises NoMemoryError when the allocation fails, as 1 &lt;&lt; 2**40 does
+        /// on most machines. ruby/spec (left_shift_spec, right_shift_spec) lets an implementation
+        /// other than MRI put that RangeError at 2**32 instead, and IronRuby does: a .NET
+        /// BigInteger cannot hold much more than 2**31 bits anyway (see ShiftLeftOrFail), so between 2**32 and 2**66 the choice is only between two errors.
+        /// </para>
         /// </summary>
-        internal static object/*!*/ ShiftedOutOfRange(int sign, bool towardsMoreSignificantBits) {
-            if (sign == 0) {
+        internal static object/*!*/ ShiftBeyondInt32(BigInteger self, BigInteger leftShift) {
+            if (self.IsZero) {
                 return Zero;
             }
-            if (towardsMoreSignificantBits) {
+
+            // BigInteger only shifts by an Int32, so a wider shift goes in Int32.MaxValue steps
+            // (arithmetic right shifts compose: each rounds towards -Infinity).
+            if (leftShift.Sign < 0) {
+                BigInteger rightShift = -leftShift;
+                if (rightShift >= self.GetBitLength()) {
+                    return self.Sign < 0 ? MinusOne : Zero;
+                }
+                BigInteger shifted = self;
+                while (rightShift > Int32.MaxValue) {
+                    shifted >>= Int32.MaxValue;
+                    rightShift -= Int32.MaxValue;
+                }
+                return Protocols.Normalize(shifted >> (int)rightShift);
+            }
+
+            if (leftShift >= MaxLeftShift) {
                 throw RubyExceptions.CreateRangeError("shift width too big");
             }
-            return sign < 0 ? MinusOne : Zero;
+
+            // At most two Int32.MaxValue steps below that bound.
+            BigInteger result = self;
+            while (leftShift > Int32.MaxValue) {
+                result = ShiftLeftOrFail(result, Int32.MaxValue);
+                leftShift -= Int32.MaxValue;
+            }
+            return Protocols.Normalize(ShiftLeftOrFail(result, (int)leftShift));
         }
+
+        /// <summary>
+        /// The most bits a BigInteger holds: Array.MaxLength 32-bit or 64-bit limbs' worth, 2**31 - 64 either way.
+        /// .NET 9 and 10 throw OverflowException past it from every operation. .NET 11 keeps the same limit
+        /// (BigInteger.MaxLength) but its shifts no longer check it, while its other operations still do: there
+        /// 1 &lt;&lt; 2**31 succeeded and a later (x | 1) of it threw a raw OverflowException. So IronRuby checks
+        /// the limit itself, and an Integer is held to it on every runtime.
+        /// </summary>
+        internal static readonly long MaxBigIntegerBits = (long)(Array.MaxLength / 64) * 64;
+
+        /// <summary>
+        /// value &lt;&lt; shift, where a result too big for a BigInteger (<see cref="MaxBigIntegerBits"/>) is
+        /// the failed allocation MRI reports (NoMemoryError): 1 &lt;&lt; 2**31 is a NoMemoryError.
+        /// </summary>
+        internal static BigInteger ShiftLeftOrFail(BigInteger value, int shift) {
+            // the magnitude's bits, which BigInteger stores: GetBitLength is the two's complement width, a bit
+            // short for -2**k (-1 has 0)
+            if (shift > 0 && !value.IsZero &&
+                (long)(value.Sign < 0 ? BigInteger.Abs(value) : value).GetBitLength() + shift > MaxBigIntegerBits) {
+                throw new OutOfMemoryException("failed to allocate memory");
+            }
+            try {
+                return value << shift;
+            } catch (OverflowException) {
+                throw new OutOfMemoryException("failed to allocate memory");
+            }
+        }
+
+        private static readonly BigInteger MaxLeftShift = BigInteger.One << 32;
 
         [RubyMethod("<<")]
         public static object/*!*/ LeftShift(int self, [NotNull]BigInteger/*!*/ shift) {
@@ -136,7 +195,7 @@ namespace IronRuby.Builtins {
             if (shift.AsInt32(out small)) {
                 return LeftShift(self, small);
             }
-            return ShiftedOutOfRange(Math.Sign(self), shift.Sign > 0);
+            return ShiftBeyondInt32(self, shift);
         }
 
         [RubyMethod(">>")]
@@ -145,7 +204,7 @@ namespace IronRuby.Builtins {
             if (shift.AsInt32(out small)) {
                 return RightShift(self, small);
             }
-            return ShiftedOutOfRange(Math.Sign(self), shift.Sign < 0);
+            return ShiftBeyondInt32(self, -shift);
         }
 
         #endregion
@@ -169,15 +228,127 @@ namespace IronRuby.Builtins {
         /// </example>
         /// <returns>indexth bit in the (assumed) binary representation of self, where self[0] is the least significant bit.</returns>
         /// <remarks>Since representation is supposed to be 2s complement, we return always 1 if self is negative and index is greater than most signifcant bit in BigInteger</remarks>
+        // Integer#[] (MRI's int_aref) answers here an Integer bit index, and a Fixnum index and length on a Fixnum.
+        // Every other form - a Range, a Float or #to_int index, a length that needs converting - goes to the prelude's
+        // port of int_aref1 and int_aref2 (__ir_int_aref1__, __ir_int_aref2__ in ruby4.rb). The whole method had been a
+        // Ruby `def [](index, length = nil)' in front of this, which cost ~0.3 us on every bit read.
         [RubyMethod("[]")]
-        public static int Bit(int self, [DefaultProtocol]int index) {
+        public static int Bit(int self, int index) {
             if (index < 0) {
                 return 0;
             }
-            if (index > 32) {
+            // a C# shift count is taken mod 32, so 5[32] read bit 0
+            if (index > 31) {
                 return self < 0 ? 1 : 0;
             }
             return (self & (1 << index)) != 0 ? 1 : 0;
+        }
+
+        /// <summary>
+        /// self[offset, size] for a Fixnum and Fixnums: int_aref2's (self &gt;&gt; offset) &amp; ((1 &lt;&lt; size) - 1).
+        /// A negative size masks nothing, as (1 &lt;&lt; size) - 1 is -1 there; a size of 0 masks everything.
+        /// </summary>
+        [RubyMethod("[]")]
+        public static object/*!*/ Bits(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ slow, int self, int offset, int size) {
+            long shifted;
+            if (offset >= 0) {
+                shifted = (offset > 62) ? (self < 0 ? -1 : 0) : (long)self >> offset;
+            } else if (offset >= -32) {
+                // |self| < 2**31, so a shift by at most 32 stays inside a long
+                shifted = (long)self << -offset;
+            } else {
+                return BitsSlow(slow, self, offset, size);
+            }
+
+            if (size < 0) {
+                return Narrow(shifted);
+            }
+            if (size < 63) {
+                return Narrow(shifted & ((1L << size) - 1));
+            }
+            // 63 or more ones: all of a non-negative value, and 2**size + shifted of a negative one
+            return (shifted >= 0) ? Narrow(shifted) : Protocols.Normalize(ShiftLeftOrFail(BigInteger.One, size) + shifted);
+        }
+
+        // the same on a Bignum: its bits are BigInteger's two's complement ones
+        [RubyMethod("[]")]
+        public static object/*!*/ Bits(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ slow, BigInteger/*!*/ self,
+            int offset, int size) {
+            if (offset == Int32.MinValue) {
+                return BitsSlow(slow, self, offset, size);
+            }
+            if (size == 0) {
+                return ScriptingRuntimeHelpers.Int32ToObject(0);
+            }
+            BigInteger shifted = (offset >= 0) ? self >> offset : ShiftLeftOrFail(self, -offset);
+            return Protocols.Normalize((size < 0) ? shifted : shifted & (ShiftLeftOrFail(BigInteger.One, size) - 1));
+        }
+
+        /// <summary>
+        /// self[a..b] on a Fixnum, for a Range of Fixnums (int_aref1): the bits from a up to b, the bit at a when the two
+        /// are the same, and self &gt;&gt; a when b is the lower.
+        /// </summary>
+        [RubyMethod("[]")]
+        public static object/*!*/ Bits(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow,
+            CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ slow2, int self, [NotNull]Range/*!*/ range) {
+            if (range.Begin is int first && range.End is int last) {
+                if (first < last) {
+                    long size = (long)last - first + (range.ExcludeEnd ? 0 : 1);
+                    if (size <= Int32.MaxValue) {
+                        return Bits(slow2, self, first, (int)size);
+                    }
+                } else if (first == last) {
+                    return ScriptingRuntimeHelpers.Int32ToObject(range.ExcludeEnd ? 0 : Bit(self, first));
+                } else if (first >= 0) {
+                    return ScriptingRuntimeHelpers.Int32ToObject(first > 31 ? (self < 0 ? -1 : 0) : self >> first);
+                }
+            }
+            return Bit(slow, self, range);
+        }
+
+        // rb_fix_aref converts a Float index with #to_int, which truncates it
+        [RubyMethod("[]")]
+        public static int Bit(int self, double index) {
+            if (Double.IsNaN(index) || Double.IsInfinity(index)) {
+                throw new FloatDomainError(Double.IsNaN(index) ? "NaN" : index > 0 ? "Infinity" : "-Infinity");
+            }
+            return (index <= -1.0) ? 0 : (index >= 31.0) ? (self < 0 ? 1 : 0) : Bit(self, (int)index);
+        }
+
+        [RubyMethod("[]")]
+        public static object/*!*/ Bit(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow, object/*!*/ self, object index) {
+            BigInteger value, position;
+            if (TryGetBitOperand(self, out value) && TryGetBitOperand(index, out position)) {
+                return ScriptingRuntimeHelpers.Int32ToObject(Bit(value, position));
+            }
+            if (!slow.Context.GetClassOf(self).ResolveMethod("__ir_int_aref1__", VisibilityContext.AllVisible).Found) {
+                throw RubyExceptions.CreateTypeConversionError(slow.Context.GetClassName(index), "Integer");
+            }
+            var site = slow.GetCallSite("__ir_int_aref1__", 1);
+            return site.Target(site, self, index);
+        }
+
+        [RubyMethod("[]")]
+        public static object/*!*/ Bits(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ slow, object/*!*/ self, object offset, object size) {
+            return BitsSlow(slow, self, offset, size);
+        }
+
+        private static object/*!*/ BitsSlow(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ slow, object/*!*/ self, object offset, object size) {
+            if (!slow.Context.GetClassOf(self).ResolveMethod("__ir_int_aref2__", VisibilityContext.AllVisible).Found) {
+                throw RubyExceptions.CreateTypeConversionError(slow.Context.GetClassName(offset is int ? size : offset), "Integer");
+            }
+            var site = slow.GetCallSite("__ir_int_aref2__", 2);
+            return site.Target(site, self, offset, size);
+        }
+
+        // an Integer of any representation (a CLR Int64 included): the prelude converts everything else to one of these
+        private static bool TryGetBitOperand(object value, out BigInteger result) {
+            switch (value) {
+                case int i: result = i; return true;
+                case long l: result = l; return true;
+                case BigInteger b: result = b; return true;
+                default: result = BigInteger.Zero; return false;
+            }
         }
 
         /// <summary>
@@ -363,15 +534,81 @@ namespace IronRuby.Builtins {
         /// Integer (Bignum or Fixnum) if other is positive
         /// Float otherwise.
         /// </returns>
+        // Integer#** answers here what it can, and leaves to rational.rb's __ir_pow_slow__ (MRI's
+        // rb_int_pow) what makes a Rational or a Complex - a negative exponent, a negative base to a
+        // fractional power - and what has to be coerced. A Ruby `def **' in front of every power
+        // cost ~0.1-0.9 us a call. Without the prelude the CLR answers stand, as they always did.
+        internal static object/*!*/ PowerSlow(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow, object/*!*/ self, object other,
+            Func<object>/*!*/ withoutPrelude) {
+            var context = slow.Context;
+            if (!context.GetClassOf(self).ResolveMethod("__ir_pow_slow__", VisibilityContext.AllVisible).Found) {
+                return withoutPrelude();
+            }
+            var site = slow.GetCallSite("__ir_pow_slow__", 1);
+            return site.Target(site, self, other);
+        }
+
         [RubyMethod("**")]
-        public static object/*!*/ Power(int self, int other) {
+        public static object/*!*/ Power(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow, int self, int other) {
             if (other >= 0) {
+                // in a long while it fits: going through BigInteger.Pow and back was most of the
+                // cost of a small power
+                long result;
+                if (TryPowerInt64(self, other, out result)) {
+                    return Narrow(result);
+                }
                 return ClrInteger.PowerNonNegative(self, other);
             } else if (self == 1) {
                 return One;
-            } else {
-                return Math.Pow(self, other);
+            } else if (self == -1) {
+                return ScriptingRuntimeHelpers.Int32ToObject((other & 1) == 0 ? 1 : -1);
+            } else if (self != 0 && other != Int32.MinValue) {
+                // rb_int_pow's Rational: 1/(self ** -other), already in lowest terms, the sign moved
+                // onto the numerator (rational.rb's __ir_pow_slow__ makes the same one, slower)
+                RubyClass cls = KernelOps.GetRationalClass(slow.Context);
+                if (cls != null) {
+                    // in a long while it fits; PowerNonNegative refuses a result too large to make, as MRI does
+                    object power = TryPowerInt64(Math.Abs((long)self), -other, out long small) ? Narrow(small)
+                        : PowerNonNegative(new BigInteger(Math.Abs((long)self)), new BigInteger(-(long)other));
+                    bool negative = self < 0 && (other & 1) != 0;
+                    return new RubyRational(cls, ScriptingRuntimeHelpers.Int32ToObject(negative ? -1 : 1), power);
+                }
             }
+            return PowerSlow(slow, self, other, () => Math.Pow(self, other));
+        }
+
+        // a Fixnum to a non-negative Fixnum power (Integer#pow)
+        internal static object/*!*/ PowerNonNegativeFixnum(int self, int other) {
+            long result;
+            if (TryPowerInt64(self, other, out result)) {
+                return Narrow(result);
+            }
+            return ClrInteger.PowerNonNegative(self, other);
+        }
+
+        // b ** e by squaring, false as soon as a step would overflow a long
+        private static bool TryPowerInt64(long b, int e, out long result) {
+            long r = 1;
+            while (true) {
+                if ((e & 1) != 0 && !TryMultiplyInt64(r, b, out r)) {
+                    result = 0;
+                    return false;
+                }
+                e >>= 1;
+                if (e == 0) {
+                    result = r;
+                    return true;
+                }
+                if (!TryMultiplyInt64(b, b, out b)) {
+                    result = 0;
+                    return false;
+                }
+            }
+        }
+
+        private static bool TryMultiplyInt64(long a, long b, out long product) {
+            long high = Math.BigMul(a, b, out product);
+            return high == (product >> 63);
         }
 
         /// <summary>
@@ -379,8 +616,34 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <returns>Float</returns>
         [RubyMethod("**")]
-        public static double Power(int self, double other) {
+        public static object Power(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow, int self, double other) {
+            if (self < 0 && IsFractional(other)) {
+                // a Complex
+                return PowerSlow(slow, self, other, () => Math.Pow(self, other));
+            }
+            // MRI's 0 ** NaN is 0.0; Math.Pow's is NaN
+            if (self == 0 && Double.IsNaN(other)) {
+                return 0.0;
+            }
             return Math.Pow(self, other);
+        }
+
+        // rational.rb's Float.__ir_fractional__: NaN is, an infinity is not, and otherwise not whole
+        internal static bool IsFractional(double y) {
+            if (Double.IsNaN(y)) { return true; }
+            if (Double.IsInfinity(y)) { return false; }
+            return y != Math.Round(y);
+        }
+
+        /// <summary>
+        /// A Bignum exponent: 0, 1 and -1 have an answer, anything else is too large to compute
+        /// (an ArgumentError, as in MRI 3.4 and later).  Without this overload the binder could
+        /// not choose between Bignum#** and the coercing fallback.
+        /// </summary>
+        [RubyMethod("**")]
+        public static object Power(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow, RubyContext/*!*/ context, int self,
+            [NotNull]BigInteger/*!*/ other) {
+            return Power(slow, context, (BigInteger)self, other);
         }
 
         #endregion
@@ -472,9 +735,68 @@ namespace IronRuby.Builtins {
             return MathUtils.FloorDivideUnchecked(self, other);
         }
 
-        [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
+        // A Fixnum is exactly a double, so its quotient is the division of the two, as MRI's
+        // fix_fdiv_double does; without these the binder made both of them Bignums first.
+        [RubyMethod("fdiv")]
+        public static double FDiv(int self, int other) {
+            return (double)self / (double)other;
+        }
+
+        // An Integer in the long range: int.fdiv(long) had no overload of its own, and fdiv(int, Float)
+        // and fdiv(Bignum, Float) both took the long as a Float, which the binder could not choose
+        // between - 1.fdiv(2**40), and with it 0.5 * 10**-15 and Rational#to_f, raised
+        // AmbiguousMatchException.
+        [RubyMethod("fdiv")]
+        public static double FDiv(int self, long other) {
+            return FDivExact(self, other);
+        }
+
+        [RubyMethod("fdiv")]
+        public static double FDiv(long self, long other) {
+            return FDivExact(self, other);
+        }
+
+        [RubyMethod("fdiv")]
+        public static double FDiv(long self, int other) {
+            return FDivExact(self, other);
+        }
+
+        [RubyMethod("fdiv")]
+        public static double FDiv(long self, double other) {
+            return (double)self / other;
+        }
+
+        // As MRI's rb_int_fdiv_double does it: both reduced by their gcd first, then - fix_fdiv_double -
+        // a divisor below 2**53 divides as doubles, the dividend rounded to a double, and a wider one
+        // takes the Bignum division. So 3450683738566129354.fdiv(858) is 1725341869283064677 / 429.0,
+        // 4021775919074742.5, rather than the correctly rounded ...743.0.
+        private static double FDivExact(long self, long other) {
+            if (other != 0) {
+                BigInteger gcd = BigInteger.GreatestCommonDivisor(self, other);
+                if (gcd > Int64.MaxValue) {
+                    // both are Int64.MinValue (or one is and the other 0)
+                    return FDiv(new BigInteger(self), new BigInteger(other));
+                }
+                if (gcd > BigInteger.One) {
+                    self /= (long)gcd;
+                    other /= (long)gcd;
+                }
+            }
+            const long doubleExact = 1L << 53;
+            if (other > -doubleExact && other < doubleExact) {
+                return (double)self / (double)other;
+            }
+            return FDiv(new BigInteger(self), new BigInteger(other));
+        }
+
+        [RubyMethod("fdiv")]
+        public static double FDiv(int self, double other) {
+            return (double)self / other;
+        }
+
+        [RubyMethod("fdiv")]
         public static double FDiv([NotNull]BigInteger/*!*/ self, double other) {
-            return self.ToFloat64() / other;
+            return Protocols.ToDouble(self) / other;
         }
 
         /// <summary>
@@ -487,7 +809,7 @@ namespace IronRuby.Builtins {
         /// that is not a number at all gets "String can't be coerced into Integer" rather than
         /// "no implicit conversion of String into Integer".
         /// </remarks>
-        [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
+        [RubyMethod("fdiv")]
         public static object FDiv(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite,
             object/*!*/ self, object other) {
             return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "fdiv", self, other);
@@ -555,30 +877,6 @@ namespace IronRuby.Builtins {
         [RubyMethod("magnitude")]
         public static object/*!*/ Abs(int self) {
             return self >= 0 ? self : self != Int32.MinValue ? -self : MinusMinValue();
-        }
-
-        #endregion
-
-        #region quo
-
-        /// <summary>
-        /// Returns the floating point result of dividing self by other, where other is Fixnum. 
-        /// </summary>
-        /// <returns>Float</returns>
-        [RubyMethod("quo")]
-        public static double Quotient(int self, int other) {
-            return (double)self / (double)other;
-        }
-
-        /// <summary>
-        /// Returns the floating point result of dividing self by other, where other is not Fixnum. 
-        /// </summary>
-        /// <remarks>
-        /// Self is first coerced by other and then the quo method is invoked on the coerced self.
-        /// </remarks>
-        [RubyMethod("quo")]
-        public static object Quotient(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, int self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "quo", self, other);
         }
 
         #endregion

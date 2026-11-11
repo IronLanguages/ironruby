@@ -16,8 +16,6 @@
 using System;
 using System.Text.RegularExpressions;
 using IronRuby.Builtins;
-using System.Text;
-using System.Diagnostics;
 
 namespace IronRuby.Tests {
     public partial class Tests {
@@ -50,6 +48,29 @@ puts(/b#{/a/}/)
 (?-mix:a)
 (?-mix:(?-mix:a)b)
 (?-mix:b(?-mix:a))
+");
+
+            // A MatchData keeps the subject as it was when it matched: a later change to the
+            // string must not show through #pre_match, #[] or #string. Regexp#match,
+            // String#match and the $~ String#scan leaves behind used to share the live string.
+            TestOutput(@"
+def show(md) p [md.pre_match, md[0], md[1], md.post_match, md.string, md.string.frozen?] end
+s = 'hello world'.dup; md = /o (w)/.match(s); s.replace('ZZZZZZZZZZZZZZZZ'); show md
+s = 'hello world'.dup; md = s.match(/o (w)/); s.replace('ZZZZZZZZZZZZZZZZ'); show md
+s = 'hello world'.dup; md = s.match(/o(r)/, 5); s[0, 1] = 'J'; show md
+s = 'hello world'.dup; s.scan(/o(.)/); md = $~; s << '!!'; s[0] = 'J'; show md
+s = 'hello world'.dup; s =~ /o (w)/; md = $~; s.insert(0, 'AAA'); show md
+s = ""h\u00e9llo w\u00f6rld"".dup; md = /\u00f6(r)/.match(s); s.upcase!; p [md.begin(0), md.pre_match.size, md[1], md.post_match, md.string.ascii_only?, md.string.frozen?]
+s = 'hello world'.dup; mds = []; s.scan(/o(.)/) { mds << $~ }; s.clear; mds.each { |m| show m }
+", @"
+[""hell"", ""o w"", ""w"", ""orld"", ""hello world"", true]
+[""hell"", ""o w"", ""w"", ""orld"", ""hello world"", true]
+[""hello w"", ""or"", ""r"", ""ld"", ""hello world"", true]
+[""hello w"", ""or"", ""r"", ""ld"", ""hello world"", true]
+[""hell"", ""o w"", ""w"", ""orld"", ""hello world"", true]
+[7, 7, ""r"", ""ld"", false, true]
+[""hell"", ""o "", "" "", ""world"", ""hello world"", true]
+[""hello w"", ""or"", ""r"", ""ld"", ""hello world"", true]
 ");
         }
 
@@ -329,7 +350,7 @@ puts(/b#{/a/}/)
                 @"\(\*\)",
 
                 "$_^_|_[_]_(_)_\\_._#_-_{_}_*_+_?_\t_\n_\r_\f_\v_\a_\b",
-                @"\$_\^_\|_\[_\]_\(_\)_\\_\._\#_\-_\{_\}_\*_\+_\?_\t_\n_\r_\f_" + "\v_\a_\b"
+                @"\$_\^_\|_\[_\]_\(_\)_\\_\._\#_\-_\{_\}_\*_\+_\?_\t_\n_\r_\f_\v_" + "\a_\b"
             };
 
             for (int i = 0; i < patterns.Length; i += 2) {
@@ -346,7 +367,7 @@ $_ = 'foo'
 if /(foo)/ then
   puts $1
 end
-");
+", 1, 0);
             }, @"
 foo
 ");
@@ -367,151 +388,238 @@ end
 z = /foo/
 puts(z =~ 'foo')
 
-puts(/foo/ =~ 'xxxfoo')
+puts(/foo/ =~ 'xxxfoo')     # a literal calls a redefined Regexp#=~ too (MRI 1.9+)
 ");
             }, @"
 3
 =~
-3
+=~
 ");
         }
+
+        /// <summary>
+        /// Byte escapes in a regexp of a multibyte encoding spell characters of it (/\xa4\xa2/e is one
+        /// character), and every match operation answers character offsets: the regex runs on the
+        /// string's own characters rather than on a k-coded decoding of its bytes.
+        /// </summary>
+        public void Regex_ByteEscapes1() {
+            TestOutput(@"
+s = ""あaいbあ"".encode(""EUC-JP"")
+re = Regexp.new('\xa4\xa2'.force_encoding(""EUC-JP""))
+p s =~ re, s.index(re, 1), s.rindex(re), re.encoding
+m = s.match(re, 1)
+p [m.begin(0), m.end(0), m.byteoffset(0), m.pre_match.size, $~.begin(0)]
+p s.scan(re).size, s.gsub(re, ""x"").encode(""UTF-8""), s.index(/b/e, 2), s =~ /\xa4\xa4/e
+w = ""あaいb"".encode(""Windows-31J"")
+p w =~ /\x82\xa2/s, w.split(/\x82\xa2/s).map(&:bytesize)
+p ""ああ"".encode(""EUC-JP"") =~ Regexp.new('\xa4\xa2*'.force_encoding(""EUC-JP"")), $~[0].bytesize
+p ""あaいb"" =~ /\xe3\x81\x84/, ""あaいb"".match(/b/u).byteoffset(0), ""あaいb"".match(/[\xe3\x81\x82-\xe3\x81\x84]+/)[0].size
+p((Regexp.new('\xe3\x81') rescue $!), (Regexp.new('\xff', Regexp::IGNORECASE) rescue $!))
+require 'strscan'
+ss = StringScanner.new(s)
+p ss.scan(re).bytesize, ss.scan(/a/e), ss.scan(/./e).bytesize, ss.pos, ss.charpos
+p((""abc"".encode(""UTF-16LE"") =~ /b/ rescue $!), (""abc"".encode(""UTF-16LE"") =~ /b/n rescue $!))
+p((""\xff"".force_encoding(""BINARY"").sub(""é"", """") rescue $!), (""abc"".encode(""UTF-16LE"").sub(""b"", """") rescue $!))
+", @"
+0
+4
+4
+#<Encoding:EUC-JP>
+[4, 5, [6, 8], 4, 4]
+2
+""xaいbx""
+3
+2
+2
+[3, 1]
+0
+4
+2
+[7, 8]
+1
+#<RegexpError: too short escaped multibyte character: /\xe3\x81/>
+#<RegexpError: invalid multibyte escape: /\xff/i>
+2
+""a""
+2
+5
+3
+#<Encoding::CompatibilityError: incompatible encoding regexp match (US-ASCII regexp with UTF-16LE string)>
+#<Encoding::CompatibilityError: incompatible encoding regexp match (US-ASCII regexp with UTF-16LE string)>
+#<Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8>
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8>
+");
+        }
+
+        /// <summary>
+        /// Onigmo reads no escape inside a comment, so a byte escape that spells no character there
+        /// is no error: (?#...), and under /x, or (?x) for the rest of a group, # to the end of the line.
+        /// </summary>
+        public void Regex_ByteEscapeComments1() {
+            TestOutput(@"
+p Regexp.new(""a(?#\\xff)b"") =~ ""ab"", Regexp.new(""a # \\xff\nb"", Regexp::EXTENDED) =~ ""ab""
+p Regexp.new(""(?x)a # \\xff\nb"") =~ ""ab"", Regexp.new(""(?x:a # \\xff\n)b"") =~ ""ab"", Regexp.new(""a(?#\\)\\xff)b"") =~ ""ab""
+p /a#\xff/x =~ ""a"", /a(?#\xff)/ =~ ""a"", Regexp.new(""a # caf\\xc3\\xa9\n\\xc3\\xa9"", Regexp::EXTENDED) =~ ""aé""
+p((Regexp.new(""(?x:a)# \\xff"") rescue $!), (Regexp.new(""[#\\xff]"", Regexp::EXTENDED) rescue $!))
+", @"
+0
+0
+0
+0
+0
+0
+0
+0
+#<RegexpError: invalid multibyte escape: /(?x:a)# \xff/>
+#<RegexpError: invalid multibyte escape: /[#\xff]/x>
+");
+        }
+
         
-#if OBSOLETE //? 
-        [Options(NoRuntime = true)]
-        public void RegexEncoding1() {
-            MatchData m;
-            // the k-coding of the pattern string is irrelevant:
-            foreach (var pe in new[] {  RubyEncoding.Binary }) {
-                var p = MutableString.CreateBinary(new byte[] { 0x82, 0xa0, (byte)'{', (byte)'2', (byte)'}' }, pe);
-
-                var r = new RubyRegex(p, RubyRegexOptions.NONE);
-                var rs = new RubyRegex(p, RubyRegexOptions.SJIS);
-
-                // the k-coding of the string is irrelevant:
-                foreach (var se in new[] { RubyEncoding.Binary }) {
-                    var s = MutableString.CreateBinary(new byte[] { 0x82, 0xa0,  0xa0 }, se);
-                    var t = MutableString.CreateBinary(new byte[] { 0x82, 0xa0,  0xa0,  0x82, 0xa0,  0xa0, 0xff }, se);
-                    var u = MutableString.CreateBinary(new byte[] { 0x82, 0xa0,  0x82, 0xa0,  0x82, 0xa0 }, se);
-
-                    // /あ{2}/ does not match "あ\xa0"
-                    m = r.Match(RubyEncoding.KCodeSJIS, s);
-                    Assert(m == null);
-
-                    // /\x82\xa0{2}/ matches "[ \x82\xa0\xa0 ] \x82\xa0\xa0\xff"
-                    m = r.Match(null, s);
-                    Assert(m != null && m.Index == 0);
-
-                    // /\x82\xa0{2}/ matches "\x82\xa0\xa0 [ \x82\xa0\xa0 ] \xff" starting from byte #1:
-                    m = r.Match(null, t, 1, false);
-                    Assert(m != null && m.Index == 3 && m.Length == 3);
-
-                    // /あ{2}/s does not match "あ\xa0", current KCODE is ignored
-                    m = rs.Match(null, s);
-                    Assert(m == null);
-
-                    // /あ{2}/s does not match "あ\xa0", current KCODE is ignored
-                    m = rs.Match(RubyEncoding.KCodeUTF8, s);
-                    Assert(m == null);
-
-                    // /あ{2}/s matches "ああ\xff", current KCODE is ignored
-                    m = rs.Match(RubyEncoding.KCodeUTF8, u, 2, false);
-                    Assert(m != null && m.Index == 2 && m.Length == 4);
-
-
-                    // /あ{2}/ does not match "あ\xa0あ\xa0"
-                    m = r.LastMatch(RubyEncoding.KCodeSJIS, t);
-                    Assert(m == null);
-
-                    // /\x82\xa0{2}/ matches "\x82\xa0\xa0 [ \x82\xa0\xa0 ] \xff"
-                    m = r.LastMatch(null, t);
-                    Assert(m != null && m.Index == 3);
-
-                    // /あ{2}/s does not match "あ\xa0あ\xa0", current KCODE is ignored
-                    m = rs.LastMatch(null, t);
-                    Assert(m == null);
-
-                    // /あ{2}/s does not match "あ\xa0あ\xa0", current KCODE is ignored
-                    m = rs.LastMatch(RubyEncoding.KCodeUTF8, t);
-                    Assert(m == null);
-                }
-            }
+        /// <summary>
+        /// $~ after a String#sub or #sub! with a block is what the block left it: a match made inside it, nil after
+        /// a failed one (#137). rb_str_sub_bang does not set it again after the block; IronRuby reset it to the
+        /// sub's own match. #gsub and #gsub! do reset it to their last match, and #scan leaves the block's. The
+        /// expected output is CRuby 4.0's.
+        /// </summary>
+        public void Regex_BackrefAfterBlockSub1() {
+            TestOutput(@"
+def a; r = ""ab"".sub(/(.)/) { ""x"".match(/(.)/); ""z"" }; puts ""sub blk match: #{$~&.[](0).inspect} #{r.inspect}""; end
+def b; r = ""ab"".sub(/(.)/) { ""z"" }; puts ""sub blk none: #{$~&.[](0).inspect} #{r.inspect}""; end
+def c; r = ""ab"".sub(/(.)/) { ""x"".match(/q/); ""z"" }; puts ""sub blk failed: #{$~&.[](0).inspect} #{r.inspect}""; end
+def d; s = +""ab""; r = s.sub!(/(.)/) { ""x"".match(/(.)/); ""z"" }; puts ""sub! blk match: #{$~&.[](0).inspect} #{r.inspect}""; end
+def e; r = ""ab"".gsub(/(.)/) { ""x"".match(/(.)/); ""z"" }; puts ""gsub blk match: #{$~&.[](0).inspect} #{r.inspect}""; end
+def f; r = ""ab"".gsub(/(.)/) { $1.upcase }; puts ""gsub blk none: #{$~&.[](0).inspect} #{r.inspect}""; end
+def g; r = ""ab"".gsub(/(.)/) { ""x"".match(/q/); ""z"" }; puts ""gsub blk failed: #{$~&.[](0).inspect} #{r.inspect}""; end
+def h; s = +""ab""; r = s.gsub!(/(.)/) { ""y"".match(/(.)/); ""z"" }; puts ""gsub! blk match: #{$~&.[](0).inspect} #{r.inspect}""; end
+def i; r = ""ab"".sub(""b"") { ""x"" =~ /x/; ""z"" }; puts ""sub str blk: #{$~&.[](0).inspect} #{r.inspect}""; end
+def j; ""12"".scan(/(.)/) { ""y"".match(/(.)/) }; puts ""scan blk: #{$~&.[](0).inspect}""; end
+def k; ""12"".scan(/(.)/) { ""y"".match(/(.)/); break }; puts ""scan blk break: #{$~&.[](0).inspect}""; end
+def l; r = []; ""ab"".gsub(/(.)/) { r << $~[0]; ""x"".match(/./); r << $~[0]; ""z"" }; puts ""gsub inside: #{r.inspect} after #{$~&.[](0).inspect}""; end
+def m; ""ab"".sub(/(.)/) { ""x"".match(/(.)/); ""z"" }; puts ""sub then $1: #{$1.inspect} #{$`.inspect}""; end
+def n; ""ab"".sub(/z/) { 1 }; puts ""sub nomatch: #{$~.inspect}""; end
+%i[a b c d e f g h i j k l m n].each { |x| send(x) }
+", @"
+sub blk match: ""x"" ""zb""
+sub blk none: ""a"" ""zb""
+sub blk failed: nil ""zb""
+sub! blk match: ""x"" ""zb""
+gsub blk match: ""b"" ""zz""
+gsub blk none: ""b"" ""AB""
+gsub blk failed: ""b"" ""zz""
+gsub! blk match: ""b"" ""zz""
+sub str blk: ""x"" ""az""
+scan blk: ""2""
+scan blk break: ""y""
+gsub inside: [""a"", ""x"", ""b"", ""x""] after ""b""
+sub then $1: ""x"" """"
+sub nomatch: nil
+");
         }
 
-        [Options(NoRuntime = true)]
-        public void RegexEncoding2() {
-            var SJIS = RubyEncoding.KCodeSJIS.StrictEncoding;
-
-            // 1.9 encodings:
-            var invalidUtf8 = MutableString.CreateBinary(new byte[] { 0x80 }, RubyEncoding.UTF8);
-            AssertExceptionThrown<ArgumentException>(() => new RubyRegex(invalidUtf8, RubyRegexOptions.NONE));
-
-            // LastMatch
-
-            MatchData m;
-            var u = MutableString.CreateBinary(SJIS.GetBytes("あああ"), RubyEncoding.KCodeSJIS);
-            var p = MutableString.CreateBinary(SJIS.GetBytes("あ{2}"), RubyEncoding.KCodeSJIS);
-
-            var rs = new RubyRegex(p, RubyRegexOptions.SJIS);
-
-            // /あ{2}/ matches "あああ", the resulting index is in bytes:
-            m = rs.LastMatch(null, u);
-            Assert(m != null && m.Index == 2);
-
-            rs = new RubyRegex(MutableString.CreateBinary(SJIS.GetBytes("あ")), RubyRegexOptions.SJIS);
-
-            // "start at" in the middle of a character:
-            m = rs.LastMatch(null, u, 0);
-            Assert(m != null && m.Index == 0);
-
-            m = rs.LastMatch(null, u, 1);
-            Assert(m != null && m.Index == 0);
-
-            m = rs.LastMatch(null, u, 2);
-            Assert(m != null && m.Index == 2);
-
-            m = rs.LastMatch(null, u, 3);
-            Assert(m != null && m.Index == 2);
-
-            // Split
-            
-            u = MutableString.CreateBinary(SJIS.GetBytes("あちあちあ"), RubyEncoding.UTF8);
-            rs = new RubyRegex(MutableString.CreateBinary(SJIS.GetBytes("ち")), RubyRegexOptions.SJIS);
-            var parts = rs.Split(null, u);
-            Assert(parts.Length == 3);
-            foreach (var part in parts) {
-                Assert(part.Encoding == RubyEncoding.KCodeSJIS);
-                Assert(part.ToString() == "あ");
-            }
-
-            // groups
-
-            rs = new RubyRegex(MutableString.CreateBinary(SJIS.GetBytes("ち(a(あ+)(b+))+あ")), RubyRegexOptions.SJIS);
-            u = MutableString.CreateBinary(SJIS.GetBytes("ちaああbaあbbbあ"));
-
-            m = rs.Match(null, u);
-            Assert(m.GroupCount == 4);
-
-            int s, l;
-            Assert(m.GetGroupStart(0) == (s = 0));
-            Assert(m.GetGroupLength(0) == (l = u.GetByteCount()));
-            Assert(m.GetGroupEnd(0) == s + l);
-
-            // the group has 2 captures, the last one is its value:
-            Assert(m.GetGroupStart(1) == (s = SJIS.GetByteCount("ちaああb")));
-            Assert(m.GetGroupLength(1) == (l = SJIS.GetByteCount("aあbbb")));
-            Assert(m.GetGroupEnd(1) == s + l);
-
-            // the group has 2 captures, the last one is its value:
-            Assert(m.GetGroupStart(2) == (s = SJIS.GetByteCount("ちaああba")));
-            Assert(m.GetGroupLength(2) == (l = SJIS.GetByteCount("あ")));
-            Assert(m.GetGroupEnd(2) == s + l);
-
-            // the group has 2 captures, the last one is its value:
-            Assert(m.GetGroupStart(3) == (s = SJIS.GetByteCount("ちaああbaあ")));
-            Assert(m.GetGroupLength(3) == (l = SJIS.GetByteCount("bbb")));
-            Assert(m.GetGroupEnd(3) == s + l);
+        /// <summary>
+        /// $~.string keeps a String subclass's class and is a frozen receiver itself (rb_str_new_frozen),
+        /// except after String#sub: rb_str_sub matches on str_duplicate(rb_cString, str), so there it is
+        /// a String copy even for a subclass or a frozen receiver (#89). The expected output is CRuby 4.0's.
+        /// </summary>
+        public void Regex_MatchStringClassAndIdentity1() {
+            TestOutput(@"
+class S < String; end
+def t(label, src, m) = puts([label, m.string.class, m.string.equal?(src), m.string.frozen?, m.string].inspect)
+s = S.new(""abc""); f = ""xyz"".freeze; fs = S.new(""xyz"").freeze; u = +""hello""
+s =~ /b/; t(:match_sub, s, $~)
+f =~ /y/; t(:match_frozen, f, $~)
+fs =~ /y/; t(:match_frozen_sub, fs, $~)
+u =~ /l/; t(:match_plain, u, $~)
+s.sub(/a/, ""q""); t(:sub, s, $~)
+f.sub(/x/, ""q""); t(:sub_frozen, f, $~)
+fs.sub(/x/) { ""q"" }; t(:sub_blk_frozen_sub, fs, $~)
+s.sub(/a/, ""a"" => ""q""); t(:sub_hash, s, $~)
+s.sub(""a"", ""q""); t(:sub_strpat, s, $~)
+u.sub(/l/, ""q""); t(:sub_plain, u, $~)
+s1 = S.new(""abc""); s1.sub!(/a/, ""q""); t(:sub_bang, s1, $~)
+s.gsub(/a/, ""q""); t(:gsub, s, $~)
+f.gsub(/x/, ""q""); t(:gsub_frozen, f, $~)
+f.scan(/./); t(:scan_frozen, f, $~)
+s2 = S.new(""abc""); m = s2.match(/b/); s2 << ""zz""; t(:mutated, s2, m)
+", @"
+[:match_sub, S, false, true, ""abc""]
+[:match_frozen, String, true, true, ""xyz""]
+[:match_frozen_sub, S, true, true, ""xyz""]
+[:match_plain, String, false, true, ""hello""]
+[:sub, String, false, true, ""abc""]
+[:sub_frozen, String, false, true, ""xyz""]
+[:sub_blk_frozen_sub, String, false, true, ""xyz""]
+[:sub_hash, String, false, true, ""abc""]
+[:sub_strpat, String, false, true, ""abc""]
+[:sub_plain, String, false, true, ""hello""]
+[:sub_bang, S, false, true, ""abc""]
+[:gsub, S, false, true, ""abc""]
+[:gsub_frozen, String, true, true, ""xyz""]
+[:scan_frozen, String, true, true, ""xyz""]
+[:mutated, S, false, true, ""abc""]
+");
         }
-#endif
+
+        /// <summary>
+        /// Regexps of the same pattern, options and timeout share the translated CLR regex (#89):
+        /// errors are still raised every time, \G and named groups still work, and each Regexp
+        /// still counts its own way up to being compiled. The expected output is CRuby 4.0's.
+        /// </summary>
+        public void Regex_SharedTranslation1() {
+            TestOutput(@"
+r = (1..3).map { Regexp.new(""(?<w>\\w+)@(\\w+)"") }
+p [r.map(&:names).uniq, r.map { ""joe@ex"" =~ it }, r[0] == r[2], r[0].equal?(r[1])]
+p [Regexp.new(""ab"", Regexp::IGNORECASE) =~ ""xAB"", Regexp.new(""ab"") =~ ""xAB"", Regexp.new(""a.c"", Regexp::MULTILINE) =~ ""a\nc"", Regexp.new(""a.c"") =~ ""a\nc""]
+g = Regexp.new(""\\Gab""); h = Regexp.new(""\\Gab"")
+p [""xab"".index(g, 1), ""xab"".index(h, 0), ""abab"".scan(h), ""xabab"".scan(g)]
+3.times { p((Regexp.new(""a(b"") rescue $!.class)) }
+t1 = Regexp.new(""a+"", timeout: 1.5); t2 = Regexp.new(""a+"")
+p [t1.timeout, t2.timeout, ""baa""[t1], ""baa""[t2]]
+x = ""ab""
+p (0...9000).map { |i| ""zab#{i % 3}"" =~ /#{x}#{i % 3}/ }.uniq
+p (1..5).map { |i| /(#{i})-(?<n>x)?/.names }
+src = ""(\\w+)@(\\w+)\\.com""
+12000.times { ""joe@example.com"" =~ Regexp.new(src) }
+hot = Regexp.new(src)
+12000.times { ""joe@example.com"" =~ hot }
+p [""a joe@example.com b"".match(Regexp.new(src)).captures, $~.begin(0), ""no"" =~ Regexp.new(src)]
+", @"
+[[[""w""]], [0, 0, 0], true, false]
+[1, nil, 0, nil]
+[1, nil, [""ab"", ""ab""], []]
+RegexpError
+RegexpError
+RegexpError
+[1.5, nil, ""aa"", ""aa""]
+[1]
+[[""n""], [""n""], [""n""], [""n""], [""n""]]
+[[""joe"", ""example""], 2, nil]
+");
+        }
+
+        public void Regex_SharedTranslation2() {
+            var field = typeof(RubyRegex).GetField("_cachedRegex", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            var pattern = "shared(tr)+anslation2";
+            var a = new RubyRegex(MutableString.CreateAscii(pattern), RubyRegexOptions.NONE);
+            var b = new RubyRegex(MutableString.CreateAscii(pattern), RubyRegexOptions.NONE);
+            var c = new RubyRegex(MutableString.CreateAscii(pattern), RubyRegexOptions.IgnoreCase);
+            Assert(field.GetValue(a) != null && field.GetValue(a) == field.GetValue(b));
+            Assert(field.GetValue(a) != field.GetValue(c));
+
+            // a tiers up on its own uses; b, which already has its regex, is not affected, and a
+            // Regexp made afterwards starts with the compiled one
+            var input = MutableString.CreateAscii("x sharedtrtranslation2 y");
+            for (int i = 0; i < 10001; i++) {
+                Assert(a.Match(input) != null);
+            }
+            var compiled = (Regex)field.GetValue(a);
+            Assert((compiled.Options & RegexOptions.Compiled) != 0);
+            Assert(field.GetValue(b) != compiled);
+            var d = new RubyRegex(MutableString.CreateAscii(pattern), RubyRegexOptions.NONE);
+            Assert(field.GetValue(d) == compiled);
+            Assert(d.Match(input).GetGroupStart(1) == 10); // the last "tr"
+        }
     }
 }
 

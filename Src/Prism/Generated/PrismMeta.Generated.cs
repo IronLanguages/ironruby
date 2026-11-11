@@ -173,6 +173,7 @@ namespace IronRuby.Prism {
             "USTAR",
             "USTAR_STAR",
             "WORDS_SEP",
+            "WORDS_SEP_IMPLICIT",
             "XSTRING_BEGIN",
             "__END__",
 };
@@ -322,7 +323,7 @@ public static readonly Dictionary<string, string[][]> NodeFields = new Dictionar
             { "StatementsNode", new string[][] { new string[] { "body", "Body" } } },
             { "StringNode", new string[][] { new string[] { "opening_loc", "OpeningLoc" }, new string[] { "content_loc", "ContentLoc" }, new string[] { "closing_loc", "ClosingLoc" }, new string[] { "unescaped", "Unescaped" } } },
             { "SuperNode", new string[][] { new string[] { "keyword_loc", "KeywordLoc" }, new string[] { "lparen_loc", "LparenLoc" }, new string[] { "arguments", "Arguments" }, new string[] { "rparen_loc", "RparenLoc" }, new string[] { "block", "Block" } } },
-            { "SymbolNode", new string[][] { new string[] { "opening_loc", "OpeningLoc" }, new string[] { "value_loc", "ValueLoc" }, new string[] { "closing_loc", "ClosingLoc" }, new string[] { "unescaped", "Unescaped" } } },
+            { "SymbolNode", new string[][] { new string[] { "opening_loc", "OpeningLoc" }, new string[] { "content_loc", "ContentLoc" }, new string[] { "closing_loc", "ClosingLoc" }, new string[] { "unescaped", "Unescaped" } } },
             { "TrueNode", new string[][] {  } },
             { "UndefNode", new string[][] { new string[] { "names", "Names" }, new string[] { "keyword_loc", "KeywordLoc" } } },
             { "UnlessNode", new string[][] { new string[] { "unless_keyword_loc", "UnlessKeywordLoc" }, new string[] { "predicate", "Predicate" }, new string[] { "then_keyword_loc", "ThenKeywordLoc" }, new string[] { "statements", "Statements" }, new string[] { "else_clause", "ElseClause" }, new string[] { "end_keyword_loc", "EndKeywordLoc" } } },

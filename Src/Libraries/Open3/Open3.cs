@@ -12,7 +12,6 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_PROCESS
 
 using System.Diagnostics;
 using IronRuby.Builtins;
@@ -21,7 +20,7 @@ using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.StandardLibrary.Open3 {
 
-    [RubyModule("Open3", BuildConfig = "FEATURE_PROCESS")]
+    [RubyModule("Open3")]
     public static class Open3 {
         [RubyMethod("popen3", RubyMethodAttributes.PublicSingleton)]
         public static RubyArray/*!*/ OpenPipe(
@@ -35,12 +34,9 @@ namespace IronRuby.StandardLibrary.Open3 {
             result.Add(new RubyIO(context, process.StandardOutput, null, IOMode.ReadOnly));
             result.Add(new RubyIO(context, process.StandardError, null, IOMode.ReadOnly));
 
-            if (context.RubyOptions.Compatibility >= RubyCompatibility.Ruby19) {
-                result.Add(ThreadOps.RubyThreadInfo.FromThread(System.Threading.Thread.CurrentThread));
-            }
+            result.Add(ThreadOps.RubyThreadInfo.FromThread(System.Threading.Thread.CurrentThread));
 
             return result;
         }
     }
 }
-#endif

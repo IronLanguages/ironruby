@@ -21,7 +21,6 @@ using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
 using IronRuby.Runtime.Calls;
 using IronRuby.Runtime.Conversions;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Actions;
 using System.Numerics;
 using Microsoft.Scripting.Runtime;
@@ -112,7 +111,7 @@ namespace IronRuby.Runtime {
         public static double ConvertToDouble(RubyContext/*!*/ context, BigInteger/*!*/ bignum) {
             double result = ToDouble(bignum);
             if (Double.IsInfinity(result)) {
-                context.ReportWarning("Integer out of Float range");
+                context.ReportWarning("Integer out of Float range", true);
             }
             return result;
         }
@@ -359,18 +358,6 @@ namespace IronRuby.Runtime {
             return CastToInteger(integerConversion, obj).ToUInt32Unchecked();
         }
 
-        /// <summary>
-        /// Like CastToInteger, but converts the result to an unsigned int.
-        /// </summary>
-        [CLSCompliant(false)]
-        public static long CastToInt64Unchecked(ConversionStorage<IntegerValue>/*!*/ integerConversion, object obj) {
-            if (obj == null) {
-                throw RubyExceptions.CreateTypeError("no implicit conversion of nil into Integer");
-            }
-
-            return CastToInteger(integerConversion, obj).ToInt64();
-        }
-
         #endregion
 
         #region Compare (<=>), ConvertCompareResult
@@ -611,13 +598,24 @@ namespace IronRuby.Runtime {
 
         private static bool TryCoerce(BinaryOpStorage/*!*/ coercionStorage, object self, object other, out IList pair, bool nilMeansNotCoercible) {
             // rb_check_funcall: a respond_to? the object defines for itself is asked first, and
-            // a false from it means there is no #coerce to call.
+            // a false from it means there is no #coerce to call. It is asked through the context's
+            // respond_to? site: the storage holds one site, named by its first use, so once a call
+            // had made it the #coerce site, this was a call of coerce(:coerce) - a NoMethodError for an
+            // operand without #coerce, the wrong argument for one with it. A rule's storages only ever
+            // served operands of one class; a library dispatcher's serve every call of its site.
             if (HasUserDefinedRespondTo(coercionStorage.Context, other)) {
-                var respondTo = coercionStorage.GetCallSite("respond_to?");
-                if (!IsTrue(respondTo.Target(respondTo, other, coercionStorage.Context.EncodeIdentifier("coerce")))) {
+                if (!coercionStorage.Context.RespondTo(other, "coerce")) {
                     pair = null;
                     return false;
                 }
+            }
+
+            // rb_check_funcall finds there is no #coerce without calling anything. The call below would
+            // raise the NoMethodError the catch turns into the same answer: a CLR exception, about 15 us
+            // on every `1 <=> nil', `1 + nil', `"a" <=> 1', `(1..5) === "x"' (a case/when's range test).
+            if (HasNoCoerce(coercionStorage.Context, other)) {
+                pair = null;
+                return false;
             }
 
             var coerce = coercionStorage.GetCallSite("coerce", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
@@ -657,16 +655,29 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
-        /// True when <paramref name="e"/> is the NoMethodError produced by the #coerce dispatch
-        /// itself failing to find the method on <paramref name="other"/>, as opposed to a
-        /// NoMethodError raised from inside a #coerce that does exist.
+        /// <paramref name="obj"/> has no #coerce, private or public, and its method_missing is BasicObject's,
+        /// so that calling #coerce could only raise the NoMethodError IsUndefinedCoerce recognizes.
         /// </summary>
+        internal static bool HasNoCoerce(RubyContext/*!*/ context, object obj) {
+            var cls = context.GetImmediateClassOf(obj);
+            if (cls.ResolveMethod("coerce", VisibilityContext.AllVisible).Found) {
+                return false;
+            }
+            var missing = cls.ResolveMethod("method_missing", VisibilityContext.AllVisible);
+            return missing.Found && missing.Info.DeclaringModule == context.BasicObjectClass && missing.Info is RubyLibraryMethodInfo;
+        }
+
         private static bool HasUserDefinedRespondTo(RubyContext/*!*/ context, object obj) {
             var method = context.GetImmediateClassOf(obj).ResolveMethod("respond_to?", VisibilityContext.AllVisible);
             return method.Found &&
                 !(method.Info.DeclaringModule == context.KernelModule && method.Info is RubyLibraryMethodInfo);
         }
 
+        /// <summary>
+        /// True when <paramref name="e"/> is the NoMethodError produced by the #coerce dispatch
+        /// itself failing to find the method on <paramref name="other"/>, as opposed to a
+        /// NoMethodError raised from inside a #coerce that does exist.
+        /// </summary>
         private static bool IsUndefinedCoerce(RubyContext/*!*/ context, MissingMethodException/*!*/ e, object other) {
             var data = RubyExceptionData.TryGetInstance(e);
             if (data == null) {
@@ -710,19 +721,118 @@ namespace IronRuby.Runtime {
             throw RubyExceptions.InvalidValueForType(context, value, "Class");
         }
 
-        #endregion
+        /// <summary>
+        /// The first generic parameter whose constraint the type argument at the same index does not satisfy, or -1.
+        /// The constraint is "new()", "class" or "struct", or a type the argument has to be (<paramref name="bound"/>).
+        /// A constraint that refers to other generic parameters (where S : T) is left to the CLR's own check (#141).
+        /// </summary>
+        public static int FindGenericConstraintViolation(Type/*!*/[]/*!*/ genericParameters, Type/*!*/[]/*!*/ typeArguments,
+            out string constraint, out Type bound) {
+            bound = null;
+            for (int i = 0; i < genericParameters.Length; i++) {
+                Type parameter = genericParameters[i];
+                Type argument = typeArguments[i];
+                var attributes = parameter.GenericParameterAttributes;
 
-        #region Security
+                if ((attributes & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0) {
+                    if (!argument.IsValueType || Nullable.GetUnderlyingType(argument) != null) {
+                        constraint = "struct";
+                        return i;
+                    }
+                } else if ((attributes & GenericParameterAttributes.DefaultConstructorConstraint) != 0) {
+                    if (!argument.IsValueType && (argument.IsAbstract || argument.GetConstructor(Type.EmptyTypes) == null)) {
+                        constraint = "new()";
+                        return i;
+                    }
+                }
 
-        public static void CheckSafeLevel(RubyContext/*!*/ context, int level) {
-            if (level <= context.CurrentSafeLevel) {
-                throw RubyExceptions.CreateSecurityError("Insecure operation at level " + context.CurrentSafeLevel);
+                if ((attributes & GenericParameterAttributes.ReferenceTypeConstraint) != 0 && argument.IsValueType) {
+                    constraint = "class";
+                    return i;
+                }
+
+                foreach (Type type in parameter.GetGenericParameterConstraints()) {
+                    if (!type.ContainsGenericParameters && !type.IsAssignableFrom(argument)) {
+                        constraint = null;
+                        bound = type;
+                        return i;
+                    }
+                }
             }
+
+            constraint = null;
+            return -1;
         }
-        public static void CheckSafeLevel(RubyContext/*!*/ context, int level, string/*!*/ method) {
-            if (level <= context.CurrentSafeLevel) {
-                throw RubyExceptions.CreateSecurityError(String.Format("Insecure operation {0} at level {1}", method, context.CurrentSafeLevel));
+
+        /// <summary>
+        /// The generic type definition instantiated over type arguments given as classes and modules, or the error
+        /// <see cref="CreateGenericConstraintError"/> describes when they break its constraints.
+        /// </summary>
+        public static Type/*!*/ MakeGenericType(RubyContext/*!*/ context, Type/*!*/ definition, string/*!*/ name, object/*!*/[]/*!*/ typeArgs) {
+            Type[] genericParameters = definition.GetGenericArguments();
+            Type[] types = ToTypes(context, typeArgs);
+            int index = FindGenericConstraintViolation(genericParameters, types, out string constraint, out Type bound);
+            if (index < 0) {
+                try {
+                    return definition.MakeGenericType(types);
+                } catch (ArgumentException) {
+                    // a constraint between the parameters themselves (where S : T), which only the CLR checks
+                }
             }
+            throw CreateGenericConstraintError(context, name, genericParameters, typeArgs, index, constraint, bound);
+        }
+
+        /// <summary>
+        /// The error for type arguments that the generic type or method <paramref name="name"/> cannot be instantiated with.
+        /// Before #141 the CLR's ArgumentException leaked, naming IronRuby.Builtins.RubyObject for a Ruby class:
+        /// "GenericArguments[0], 'IronRuby.Builtins.RubyObject', on 'M[T]()' violates the constraint of type 'T'".
+        /// </summary>
+        public static Exception/*!*/ CreateGenericConstraintError(RubyContext/*!*/ context, string/*!*/ name,
+            Type/*!*/[]/*!*/ genericParameters, object/*!*/[]/*!*/ typeArgs, int index, string constraint, Type bound) {
+
+            if (index < 0) {
+                return RubyExceptions.CreateArgumentError("the type arguments do not satisfy the constraints of '{0}'", name);
+            }
+
+            object value = typeArgs[index];
+            Type argument = ToType(context, value);
+            RubyModule module = value as RubyModule;
+            string argumentName = module != null ? module.GetNonNullName(context) : context.GetTypeName(argument, true);
+            bool isRubyClass = module != null && module.TypeTracker == null;
+
+            string reason;
+            switch (constraint) {
+                case "new()":
+                    reason = isRubyClass ? "a Ruby class has no public parameterless CLR constructor" :
+                        argument.IsAbstract ? "it is abstract" : "it has no public parameterless constructor";
+                    break;
+
+                case "class":
+                    reason = "it is a value type";
+                    break;
+
+                case "struct":
+                    reason = "it is not a non-nullable value type";
+                    break;
+
+                default:
+                    if (bound == null) {
+                        reason = null;
+                    } else {
+                        constraint = context.GetTypeName(bound, true);
+                        reason = "it is not a " + constraint;
+                    }
+                    break;
+            }
+
+            string parameterName = genericParameters[index].Name;
+            if (reason == null) {
+                return RubyExceptions.CreateArgumentError("{0} does not satisfy the constraints on {1} of '{2}'",
+                    argumentName, parameterName, name);
+            }
+
+            return RubyExceptions.CreateArgumentError("{0} does not satisfy the {1} constraint on {2} of '{3}': {4}",
+                argumentName, constraint, parameterName, name, reason);
         }
 
         #endregion

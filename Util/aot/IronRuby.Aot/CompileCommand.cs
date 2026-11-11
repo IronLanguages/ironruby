@@ -36,8 +36,8 @@ namespace IronRuby.Aot {
             string toolDir = AppContext.BaseDirectory;
             string root = FindRepoRoot(toolDir);
             string stdlib = Path.Combine(root, "Src", "StdLib");
-            // the load path ir.sh gives (-X:StdLib=ironruby:ruby/4.0:ruby/1.9.1)
-            string[] searchPaths = { Path.Combine(stdlib, "ironruby"), Path.Combine(stdlib, "ruby", "4.0"), Path.Combine(stdlib, "ruby", "1.9.1") };
+            // the load path ir.sh gives (-X:StdLib=ironruby:ruby/4.0)
+            string[] searchPaths = { Path.Combine(stdlib, "ironruby"), Path.Combine(stdlib, "ruby", "4.0") };
             if (prelude) {
                 // ruby4.rb and what it requires at startup (IR_AOT_TRACE=1 lists any file still parsed)
                 int at = 0;
@@ -90,7 +90,7 @@ namespace IronRuby.Aot {
         }
 
         private static readonly string[] PreludeFiles = {
-            "ruby4.rb", "complex18.rb", "rational18.rb", "thread.rb", "set.rb", "argf.rb", "ironruby/gem_compat.rb",
+            "ruby4.rb", "ironruby/rational.rb", "ironruby/complex.rb", "thread.rb", "set.rb", "argf.rb", "ironruby/gem_compat.rb",
         };
 
         private static bool Crossgen(string assembly, string outDir) {

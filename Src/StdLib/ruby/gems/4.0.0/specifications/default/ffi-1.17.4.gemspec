@@ -14,6 +14,7 @@ Gem::Specification.new do |s|
   s.summary = "The ffi gem's API, on Fiddle".freeze
   s.homepage = "https://github.com/IronLanguages/ironruby".freeze
   s.licenses = ["Ruby".freeze, "BSD-2-Clause".freeze]
+  s.metadata = { "ironruby_pinned".freeze => "true".freeze }
   s.files = [
     "lib/ffi.rb".freeze,
     "lib/ffi/abstract_memory.rb".freeze,

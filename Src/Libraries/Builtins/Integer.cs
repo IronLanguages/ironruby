@@ -15,12 +15,14 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using IronRuby.Compiler;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
+using IronRuby.Runtime.Osr;
 using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
@@ -64,47 +66,6 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region induced_from
-
-        /// <summary>
-        /// Convert obj to an Integer, where obj is Fixnum
-        /// </summary>
-        /// <remarks>Just returns the Fixnum</remarks>
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static object InducedFrom(RubyClass/*!*/ self, int obj) {
-            return obj;
-        }
-
-        /// <summary>
-        /// Convert obj to an Integer, where obj is Bignum
-        /// </summary>
-        /// <remarks>Just returns the Bignum</remarks>
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static object InducedFrom(RubyClass/*!*/ self, [NotNull]BigInteger/*!*/ obj) {
-            return obj;
-        }
-
-        /// <summary>
-        /// Convert obj to an Integer, where obj is Float
-        /// </summary>
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static object InducedFrom(UnaryOpStorage/*!*/ toiStorage, RubyClass/*!*/ self, double obj) {
-            var site = toiStorage.GetCallSite("to_i");
-            return site.Target(site, obj);
-        }
-
-        /// <summary>
-        /// Convert obj to an Integer, where obj is not Fixnum, Bignum or Float
-        /// </summary>
-        /// <remarks>Just throws an error</remarks>
-        /// <exception cref="InvalidOperationException">Assumption is object cannot be induced to Integer</exception>
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static int InducedFrom(RubyClass/*!*/ self, object obj) {
-            throw RubyExceptions.CreateTypeError("failed to convert {0} into Integer", self.Context.GetClassDisplayName(obj));
-        }
-
-        #endregion
-
         #region to_i, to_int, floor, ceil, round, truncate
 
         /// <summary>
@@ -120,15 +81,49 @@ namespace IronRuby.Builtins {
             return self;
         }
 
+        // A Fixnum and an Integer ndigits: long arithmetic (NumericRounding.TryRoundFixnum).
+
+        [RubyMethod("round")]
+        public static object Round(int self, int ndigits) {
+            object result;
+            return NumericRounding.TryRoundFixnum(self, ndigits, NumericRounding.IntegerRounding.Round, NumericRounding.Half.Up, out result)
+                ? result : NumericRounding.RoundInteger(new BigInteger(self), ndigits, NumericRounding.Half.Up);
+        }
+
+        [RubyMethod("floor")]
+        public static object Floor(int self, int ndigits) {
+            object result;
+            return NumericRounding.TryRoundFixnum(self, ndigits, NumericRounding.IntegerRounding.Floor, NumericRounding.Half.Up, out result)
+                ? result : NumericRounding.FloorInteger(new BigInteger(self), ndigits);
+        }
+
+        [RubyMethod("ceil")]
+        public static object Ceil(int self, int ndigits) {
+            object result;
+            return NumericRounding.TryRoundFixnum(self, ndigits, NumericRounding.IntegerRounding.Ceil, NumericRounding.Half.Up, out result)
+                ? result : NumericRounding.CeilInteger(new BigInteger(self), ndigits);
+        }
+
+        [RubyMethod("truncate")]
+        public static object Truncate(int self, int ndigits) {
+            object result;
+            return NumericRounding.TryRoundFixnum(self, ndigits, NumericRounding.IntegerRounding.Truncate, NumericRounding.Half.Up, out result)
+                ? result : NumericRounding.TruncateInteger(new BigInteger(self), ndigits);
+        }
+
         /// <summary>
         /// Rounds self to a multiple of 10**(-ndigits). A non-negative ndigits returns self.
         /// Accepts the <c>half:</c> option (:up, :down or :even).
         /// </summary>
         [RubyMethod("round")]
         public static object Round(ConversionStorage<IntegerValue>/*!*/ integerCast, object/*!*/ self,
-            object ndigits, [Optional]object options) {
+            object ndigits, [Keywords, Optional]object options) {
 
             var opts = options as IDictionary<object, object>;
+            // round(ndigits, half: mode): the options only ever come as keywords
+            if (options != Missing.Value && opts == null) {
+                throw RubyOps.MakeWrongNumberOfArgumentsErrorN(2, "0..1");
+            }
             if (opts == null && options == Missing.Value) {
                 // round(half: :up) - the only argument is the options hash
                 opts = ndigits as IDictionary<object, object>;
@@ -141,6 +136,10 @@ namespace IronRuby.Builtins {
             int nd = (ndigits == Missing.Value) ? 0 : NumericRounding.GetNDigits(integerCast, ndigits);
             if (nd >= 0) {
                 return self;
+            }
+            object fixnumResult;
+            if (self is int && NumericRounding.TryRoundFixnum((int)self, nd, NumericRounding.IntegerRounding.Round, half, out fixnumResult)) {
+                return fixnumResult;
             }
             return NumericRounding.RoundInteger(ToBigInteger(self), nd, half);
         }
@@ -181,7 +180,13 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region numerator/ord, denominator, to_r, rationalize
+        /// <summary>numeric_to_c: self + 0i (complex.rb's Numeric#to_c, for the commonest receivers).</summary>
+        [RubyMethod("to_c")]
+        public static RubyComplex/*!*/ ToComplex(RubyContext/*!*/ context, object/*!*/ self) {
+            return new RubyComplex(context.GetClass(typeof(RubyComplex)), self, ScriptingRuntimeHelpers.Int32ToObject(0));
+        }
+
+        #region numerator/ord, denominator
 
         [RubyMethod("numerator")]
         [RubyMethod("ord")]
@@ -192,19 +197,6 @@ namespace IronRuby.Builtins {
         [RubyMethod("denominator")]
         public static object/*!*/ Denominator(object/*!*/ self) {
             return ClrInteger.One;
-        }
-
-        [RubyMethod("to_r")]
-        public static object ToRational(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ toRational, RubyScope/*!*/ scope, object/*!*/ self) {
-           // TODO: reimplement Rational
-            return KernelOps.ToRational(toRational, scope, self, self, ClrInteger.One);
-        }
-
-        // an Integer is exact, so the tolerance is taken and ignored
-        [RubyMethod("rationalize")]
-        public static object Rationalize(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ toRational, RubyScope/*!*/ scope, object/*!*/ self,
-            [Optional]object epsilon) {
-            return ToRational(toRational, scope, self);
         }
 
         #endregion
@@ -523,27 +515,238 @@ namespace IronRuby.Builtins {
 
         #endregion
 
+        #region step
+
+        // Integer#step(limit[, step]) { } with Fixnums, the common case, loops here. Everything
+        // else - no block, a Float or Rational, a Bignum, the by:/to: keywords - goes to the
+        // prelude's Numeric step (__ir_step_slow__ in ruby4.rb). The prelude's own entry point
+        // takes *args and **kw, a signature the JIT does not compile, so a short Fixnum step
+        // spent most of its time getting into it.
+
+        [RubyMethod("step")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static object Step(CallSiteStorage<Func<CallSite, object, Proc, object, object, object>>/*!*/ slow,
+            BlockParam block, int self, int limit) {
+            if (block == null) {
+                return StepSlow(slow, null, self, new object[] { ScriptingRuntimeHelpers.Int32ToObject(limit) });
+            }
+            return StepImpl(block, self, limit, 1);
+        }
+
+        [RubyMethod("step")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static object Step(CallSiteStorage<Func<CallSite, object, Proc, object, object, object>>/*!*/ slow,
+            BlockParam block, int self, int limit, int step) {
+            if (block == null || step == 0) {
+                return StepSlow(slow, block, self, new object[] {
+                    ScriptingRuntimeHelpers.Int32ToObject(limit), ScriptingRuntimeHelpers.Int32ToObject(step)
+                });
+            }
+            return StepImpl(block, self, limit, step);
+        }
+
+        [RubyMethod("step")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [ReceivesKeywords]
+        public static object Step(CallSiteStorage<Func<CallSite, object, Proc, object, object, object>>/*!*/ slow,
+            BlockParam block, object/*!*/ self, params object[]/*!*/ args) {
+            int limit, step;
+            if (block != null && self is int start && TryGetFixnumStepKeywords(args, out limit, out step)) {
+                return StepImpl(block, start, limit, step);
+            }
+            object result;
+            if (block != null && TryFloatStep(block, self, args, out result)) {
+                return result;
+            }
+            return StepSlow(slow, block, self, args);
+        }
+
+        /// <summary>
+        /// Numeric#step with a block where MRI's num_step takes ruby_float_step: self, the limit and
+        /// the step are each a Fixnum or a Float, at least one of them a Float, and the step is not 0;
+        /// given positionally or as to: and by:. Anything else - no limit, another kind of number, a
+        /// step of 0, a keyword the prelude has to complain about - is false and goes to the prelude
+        /// (__ir_step_slow__), which took ~6 us to get to the same loop for a short Float step.
+        /// </summary>
+        internal static bool TryFloatStep(BlockParam/*!*/ block, object self, object[]/*!*/ args, out object result) {
+            result = null;
+            object limit, step;
+            double beg, end, unit;
+            if (!TryGetStepArguments(args, out limit, out step) ||
+                !(self is double || limit is double || step is double) ||
+                !TryGetStepDouble(self, out beg) || !TryGetStepDouble(limit, out end) || !TryGetStepDouble(step, out unit) || unit == 0) {
+                return false;
+            }
+            double n = KernelOps.FloatStepSize(beg, end, unit, false);
+            result = KernelOps.FloatStepLoop(block, beg, end, unit, n, out object blockResult) ? blockResult : self;
+            return true;
+        }
+
+        private static bool TryGetStepDouble(object value, out double result) {
+            switch (value) {
+                case double d: result = d; return true;
+                case int i: result = i; return true;
+                default: result = 0; return false;
+            }
+        }
+
+        // The limit and the step of step(limit, step), step(limit, by: step), step(by: step, to: limit) and
+        // the like (MRI's num_step_extract_args), the step 1 when it is not given; false for no limit, an
+        // unknown keyword, or one given both ways.
+        private static bool TryGetStepArguments(object[]/*!*/ args, out object limit, out object step) {
+            limit = null;
+            step = ScriptingRuntimeHelpers.Int32ToObject(1);
+            int count = args.Length;
+            var keywords = (count > 0) ? args[count - 1] as Hash : null;
+            if (keywords != null && keywords.IsKeywordArguments) {
+                count--;
+            } else {
+                keywords = null;
+            }
+            if (count > 2) {
+                return false;
+            }
+            bool hasLimit = count >= 1;
+            if (hasLimit) {
+                limit = args[0];
+            }
+            if (count == 2) {
+                step = args[1];
+            }
+            if (keywords != null) {
+                if (keywords.Count > 2) {
+                    return false;
+                }
+                foreach (var entry in keywords) {
+                    string name = (entry.Key as RubySymbol)?.ToString();
+                    if (name == "to" && !hasLimit) {
+                        limit = entry.Value;
+                        hasLimit = true;
+                    } else if (name == "by" && count < 2) {
+                        step = entry.Value;
+                        count = 2;
+                    } else {
+                        return false;
+                    }
+                }
+            }
+            return hasLimit;
+        }
+
+        // 1.step(by: 3, to: 10) and 1.step(10, by: 3) with Fixnums: the limit and a non-zero step. Anything
+        // the prelude would treat otherwise - another keyword, a limit given both ways, no limit (an endless
+        // step), a step of 0 (an error) - is false and goes there.
+        private static bool TryGetFixnumStepKeywords(object[]/*!*/ args, out int limit, out int step) {
+            limit = 0;
+            step = 1;
+            if (args.Length == 0 || args.Length > 2) {
+                return false;
+            }
+            var keywords = args[args.Length - 1] as Hash;
+            if (keywords == null || !keywords.IsKeywordArguments || keywords.Count > 2) {
+                return false;
+            }
+            bool hasLimit = false;
+            if (args.Length == 2) {
+                if (!(args[0] is int to)) {
+                    return false;
+                }
+                limit = to;
+                hasLimit = true;
+            }
+            foreach (var entry in keywords) {
+                if (!(entry.Key is RubySymbol key) || !(entry.Value is int value)) {
+                    return false;
+                }
+                string name = key.ToString();
+                if (name == "to" && !hasLimit) {
+                    limit = value;
+                    hasLimit = true;
+                } else if (name == "by" && value != 0) {
+                    step = value;
+                } else {
+                    return false;
+                }
+            }
+            return hasLimit;
+        }
+
+        private static object StepImpl(BlockParam/*!*/ block, int self, int limit, int step) {
+            // in a long: i + step must not wrap round past Int32.MaxValue or MinValue
+            long i = self;
+            if (step > 0) {
+                while (i <= limit) {
+                    object result;
+                    if (block.Yield((int)i, out result)) {
+                        return result;
+                    }
+                    i += step;
+                }
+            } else {
+                while (i >= limit) {
+                    object result;
+                    if (block.Yield((int)i, out result)) {
+                        return result;
+                    }
+                    i += step;
+                }
+            }
+            return self;
+        }
+
+        // The prelude takes the positional arguments as an Array and the keywords as a Hash: a
+        // trailing keyword hash is split off here, where it can still be told from a positional one.
+        internal static object StepSlow(CallSiteStorage<Func<CallSite, object, Proc, object, object, object>>/*!*/ slow,
+            BlockParam block, object self, object[]/*!*/ args) {
+            Hash keywords = (args.Length > 0) ? args[args.Length - 1] as Hash : null;
+            int count = args.Length;
+            if (keywords != null && keywords.IsKeywordArguments) {
+                count--;
+            } else {
+                keywords = null;
+            }
+            var positional = new RubyArray(count);
+            for (int k = 0; k < count; k++) {
+                positional.Add(args[k]);
+            }
+            var site = slow.GetCallSite("__ir_step_slow__", new RubyCallSignature(2, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasBlock));
+            return site.Target(site, self, (block != null) ? block.Proc : null, positional, keywords);
+        }
+
+        #endregion
+
         #region times
 
         /// <summary>
         /// Iterates block self times, passing in values from zero to self - 1, where self is Fixnum.
         /// </summary>
         /// <returns>self</returns>
+        // Not inlined: a backtrace taken in the block has to show this frame ('Integer#times'), and the
+        // JIT would otherwise fold a forwarder this small into a compiled call-site rule.
         [RubyMethodAttribute("times")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         public static object Times(BlockParam/*!*/ block, int self) {
             return (block != null) ? TimesImpl(block, self) : new Enumerator(self, "times");
         }
 
         private static object TimesImpl(BlockParam/*!*/ block, int self) {
             int i = 0;
+            // -X:OSR: once the block is hot, the rest of the loop runs in a typed copy of the loop
+            // this and the block make together (BlockLoopSite); one too short to be outlined never asks
+            var loop = (self >= BlockLoopSite.MinRun) ? BlockLoopSite.For(block, BlockLoopKind.Times) : null;
+            long countdown = (loop != null) ? loop.Countdown : Int64.MaxValue;
             while (i < self) {
+                if (--countdown <= 0 && self - i >= BlockLoopSite.MinRun) {
+                    i = loop.Run(block, i, self, ref countdown);
+                    if (i >= self) { break; }
+                }
                 object result;
                 if (block.Yield(i, out result)) {
                     return result;
                 }
                 i++;
             }
-
+            if (loop != null) { loop.Leave(countdown); }
             return self;
         }
 
@@ -556,6 +759,7 @@ namespace IronRuby.Builtins {
         /// Dynamically invokes "&lt;" operator to check if we have reached self - 1.
         /// </remarks>
         [RubyMethodAttribute("times")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         public static object Times(BinaryOpStorage/*!*/ lessThanStorage, BinaryOpStorage/*!*/ addStorage, BlockParam block, object/*!*/ self) {
             return (block != null) ? TimesImpl(lessThanStorage, addStorage, block, self) : 
                 new Enumerator(self, "times");
@@ -599,13 +803,22 @@ namespace IronRuby.Builtins {
 
         private static object UpToImpl(BlockParam block, int self, int other) {
             int i = self;
+            var loop = ((long)other - self >= BlockLoopSite.MinRun) ? BlockLoopSite.For(block, BlockLoopKind.UpTo) : null;
+            long countdown = (loop != null) ? loop.Countdown : Int64.MaxValue;
             while (i <= other) {
+                if (--countdown <= 0 && (long)other - i >= BlockLoopSite.MinRun) {
+                    i = loop.Run(block, i, other, ref countdown);
+                    if (i > other) { break; }
+                }
                 object result;
                 if (block.Yield(i, out result)) {
                     return result;
                 }
+                // i++ would wrap round when other is Int32.MaxValue
+                if (i == other) { break; }
                 i++;
             }
+            if (loop != null) { loop.Leave(countdown); }
             return self;
         }
 
@@ -678,13 +891,22 @@ namespace IronRuby.Builtins {
 
         private static object DownToImpl(BlockParam/*!*/ block, int self, int other) {
             int i = self;
+            var loop = ((long)self - other >= BlockLoopSite.MinRun) ? BlockLoopSite.For(block, BlockLoopKind.DownTo) : null;
+            long countdown = (loop != null) ? loop.Countdown : Int64.MaxValue;
             while (i >= other) {
+                if (--countdown <= 0 && (long)i - other >= BlockLoopSite.MinRun) {
+                    i = loop.Run(block, i, other, ref countdown);
+                    if (i < other) { break; }
+                }
                 object result;
                 if (block.Yield(i, out result)) {
                     return result;
                 }
+                // i-- would wrap round when other is Int32.MinValue
+                if (i == other) { break; }
                 i--;
             }
+            if (loop != null) { loop.Leave(countdown); }
             return self;
         }
 
@@ -837,6 +1059,347 @@ namespace IronRuby.Builtins {
             }
 
             return null;
+        }
+
+        #endregion
+
+        #region sqrt, pow, digits
+
+        // Math::DomainError is the prelude's (ruby4.rb); an ArgumentError stands in until it exists.
+        private static Exception/*!*/ CreateDomainError(BinaryOpStorage/*!*/ newStorage, string/*!*/ message) {
+            RubyContext context = newStorage.Context;
+            object math, errorClass;
+            if (context.ObjectClass.TryGetConstant(null, "Math", out math) && math is RubyModule &&
+                ((RubyModule)math).TryGetConstant(null, "DomainError", out errorClass)) {
+                var site = newStorage.GetCallSite("new");
+                var exception = site.Target(site, errorClass, MutableString.CreateAscii(message)) as Exception;
+                if (exception != null) {
+                    return exception;
+                }
+            }
+            return RubyExceptions.CreateArgumentError(message);
+        }
+
+        private static bool TryGetInteger(object value, out BigInteger result) {
+            if (value is int) {
+                result = (int)value;
+            } else if (value is long) {
+                result = (long)value;
+            } else if (value is BigInteger) {
+                result = (BigInteger)value;
+            } else {
+                result = BigInteger.Zero;
+                return false;
+            }
+            return true;
+        }
+
+        private static BigInteger/*!*/ CastToBigInteger(ConversionStorage<IntegerValue>/*!*/ integerCast, object value) {
+            BigInteger result;
+            if (TryGetInteger(value, out result)) {
+                return result;
+            }
+            IntegerValue converted = Protocols.CastToInteger(integerCast, value);
+            return converted.IsFixnum ? (BigInteger)converted.Fixnum : converted.Bignum;
+        }
+
+        /// <summary>
+        /// Integer.sqrt: the largest Integer whose square is at most n (n converted with #to_int).
+        /// Below 2**62 it is a double's square root, corrected to the exact floor; above, <see cref="SqrtRem"/>.
+        /// </summary>
+        [RubyMethod("sqrt", RubyMethodAttributes.PublicSingleton)]
+        public static object Sqrt(ConversionStorage<IntegerValue>/*!*/ integerCast, BinaryOpStorage/*!*/ newStorage, RubyClass/*!*/ self, object n) {
+            if (n is int) {
+                int value = (int)n;
+                if (value < 0) {
+                    throw CreateDomainError(newStorage, "Numerical argument is out of domain - \"isqrt\"");
+                }
+                return Protocols.Normalize(LongSqrt(value));
+            }
+
+            BigInteger number = CastToBigInteger(integerCast, n);
+            if (number.Sign < 0) {
+                throw CreateDomainError(newStorage, "Numerical argument is out of domain - \"isqrt\"");
+            }
+            long bits = number.GetBitLength();
+            if (bits <= 62) {
+                return Protocols.Normalize(LongSqrt((long)number));
+            }
+            if (bits <= SmallSqrtBits) {
+                return Protocols.Normalize((BigInteger)SmallSqrt((UInt128)number));
+            }
+            return Protocols.Normalize(SqrtRem(number, out _));
+        }
+
+        // The largest operand SmallSqrt takes: its root is below 2**53, so a double holds it and the double's root is off
+        // by no more than a few units.
+        private const int SmallSqrtBits = 106;
+
+        /// <summary>
+        /// The integer square root s of n &gt;= 0, and the remainder n - s*s, by Zimmermann's "Karatsuba square root" (Brent
+        /// and Zimmermann, Modern Computer Arithmetic, algorithm 1.12 SqrtRem; GMP's mpz_sqrtrem is the same): with
+        /// n = A*B**2 + a1*B + a0 for B = 2**k, the root of A and its remainder r' give the next k bits of the root in
+        /// one division, q = (r'*B + a1) / (2*root(A)), and n's remainder in one squaring of q; at most one correction
+        /// follows. k is chosen so that A &gt;= B**2/4, which is what bounds the correction to one. Each level divides
+        /// numbers about half the size of the level above, so the whole costs about one division of n's size by half
+        /// of it, where Newton's iteration made several (and .NET 11's division is slow).
+        /// </summary>
+        public static BigInteger SqrtRem(BigInteger n, out BigInteger remainder) {
+            Debug.Assert(n.Sign >= 0);
+            long bits = n.GetBitLength();
+            if (bits <= SmallSqrtBits) {
+                UInt128 value = (UInt128)n;
+                ulong root = SmallSqrt(value);
+                remainder = (BigInteger)(value - (UInt128)root * root);
+                return root;
+            }
+
+            // A = n >> 2k has bits - 2k >= 2k - 1 bits, so A >= B**2/4. bits < 2**31 (BigInteger's limit), so k fits an int.
+            int k = (int)((bits + 1) / 4);
+            BigInteger mask = (BigInteger.One << k) - BigInteger.One;
+            BigInteger a0 = n & mask;
+            BigInteger a1 = (n >> k) & mask;
+            BigInteger topRoot = SqrtRem(n >> (2 * k), out BigInteger topRemainder);
+            BigInteger q = BigInteger.DivRem((topRemainder << k) + a1, topRoot << 1, out BigInteger u);
+            BigInteger result = (topRoot << k) + q;
+            remainder = (u << k) + a0 - q * q;
+            if (remainder.Sign < 0) {
+                remainder += (result << 1) - BigInteger.One;
+                result -= BigInteger.One;
+            }
+            Debug.Assert(remainder.Sign >= 0 && remainder <= (result << 1));
+            return result;
+        }
+
+        // floor(sqrt(n)) for 0 <= n < 2**106 (SmallSqrtBits): the double's root of n, which is off by a few units at most
+        // (n rounds to a double, and the root to an integer), corrected to the exact floor.
+        private static ulong SmallSqrt(UInt128 n) {
+            Debug.Assert(n >> SmallSqrtBits == UInt128.Zero);
+            ulong root = (ulong)Math.Sqrt((double)(ulong)(n >> 64) * 18446744073709551616.0 + (double)(ulong)n);
+            while ((UInt128)root * root > n) {
+                root--;
+            }
+            while ((UInt128)(root + 1) * (root + 1) <= n) {
+                root++;
+            }
+            return root;
+        }
+
+        // floor(sqrt(n)) for 0 <= n < 2**62: the double's root, corrected by one either way where
+        // rounding put it off (sqrt(2**52 - 1) rounds up to 2**26, for one)
+        private static long LongSqrt(long n) {
+            long r = (long)Math.Sqrt(n);
+            while (r * r > n) {
+                r--;
+            }
+            while ((r + 1) * (r + 1) <= n) {
+                r++;
+            }
+            return r;
+        }
+
+        /// <summary>
+        /// Integer#pow with one argument is **. In MRI the two are one C function (rb_int_pow), so
+        /// a redefined ** does not change #pow: a Fixnum to a non-negative Fixnum power is computed
+        /// here directly. Anything else goes through a call to **, for the coercions it does and
+        /// for a negative exponent, which the prelude's rational.rb answers with a Rational.
+        /// </summary>
+        [RubyMethod("pow")]
+        public static object Pow(BinaryOpStorage/*!*/ powStorage, int self, int other) {
+            if (other >= 0) {
+                return ClrInteger.PowerNonNegativeFixnum(self, other);
+            }
+            var site = powStorage.GetCallSite("**");
+            return site.Target(site, self, other);
+        }
+
+
+        [RubyMethod("pow")]
+        public static object Pow(BinaryOpStorage/*!*/ powStorage, object/*!*/ self, object other) {
+            var site = powStorage.GetCallSite("**");
+            return site.Target(site, self, other);
+        }
+
+        // Fixnums all: the square-and-multiply in a long, as |modulus| <= 2**31 keeps every product below 2**62. Through
+        // BigInteger.ModPow, 12345.pow(5, 1000) cost ~150 ns, most of it making and reducing BigIntegers.
+        [RubyMethod("pow")]
+        public static object Pow(int self, int exponent, int modulus) {
+            if (exponent < 0) {
+                throw RubyExceptions.CreateRangeError("Integer#pow() 1st argument cannot be negative when 2nd argument specified");
+            }
+            // MRI's shortcut: 0 ** x is 0 for any modulus, 0 included, unless x is 0
+            if (self == 0 && exponent != 0) {
+                return ClrInteger.Zero;
+            }
+            long m = Math.Abs((long)modulus);
+            if (m == 0) {
+                throw new DivideByZeroException("divided by 0");
+            }
+            if (m == 1) {
+                return ClrInteger.Zero;
+            }
+            long a = self % m, z = 1;
+            if (a < 0) {
+                a += m;
+            }
+            for (int e = exponent; e != 0; e >>= 1) {
+                if ((e & 1) != 0) {
+                    z = z * a % m;
+                }
+                a = a * a % m;
+            }
+            // the result takes the sign of the modulus, as in the BigInteger case below
+            if (modulus < 0 && z > 0) {
+                z -= m;
+            }
+            return Microsoft.Scripting.Runtime.ScriptingRuntimeHelpers.Int32ToObject((int)z);
+        }
+
+        /// <summary>
+        /// Integer#pow(b, m): modular exponentiation, by BigInteger.ModPow, with MRI's checks in
+        /// MRI's order (rb_int_powm) and its sign rule - the result takes the sign of m.
+        /// </summary>
+        [RubyMethod("pow")]
+        public static object Pow(object/*!*/ self, object exponent, object modulus) {
+            BigInteger b, m;
+            if (!TryGetInteger(exponent, out b)) {
+                throw RubyExceptions.CreateTypeError("Integer#pow() 2nd argument not allowed unless a 1st argument is integer");
+            }
+            if (b.Sign < 0) {
+                throw RubyExceptions.CreateRangeError("Integer#pow() 1st argument cannot be negative when 2nd argument specified");
+            }
+            if (!TryGetInteger(modulus, out m)) {
+                throw RubyExceptions.CreateTypeError("Integer#pow() 2nd argument not allowed unless all arguments are integers");
+            }
+            BigInteger a;
+            TryGetInteger(self, out a);
+            // MRI's shortcut: 0 ** x is 0 for any modulus, 0 included, unless x is 0
+            if (a.IsZero && !b.IsZero) {
+                return ClrInteger.Zero;
+            }
+            bool negative = m.Sign < 0;
+            if (negative) {
+                m = -m;
+            }
+            if (m.IsZero) {
+                throw new DivideByZeroException("divided by 0");
+            }
+            if (m.IsOne) {
+                return ClrInteger.Zero;
+            }
+
+            a %= m;
+            if (a.Sign < 0) {
+                a += m;
+            }
+            BigInteger z = BigInteger.ModPow(a, b, m);
+            if (negative && z.Sign > 0) {
+                z -= m;
+            }
+            return Protocols.Normalize(z);
+        }
+
+        /// <summary>
+        /// Integer#digits: the digits in the given base, least significant first. As in MRI
+        /// (rb_int_digits), a negative receiver is refused before the base is even converted.
+        /// </summary>
+        [RubyMethod("digits")]
+        public static RubyArray/*!*/ Digits(ConversionStorage<IntegerValue>/*!*/ integerCast, BinaryOpStorage/*!*/ newStorage,
+            object/*!*/ self, [Optional]object radix) {
+
+            BigInteger number;
+            TryGetInteger(self, out number);
+            if (number.Sign < 0) {
+                throw CreateDomainError(newStorage, "out of domain");
+            }
+
+            BigInteger radixValue = (radix == Missing.Value) ? new BigInteger(10) : CastToBigInteger(integerCast, radix);
+            if (radixValue.Sign < 0) {
+                throw RubyExceptions.CreateArgumentError("negative radix");
+            }
+            if (radixValue < 2) {
+                throw RubyExceptions.CreateArgumentError(String.Format("invalid radix {0}", radixValue));
+            }
+
+            var result = new RubyArray();
+            if (number.IsZero) {
+                result.Add(ClrInteger.Zero);
+                return result;
+            }
+
+            if (number <= Int64.MaxValue && radixValue <= Int64.MaxValue) {
+                long n = (long)number, r = (long)radixValue;
+                while (n > 0) {
+                    result.Add(Protocols.Normalize(n % r));
+                    n /= r;
+                }
+                return result;
+            }
+
+            if (radixValue <= 36) {
+                // Integer#to_s's digits, which are subquadratic, read backwards
+                string text = ClrInteger.ToRadixString(number, (int)radixValue);
+                for (int i = text.Length - 1; i >= 0; i--) {
+                    char c = text[i];
+                    result.Add(ScriptingRuntimeHelpers.Int32ToObject(c <= '9' ? c - '0' : c - 'a' + 10));
+                }
+                return result;
+            }
+
+            // Dividing by the radix once per digit is quadratic (~200 ms for 100k bits in base 1000). Split by the
+            // radix ** 2**k instead: powers[k] is that, and the largest is at most the number.
+            var powers = new System.Collections.Generic.List<BigInteger> { radixValue };
+            long numberBits = (long)number.GetBitLength();
+            while (true) {
+                // a square of b bits has at least 2b - 1 of them: past the number's, it need not be computed
+                BigInteger last = powers[powers.Count - 1];
+                if (2 * (long)last.GetBitLength() - 1 > numberBits) {
+                    break;
+                }
+                BigInteger square = last * last;
+                if (square > number) {
+                    break;
+                }
+                powers.Add(square);
+            }
+            AddDigits(result, number, radixValue, powers, powers.Count - 1, false);
+            return result;
+        }
+
+        /// <summary>
+        /// Adds the digits of <paramref name="number"/>, which is less than radix ** 2**(level + 1), least significant first:
+        /// exactly 2**(level + 1) of them, leading zeros included, when <paramref name="pad"/> is set.
+        /// </summary>
+        private static void AddDigits(RubyArray/*!*/ result, BigInteger number, BigInteger radix,
+            System.Collections.Generic.List<BigInteger>/*!*/ powers, int level, bool pad) {
+
+            if (number <= Int64.MaxValue && radix <= Int64.MaxValue) {
+                long n = (long)number, r = (long)radix;
+                long count = 0;
+                while (n > 0) {
+                    result.Add(Protocols.Normalize(n % r));
+                    n /= r;
+                    count++;
+                }
+                if (pad) {
+                    for (long width = (level < 0) ? 1 : 2L << level; count < width; count++) {
+                        result.Add(ClrInteger.Zero);
+                    }
+                }
+                return;
+            }
+            if (level < 0) {
+                // a single digit, at least as large as a long
+                result.Add(Protocols.Normalize(number));
+                return;
+            }
+            BigInteger high = BigInteger.DivRem(number, powers[level], out BigInteger low);
+            if (high.IsZero && !pad) {
+                AddDigits(result, low, radix, powers, level - 1, false);
+            } else {
+                AddDigits(result, low, radix, powers, level - 1, true);
+                AddDigits(result, high, radix, powers, level - 1, pad);
+            }
         }
 
         #endregion

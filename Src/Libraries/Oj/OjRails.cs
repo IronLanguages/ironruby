@@ -15,7 +15,6 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.Numerics;
 using System.Text;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
@@ -709,7 +708,7 @@ namespace IronRuby.StandardLibrary.Oj {
         /// <summary>rails.c's dump_rails_val.</summary>
         internal static void DumpRailsVal(object obj, int depth, Out output, bool asOk) {
             if (OjDump.MaxDepth < depth) {
-                throw new NoMemoryError("Too deeply nested.\n");
+                throw new OutOfMemoryException("Too deeply nested.\n");
             }
             switch (OjDump.TypeOf(output.Context, obj)) {
                 case RType.Nil: OjDump.DumpNil(output); return;

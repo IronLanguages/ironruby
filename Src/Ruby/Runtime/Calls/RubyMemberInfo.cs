@@ -16,8 +16,6 @@
 using System;
 using System.Diagnostics;
 using System.Reflection;
-using Microsoft.Scripting.Actions;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
@@ -334,6 +332,7 @@ namespace IronRuby.Runtime.Calls {
 
         internal void BuildCall(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ name) {
             BuildCallNoFlow(metaBuilder, args, name);
+            metaBuilder.AddCalleeFrame(this, name);
             metaBuilder.BuildControlFlow(args);
         }
 
@@ -348,6 +347,7 @@ namespace IronRuby.Runtime.Calls {
 
         internal void BuildSuperCall(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ name, RubyModule/*!*/ declaringModule) {
             BuildSuperCallNoFlow(metaBuilder, args, name, declaringModule);
+            metaBuilder.AddCalleeFrame(this, name);
             metaBuilder.BuildControlFlow(args);
         }
 

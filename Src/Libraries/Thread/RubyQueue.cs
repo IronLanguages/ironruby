@@ -21,15 +21,21 @@ using System.Threading;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.StandardLibrary.Threading {
     /// <summary>
     /// Thread::Queue - an unbounded blocking queue. Waits are Monitor waits, so Thread#kill and
     /// Thread#raise (which are delivered with Thread.Interrupt on .NET Core) unblock them.
     /// </summary>
-    [RubyClass("Queue")]
+    [RubyClass("Queue", DefineIn = typeof(ThreadOps))]
     public class RubyQueue {
+
+        /// <summary>MRI's #&lt;Thread::Queue:0x...&gt;, rather than the CLR type name.</summary>
+        [RubyMethod("inspect")]
+        [RubyMethod("to_s")]
+        public static MutableString/*!*/ Inspect(RubyContext/*!*/ context, RubyQueue/*!*/ self) {
+            return RubyUtils.ObjectToMutableString(context, self);
+        }
         protected readonly Queue<object>/*!*/ _queue;
         protected int _waiting;
         protected bool _closed;
@@ -101,7 +107,9 @@ namespace IronRuby.StandardLibrary.Threading {
 
         private bool WaitOnQueue(int milliseconds) {
             try {
-                return milliseconds == Timeout.Infinite ? Monitor.Wait(_queue) : Monitor.Wait(_queue, milliseconds);
+                using (RubyUtils.BlockingWait.Enter()) {
+                    return milliseconds == Timeout.Infinite ? Monitor.Wait(_queue) : Monitor.Wait(_queue, milliseconds);
+                }
             } catch (ThreadInterruptedException) {
                 RubyUtils.TranslateThreadInterrupt();
                 return true;
@@ -158,6 +166,10 @@ namespace IronRuby.StandardLibrary.Threading {
         /// protocol, and words the failure as an explicit conversion ("can't convert X into Array").
         /// </summary>
         private static void Fill(ConversionStorage<IList>/*!*/ toA, RubyContext/*!*/ context, RubyQueue/*!*/ queue, object items) {
+            // Queue.new(nil) is an empty queue
+            if (items == null) {
+                return;
+            }
             IList list = items as IList;
             if (list == null) {
                 list = Protocols.TryConvertToArray(toA, items);
@@ -204,18 +216,26 @@ namespace IronRuby.StandardLibrary.Threading {
         [RubyMethod("deq")]
         [RubyMethod("pop")]
         [RubyMethod("shift")]
-        public static object Dequeue(RubyContext/*!*/ context, RubyQueue/*!*/ self, [NotNull]Hash/*!*/ options) {
+        public static object Dequeue(RubyContext/*!*/ context, RubyQueue/*!*/ self, [Keywords, NotNull]Hash/*!*/ options) {
             return self.Dequeue(GetTimeoutMilliseconds(context, GetTimeoutOption(context, options)));
         }
 
         [RubyMethod("deq")]
         [RubyMethod("pop")]
         [RubyMethod("shift")]
-        public static object Dequeue(RubyContext/*!*/ context, RubyQueue/*!*/ self, bool nonBlocking, [NotNull]Hash/*!*/ options) {
+        public static object Dequeue(RubyContext/*!*/ context, RubyQueue/*!*/ self, bool nonBlocking, [Keywords, NotNull]Hash/*!*/ options) {
             if (nonBlocking && options.Count > 0) {
                 throw RubyExceptions.CreateArgumentError("can't set a timeout if non_block is enabled");
             }
             return Dequeue(context, self, options);
+        }
+
+        // pop takes the non-blocking flag and the timeout: keyword, nothing more
+        [RubyMethod("deq")]
+        [RubyMethod("pop")]
+        [RubyMethod("shift")]
+        public static object Dequeue(RubyQueue/*!*/ self, object nonBlocking, object other) {
+            throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 2, expected 0..1)");
         }
 
         internal static object GetTimeoutOption(RubyContext/*!*/ context, Hash/*!*/ options) {
@@ -276,6 +296,12 @@ namespace IronRuby.StandardLibrary.Threading {
         public static object Freeze(RubyContext/*!*/ context, RubyQueue/*!*/ self) {
             throw RubyExceptions.CreateTypeError("cannot freeze {0}",
                 context.Inspect(self).ToString());
+        }
+
+        /// <summary>MRI's Queue (and so SizedQueue) refuses Marshal by name.</summary>
+        [RubyMethod("marshal_dump")]
+        public static object MarshalDump(RubyContext/*!*/ context, RubyQueue/*!*/ self) {
+            throw RubyExceptions.CreateTypeError("can't dump {0}", context.GetClassDisplayName(self));
         }
     }
 }

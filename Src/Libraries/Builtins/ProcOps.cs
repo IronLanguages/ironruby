@@ -14,16 +14,12 @@
  * ***************************************************************************/
 
 using System;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
-using Microsoft.Scripting.Generation;
 using System.Globalization;
 using System.Collections.Generic;
-using System.Runtime.InteropServices;
 
 namespace IronRuby.Builtins {
 
@@ -116,6 +112,9 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("binding")]
         public static Binding/*!*/ GetLocalScope(Proc/*!*/ self) {
+            if (self.IsIsolated) {
+                throw RubyExceptions.CreateArgumentError("Can't create Binding from isolated Proc");
+            }
             // a curried or composed proc has no Ruby scope of its own to hand out
             if (self.LocalScope.IsEmpty) {
                 throw RubyExceptions.CreateArgumentError("Can't create Binding from C level Proc");
@@ -148,7 +147,8 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// MRI's format is "#&lt;Proc:0xADDRESS file:line (lambda)&gt;", with the location separated
         /// by a space rather than by the '@' this used to print, omitted entirely when the proc has
-        /// no Ruby source, and replaced by "(&amp;:name)" for a proc a Symbol produced. The result is
+        /// no Ruby source or comes from Method#to_proc, and replaced by "(&amp;:name)" for a proc a
+        /// Symbol produced. The result is
         /// a binary string, as every #inspect-ish description in MRI is.
         /// </summary>
         [RubyMethod("to_s"), RubyMethod("inspect")]
@@ -160,7 +160,7 @@ namespace IronRuby.Builtins {
                 str.Append("(&:");
                 str.Append(self.SymbolName);
                 str.Append(')');
-            } else if (self.SourcePath != null) {
+            } else if (self.SourcePath != null && !self.Dispatcher.WrapsMethod) {
                 str.Append(' ');
                 str.Append(self.SourcePath);
                 str.Append(':');
@@ -205,9 +205,7 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region call, [],  ===, yield (TODO)
-        
-        // TODO: 1.9 yield: yield and call might have different semantics with respect to control-flow!
+        #region call, [],  ===, yield
 
         [RubyMethod("==="), RubyMethod("[]"), RubyMethod("yield"), RubyMethod("call")]
         [RubyStackTraceHidden]
@@ -218,6 +216,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("==="), RubyMethod("[]"), RubyMethod("yield"), RubyMethod("call")]
         [RubyStackTraceHidden]
+        [ReceivesKeywords]
         public static object Call(BlockParam block, Proc/*!*/ self, object arg1) {
             RubyOps.RequireLambdaArity(self, 1, arg1);
             return self.Call(block != null ? block.Proc : null, arg1);
@@ -225,6 +224,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("==="), RubyMethod("[]"), RubyMethod("yield"), RubyMethod("call")]
         [RubyStackTraceHidden]
+        [ReceivesKeywords]
         public static object Call(BlockParam block, Proc/*!*/ self, object arg1, object arg2) {
             RubyOps.RequireLambdaArity(self, 2, arg2);
             return self.Call(block != null ? block.Proc : null, arg1, arg2);
@@ -232,6 +232,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("==="), RubyMethod("[]"), RubyMethod("yield"), RubyMethod("call")]
         [RubyStackTraceHidden]
+        [ReceivesKeywords]
         public static object Call(BlockParam block, Proc/*!*/ self, object arg1, object arg2, object arg3) {
             RubyOps.RequireLambdaArity(self, 3, arg3);
             return self.Call(block != null ? block.Proc : null, arg1, arg2, arg3);
@@ -239,6 +240,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("==="), RubyMethod("[]"), RubyMethod("yield"), RubyMethod("call")]
         [RubyStackTraceHidden]
+        [ReceivesKeywords]
         public static object Call(BlockParam block, Proc/*!*/ self, object arg1, object arg2, object arg3, object arg4) {
             RubyOps.RequireLambdaArity(self, 4, arg4);
             return self.Call(block != null ? block.Proc : null, arg1, arg2, arg3, arg4);
@@ -246,6 +248,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("==="), RubyMethod("[]"), RubyMethod("yield"), RubyMethod("call")]
         [RubyStackTraceHidden]
+        [ReceivesKeywords]
         public static object Call(BlockParam block, Proc/*!*/ self, params object[]/*!*/ args) {
             RubyOps.RequireLambdaArity(self, args.Length, args.Length > 0 ? args[args.Length - 1] : null);
             return self.CallN(block != null ? block.Proc : null, args);
@@ -347,7 +350,9 @@ namespace IronRuby.Builtins {
                 var splatSite = splatStorage.GetCallSite("call",
                     new RubyCallSignature(0, RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock));
                 object intermediate = splatSite.Target(splatSite, other, procArg, unsplat);
-                return self.Call(null, intermediate);
+                // through #call, so a lambda's arity is checked against the one value it gets
+                var site = callStorage.GetCallSite("call", 1);
+                return site.Target(site, self, intermediate);
             });
         }
 
@@ -371,6 +376,7 @@ namespace IronRuby.Builtins {
         /// arguments Proc.new was given.
         /// </summary>
         [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
+        [ReceivesKeywords]
         public static object CreateNew(CallSiteStorage<Func<CallSite, object, Proc, RubyArray, object>>/*!*/ storage, 
             BlockParam block, RubyClass/*!*/ self, params object[]/*!*/ args) {
 
@@ -380,6 +386,10 @@ namespace IronRuby.Builtins {
 
             var proc = block.Proc;
             if (ReferenceEquals(self.Context.GetClassOf(proc), self)) {
+                // Proc itself takes no arguments; a subclass hands them to its #initialize
+                if (args.Length > 0) {
+                    throw RubyExceptions.CreateArgumentError("wrong number of arguments (given {0}, expected 0)", args.Length);
+                }
                 return proc;
             }
 

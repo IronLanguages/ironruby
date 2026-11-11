@@ -12,9 +12,7 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_CRYPTOGRAPHY
 using System.Security.Cryptography;
-#endif
 
 using System;
 using System.Text;
@@ -31,7 +29,6 @@ using IronRuby.Compiler;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using IronRuby.Runtime.Conversions;
-using Microsoft.Scripting;
 using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
@@ -80,7 +77,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("initialize_clone", RubyMethodAttributes.PrivateInstance)]
         public static object InitializeClone(
             CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ initializeCopyStorage, object self, object source,
-            [Optional]object options) {
+            [Keywords, Optional]object options) {
 
             var site = initializeCopyStorage.GetCallSite("initialize_copy", 1);
             site.Target(site, self, source);
@@ -99,13 +96,10 @@ namespace IronRuby.Builtins {
                 return result;
             }
 
-            // MRI 1.9 calls to_a (MRI 1.8 doesn't):
-            //if (context.RubyOptions.Compatibility > RubyCompatibility.Ruby18) {
             result = Protocols.TryConvertToArray(tryToA, obj);
             if (result != null) {
                 return result;
             }
-            //}
 
             result = new RubyArray();
             if (obj != null) {
@@ -114,38 +108,423 @@ namespace IronRuby.Builtins {
             return result;
         }
 
+        #region Kernel#Integer, Kernel#Float
+
+        // The Float loop of Numeric#step and Range#step (ArithmeticSequence.__step_each__ in
+        // ruby4.rb, after MRI's ruby_float_step): n values beg, beg + step, ..., the last one held
+        // to stop. A method that yields is not one the method JIT takes, so the loop cost ~0.25 us
+        // a value in Ruby.
+        [RubyMethod("__ir_float_step__", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("__ir_float_step__", RubyMethodAttributes.PublicSingleton)]
+        public static object FloatStep(BlockParam/*!*/ block, object self, double beg, double stop, double step, double n) {
+            object result;
+            return FloatStepLoop(block, beg, stop, step, n, out result) ? result : null;
+        }
+
+        /// <summary>The loop of <see cref="FloatStep"/>: true when the block broke out, with what it broke with.</summary>
+        internal static bool FloatStepLoop(BlockParam/*!*/ block, double beg, double stop, double step, double n, out object result) {
+            result = null;
+            if (Double.IsInfinity(step)) {
+                if (n > 0 && block.Yield(beg, out result)) {
+                    return true;
+                }
+            } else if (step == 0) {
+                while (true) {
+                    if (block.Yield(beg, out result)) {
+                        return true;
+                    }
+                }
+            } else {
+                // n may be NaN (Infinity.step(Infinity, 1)); 0 < NaN is false, so nothing is
+                // yielded, which is what MRI's for(;i<n;) loop does.
+                for (double i = 0; i < n; i++) {
+                    double d = i * step + beg;
+                    if (step >= 0 ? stop < d : d < stop) {
+                        d = stop;
+                    }
+                    if (block.Yield(d, out result)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // C's DBL_EPSILON (Double.Epsilon is the smallest subnormal instead)
+        private const double DblEpsilon = 2.220446049250313e-16;
+
         /// <summary>
-        /// A Float given to Float() comes back as the very same object. Taking it as a double and
-        /// handing it back boxes it afresh, and #equal? on a boxed double compares the boxes - so
-        /// Float(f).equal?(f) was false, including for the NaN and the Infinity that have no
-        /// other way of being told apart from any other NaN or Infinity.
+        /// MRI's ruby_float_step_size: how many values beg, beg + unit, ... reach end (excluded when
+        /// <paramref name="excl"/>), allowing for the error the division accumulates. A Float, so that
+        /// an infinite count and a NaN survive. ArithmeticSequence.__float_step_size__ in ruby4.rb is
+        /// the same computation.
         /// </summary>
-        [RubyMethod("Float", RubyMethodAttributes.PrivateInstance)]
+        internal static double FloatStepSize(double beg, double end, double unit, bool excl) {
+            if (unit == 0) {
+                return Double.PositiveInfinity;
+            }
+            if (Double.IsInfinity(unit)) {
+                return (unit > 0 ? beg <= end : beg >= end) ? 1 : 0;
+            }
+            double n = (end - beg) / unit;
+            double err = (Math.Abs(beg) + Math.Abs(end) + Math.Abs(end - beg)) / Math.Abs(unit) * DblEpsilon;
+            if (err > 0.5) {
+                err = 0.5;
+            }
+            double d;
+            if (excl) {
+                if (n <= 0) {
+                    return 0;
+                }
+                n = (n < 1) ? 0 : Math.Floor(n - err);
+                d = +((n + 1) * unit) + beg;
+                if (beg < end) {
+                    if (d < end) {
+                        n++;
+                    }
+                } else if (beg > end) {
+                    if (d > end) {
+                        n++;
+                    }
+                }
+            } else {
+                if (n < 0) {
+                    return 0;
+                }
+                n = Math.Floor(n + err);
+                d = +((n + 1) * unit) + beg;
+                if (beg < end) {
+                    if (d <= end) {
+                        n++;
+                    }
+                } else if (beg > end) {
+                    if (d >= end) {
+                        n++;
+                    }
+                }
+            }
+            return n + 1;
+        }
+
+        // Integer(string), Integer(fixnum) and Integer(float), the common calls, without the storages and the keyword parameter of the
+        // general overload below: the binder's dispatch to that one cost more than the conversion (~100 ns for a Fixnum).
+        [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
+        public static object ToInteger(object self, [NotNull]MutableString/*!*/ value) {
+            return ParseInteger(value, 0, true);
+        }
+
+        [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
+        public static object ToInteger(object self, int value) {
+            return ScriptingRuntimeHelpers.Int32ToObject(value);
+        }
+
+        [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
+        public static object ToInteger(object self, double value) {
+            return ClrFloat.ToInt(value);
+        }
+
+        /// <summary>
+        /// Kernel#Integer(arg, base = 0, exception: true), MRI's rb_convert_to_integer. A non-zero base
+        /// goes with a String, so anything else must have #to_str. A String is parsed, an Integer is
+        /// answered as it is, a Float truncated and nil is a TypeError. Anything else is asked for #to_int
+        /// - an error it raises, or an answer that is not an Integer, only moves on to the next step -
+        /// then for #to_str, then for #to_i. With exception: false a failure answers nil, including an
+        /// error raised by the object's own #to_i; an unusable base or a String in an ASCII-incompatible
+        /// encoding still raises.
+        /// </summary>
+        [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
+        public static object ToInteger(ConversionStorage<int>/*!*/ fixnumCast, UnaryOpStorage/*!*/ toInt, UnaryOpStorage/*!*/ toStr,
+            UnaryOpStorage/*!*/ toI, object self, object value, [Optional]object radixOrOptions, [Keywords, Optional]object options) {
+
+            // the common cases, without the keyword and protocol machinery
+            if (radixOrOptions == Missing.Value) {
+                if (value is MutableString str) {
+                    return ParseInteger(str, 0, true);
+                }
+                if (value is int || value is long || value is BigInteger) {
+                    return value;
+                }
+            }
+
+            bool raise = TakeExceptionOption(fixnumCast.Context, ref radixOrOptions, options, 2);
+            if (radixOrOptions == null) {
+                // a base given as nil is not a base left out (MRI's NUM2INT), whatever exception: says
+                throw RubyExceptions.CreateTypeError("no implicit conversion from nil to integer");
+            }
+            int radix = (radixOrOptions == Missing.Value) ? 0 : Protocols.CastToFixnum(fixnumCast, radixOrOptions);
+            RubyContext context = fixnumCast.Context;
+
+            if (radix != 0) {
+                MutableString str = TryConvertToStr(toStr, value);
+                if (str == null) {
+                    if (!raise) {
+                        return null;
+                    }
+                    throw RubyExceptions.CreateArgumentError("base specified for non string value");
+                }
+                value = str;
+            }
+
+            if (value is double d) {
+                if (!raise && (Double.IsNaN(d) || Double.IsInfinity(d))) {
+                    return null;
+                }
+                return ClrFloat.ToInt(d);
+            }
+            object clrInteger = AsInteger(value);
+            if (clrInteger != null) {
+                return clrInteger;
+            }
+            if (value is MutableString s) {
+                return ParseInteger(s, radix, raise);
+            }
+            if (value == null) {
+                if (!raise) {
+                    return null;
+                }
+                throw RubyExceptions.CreateTypeConversionError("NilClass", "Integer");
+            }
+
+            // rb_protect(rb_check_to_int)
+            if (CanCall(context, value, "to_int")) {
+                try {
+                    object integer = AsInteger(Call(toInt, value, "to_int"));
+                    if (integer != null) {
+                        return integer;
+                    }
+                } catch (Exception e) when (IsStandardError(context, e)) {
+                    // MRI forgets it and goes on to #to_str
+                }
+            }
+
+            MutableString text = TryConvertToStr(toStr, value);
+            if (text != null) {
+                return ParseInteger(text, radix, raise);
+            }
+
+            if (!raise) {
+                try {
+                    return CanCall(context, value, "to_i") ? AsInteger(Call(toI, value, "to_i")) : null;
+                } catch (Exception e) when (IsStandardError(context, e)) {
+                    return null;
+                }
+            }
+
+            string className = RubyExceptions.MessageTypeName(context.GetClassName(value));
+            if (!CanCall(context, value, "to_i")) {
+                throw RubyExceptions.CreateTypeConversionError(className, "Integer");
+            }
+            object result = Call(toI, value, "to_i");
+            if (AsInteger(result) != null) {
+                return AsInteger(result);
+            }
+            throw RubyExceptions.CreateTypeError("can't convert {0} to Integer ({0}#to_i gives {1})",
+                className, RubyExceptions.MessageTypeName(context.GetClassName(result)));
+        }
+
+        /// <summary>
+        /// Kernel#Float(arg, exception: true), MRI's rb_convert_to_float. A Float is its own answer - the
+        /// very object, so a NaN or an Infinity stays itself - an Integer is converted and a String
+        /// parsed. nil, true and false are TypeErrors; anything else is asked for #to_f, whose answer is
+        /// handed back as it is if it is a Float. With exception: false a failure answers nil, including
+        /// an error raised by the object's own #to_f.
+        /// </summary>
+        // Kernel.Integer and Kernel.Float: methods of their own, which a backtrace names "Kernel.Integer" as MRI's does
+        // (see Format and SingletonFormat).
+        [RubyMethod("Integer", RubyMethodAttributes.PublicSingleton)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("ToInteger")]
+        public static object SingletonToInteger(ConversionStorage<int>/*!*/ fixnumCast, UnaryOpStorage/*!*/ toInt, UnaryOpStorage/*!*/ toStr,
+            UnaryOpStorage/*!*/ toI, object self, object value, [Optional]object radixOrOptions, [Keywords, Optional]object options) {
+            return ToInteger(fixnumCast, toInt, toStr, toI, self, value, radixOrOptions, options);
+        }
+
         [RubyMethod("Float", RubyMethodAttributes.PublicSingleton)]
-        public static object ToFloat(ConversionStorage<double>/*!*/ floatConversion, object self, object value) {
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("ToFloat")]
+        public static object SingletonToFloat(UnaryOpStorage/*!*/ toF, object self, object value, [Keywords, Optional]object options) {
+            return ToFloat(toF, self, value, options);
+        }
+
+        [RubyMethod("Float", RubyMethodAttributes.PrivateInstance)]
+        public static object ToFloat(UnaryOpStorage/*!*/ toF, object self, object value, [Keywords, Optional]object options) {
+            // the options are checked first, even for a Float: Float(1.0, foo: 1) raises
+            RubyContext context = toF.Context;
+            bool raise = (options == Missing.Value) || TakeExceptionOption(context, ref options, Missing.Value, 1);
+
             if (value is double) {
                 return value;
             }
-            return Protocols.CastToFloat(floatConversion, value);
+
+            if (value is int i) {
+                return (double)i;
+            }
+            if (value is BigInteger big) {
+                return Protocols.ConvertToDouble(context, big);
+            }
+            if (value is MutableString str) {
+                RequireAsciiCompatible(str);
+                if (str.IndexOf('\0') >= 0) {
+                    return raise ? throw RubyExceptions.CreateArgumentError("string for Float contains null byte") : null;
+                }
+                if (!raise) {
+                    double parsed;
+                    return RubyOps.TryConvertKernelFloat(context, str, out parsed) ? (object)parsed : null;
+                }
+                return RubyOps.ConvertKernelFloat(context, str);
+            }
+            if (value == null || value is bool) {
+                if (!raise) {
+                    return null;
+                }
+                throw RubyExceptions.CreateTypeConversionError(context.GetClassName(value), "Float");
+            }
+
+            if (!CanCall(context, value, "to_f")) {
+                if (!raise) {
+                    return null;
+                }
+                throw RubyExceptions.CreateTypeConversionError(context.GetClassName(value), "Float");
+            }
+
+            object result;
+            try {
+                result = Call(toF, value, "to_f");
+            } catch (Exception e) when (!raise && IsStandardError(context, e)) {
+                return null;
+            }
+            if (result is double) {
+                return result;
+            }
+            if (!raise) {
+                return null;
+            }
+            throw RubyExceptions.CreateTypeError("can't convert {0} to Float ({0}#to_f gives {1})",
+                context.GetClassName(value), context.GetClassName(result));
         }
 
-        [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("Integer", RubyMethodAttributes.PublicSingleton)]
-        public static object/*!*/ ToInteger(object self, [NotNull]MutableString/*!*/ value) {
-            return ToInteger(self, value, 0);
+        /// <summary>
+        /// The exception: keyword of Integer() and Float(), which arrives in place of the first optional
+        /// argument that was not given (<paramref name="arg"/>, then <paramref name="options"/>), as a Hash
+        /// flagged as keywords. MRI's rb_bool_expected: only true and false are accepted.
+        /// </summary>
+        private static bool TakeExceptionOption(RubyContext/*!*/ context, ref object arg, object options, int maxArgs) {
+            Hash keywords;
+            if (options != Missing.Value) {
+                keywords = options as Hash;
+                if (keywords == null || !keywords.IsKeywordArguments) {
+                    throw RubyExceptions.CreateArgumentError("wrong number of arguments (given {0}, expected 1..{1})", maxArgs + 1, maxArgs);
+                }
+            } else if ((keywords = arg as Hash) != null && keywords.IsKeywordArguments) {
+                arg = Missing.Value;
+            } else if (maxArgs == 1 && arg != Missing.Value) {
+                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 2, expected 1)");
+            } else {
+                return true;
+            }
+
+            bool raise = true;
+            foreach (var entry in keywords) {
+                var key = entry.Key as RubySymbol;
+                if (key == null || key.ToString() != "exception") {
+                    throw RubyExceptions.CreateArgumentError("unknown keyword: {0}", context.Inspect(entry.Key));
+                }
+                if (!(entry.Value is bool flag)) {
+                    throw RubyExceptions.CreateArgumentError("expected true or false as exception: {0}", context.Inspect(entry.Value));
+                }
+                raise = flag;
+            }
+            return raise;
         }
 
-        [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("Integer", RubyMethodAttributes.PublicSingleton)]
-        public static object/*!*/ ToInteger(object self, [NotNull]MutableString/*!*/ value, [DefaultProtocol]int radix) {
+        /// <summary>
+        /// <paramref name="value"/> as a Ruby Integer: an Integer itself - a Fixnum, an Int64 or a Bignum - and
+        /// one of the CLR's other integer types widened to one; null for anything else.
+        /// </summary>
+        private static object AsInteger(object value) {
+            switch (value) {
+                case int _:
+                case long _:
+                case BigInteger _: return value;
+                case byte b: return (int)b;
+                case sbyte sb: return (int)sb;
+                case short sh: return (int)sh;
+                case ushort us: return (int)us;
+                case uint ui: return Protocols.Normalize(ui);
+                case ulong ul: return Protocols.Normalize(ul);
+                default: return null;
+            }
+        }
+
+        /// <summary>
+        /// MRI's rb_check_funcall test: the object answers <paramref name="name"/>, privately or not.
+        /// A respond_to? of its own is asked; otherwise the method is looked up, and a
+        /// respond_to_missing? of its own is asked when there is none.
+        /// </summary>
+        private static bool CanCall(RubyContext/*!*/ context, object value, string/*!*/ name) {
+            RubyClass cls = context.GetImmediateClassOf(value);
+            var respondTo = cls.ResolveMethod("respond_to?", VisibilityContext.AllVisible);
+            if (respondTo.Found && !(respondTo.Info is RubyLibraryMethodInfo)) {
+                return context.RespondTo(value, name);
+            }
+            if (cls.ResolveMethod(name, VisibilityContext.AllVisible).Found) {
+                return true;
+            }
+            var missing = cls.ResolveMethod("respond_to_missing?", VisibilityContext.AllVisible);
+            return respondTo.Found && missing.Found && !(missing.Info is RubyLibraryMethodInfo) && context.RespondTo(value, name);
+        }
+
+        /// <summary>A call of a conversion method that may be private, as MRI's rb_check_funcall makes it.</summary>
+        private static object Call(UnaryOpStorage/*!*/ storage, object value, string/*!*/ name) {
+            var site = storage.GetCallSite(name, new RubyCallSignature(0, RubyCallFlags.HasImplicitSelf));
+            return site.Target(site, value);
+        }
+
+        /// <summary>
+        /// MRI's rb_check_string_type: the String itself, the result of #to_str, or null when there is
+        /// no #to_str; a #to_str that answers anything else is a TypeError.
+        /// </summary>
+        private static MutableString TryConvertToStr(UnaryOpStorage/*!*/ toStr, object value) {
+            if (value is MutableString str) {
+                return str;
+            }
+            RubyContext context = toStr.Context;
+            if (value == null || !CanCall(context, value, "to_str")) {
+                return null;
+            }
+            object result = Call(toStr, value, "to_str");
+            if (result is MutableString || result == null) {
+                return (MutableString)result;
+            }
+            string className = RubyExceptions.MessageTypeName(context.GetClassName(value));
+            throw RubyExceptions.CreateTypeError("can't convert {0} to String ({0}#to_str gives {1})",
+                className, RubyExceptions.MessageTypeName(context.GetClassName(result)));
+        }
+
+        private static bool IsStandardError(RubyContext/*!*/ context, Exception/*!*/ e) {
+            return context.GetClassOf(e).IsSubclassOf(context.StandardErrorClass);
+        }
+
+        private static void RequireAsciiCompatible(MutableString/*!*/ value) {
+            if (!value.Encoding.IsAsciiIdentity) {
+                throw new EncodingCompatibilityError("ASCII incompatible encoding: " + value.Encoding.Name);
+            }
+        }
+
+        /// <summary>
+        /// Kernel#Integer's reading of a String, which must be ASCII-compatible. A positive radix must be
+        /// 2..36; a negative one is only a hint a prefix overrides, and 0 works it out from the prefix.
+        /// A string that does not read as an Integer is an ArgumentError, or null when
+        /// <paramref name="raise"/> is false.
+        /// </summary>
+        public static object ParseInteger(MutableString/*!*/ value, int radix, bool raise = true) {
+            RequireAsciiCompatible(value);
             var str = value.ConvertToString();
 
-            // A negative radix means "this is only a hint, a prefix wins"; zero and the
-            // absent argument both mean "work it out from the prefix".
             // MRI complains about the string before it complains about the radix, so
             // Integer("\n", 1) is "invalid value", not "invalid radix".
             if (!HasIntegerDigits(str)) {
-                throw InvalidIntegerValue(str);
+                return raise ? throw InvalidIntegerValue(value) : null;
             }
 
             // Only a positive radix is range-checked; a negative one is a hint, and an
@@ -158,10 +537,10 @@ namespace IronRuby.Builtins {
             if (TryParseRubyInteger(str, radix, out result)) {
                 return result;
             }
-
-            throw InvalidIntegerValue(str);
+            return raise ? throw InvalidIntegerValue(value) : null;
         }
 
+        #endregion
         #region Kernel#Integer string grammar
 
         // Kernel#Integer is stricter than String#to_i: it consumes the whole string or fails.
@@ -180,22 +559,12 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// MRI quotes the offending string with control characters escaped and everything
-        /// else passed through, so "\n" reads as \n but an accented letter stays itself.
+        /// MRI quotes the offending string as #inspect does: control characters and bytes that
+        /// are not valid in its encoding escaped ("1\xFF"), everything else passed through.
         /// </summary>
-        private static Exception/*!*/ InvalidIntegerValue(string/*!*/ str) {
-            var text = new StringBuilder(str.Length + 8);
-            foreach (char c in str) {
-                switch (c) {
-                    case '\n': text.Append("\\n"); break;
-                    case '\t': text.Append("\\t"); break;
-                    case '\r': text.Append("\\r"); break;
-                    case '\f': text.Append("\\f"); break;
-                    case '\v': text.Append("\\v"); break;
-                    default: text.Append(c); break;
-                }
-            }
-            return RubyExceptions.CreateArgumentError("invalid value for Integer(): \"{0}\"", text.ToString());
+        private static Exception/*!*/ InvalidIntegerValue(MutableString/*!*/ value) {
+            return RubyExceptions.CreateArgumentError("invalid value for Integer(): {0}",
+                MutableStringOps.GetQuotedStringRepresentation(value, false, '"'));
         }
 
         private static bool IsIntegerWhitespace(char c) {
@@ -214,6 +583,9 @@ namespace IronRuby.Builtins {
             }
             return -1;
         }
+
+        // x * radix + digit stays in a long for any x up to this, radix 36 and digit 35 included
+        private const long SmallParseLimit = (Int64.MaxValue - 35) / 36;
 
         private static bool TryParseRubyInteger(string/*!*/ str, int requestedRadix, out object result) {
             result = null;
@@ -275,12 +647,32 @@ namespace IronRuby.Builtins {
                 radix = (requestedRadix < 0 && hinted >= 2 && hinted <= 36) ? hinted : 10;
             }
 
+            // In a long while it fits, and past that in long chunks folded into the BigInteger: a BigInteger step per digit
+            // was most of the time of Integer("123"), and of a 30-digit number nearly all of it.
+            long small = 0, chunk = 0, chunkScale = 1;
+            bool big = false;
             BigInteger magnitude = BigInteger.Zero;
             while (index < end) {
                 char c = str[index];
                 int digit = DigitValue(c);
                 if (digit >= 0 && digit < radix) {
-                    magnitude = magnitude * radix + digit;
+                    if (!big) {
+                        if (small <= SmallParseLimit) {
+                            small = small * radix + digit;
+                        } else {
+                            big = true;
+                            magnitude = small;
+                            chunk = digit;
+                            chunkScale = radix;
+                        }
+                    } else if (chunkScale <= SmallParseLimit) {
+                        chunk = chunk * radix + digit;
+                        chunkScale *= radix;
+                    } else {
+                        magnitude = magnitude * chunkScale + chunk;
+                        chunk = digit;
+                        chunkScale = radix;
+                    }
                     digits++;
                     index++;
                 } else if (c == '_' && digits > 0) {
@@ -298,18 +690,16 @@ namespace IronRuby.Builtins {
                 return false;
             }
 
-            result = Protocols.Normalize(negative ? -magnitude : magnitude);
+            if (big) {
+                magnitude = magnitude * chunkScale + chunk;
+                result = Protocols.Normalize(negative ? -magnitude : magnitude);
+            } else {
+                result = Protocols.Normalize(negative ? -small : small);
+            }
             return true;
         }
 
         #endregion
-
-        [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("Integer", RubyMethodAttributes.PublicSingleton)]
-        public static object/*!*/ ToInteger(ConversionStorage<IntegerValue>/*!*/ integerConversion, object self, object value) {
-            var integer = Protocols.ConvertToInteger(integerConversion, value);
-            return integer.IsFixnum ? ScriptingRuntimeHelpers.Int32ToObject(integer.Fixnum) : integer.Bignum;
-        }
 
         [RubyMethod("String", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("String", RubyMethodAttributes.PublicSingleton)]
@@ -317,50 +707,127 @@ namespace IronRuby.Builtins {
             return Protocols.ConvertToString(tosConversion, obj);
         }
 
-        // Kernel#Complex and Kernel#Rational below load complex18.rb/rational18.rb and re-dispatch,
-        // expecting the file to have replaced them. It does so for the instance method only, so a
-        // call on a receiver that still resolves to the stub (e.g. Kernel.Complex, the singleton)
-        // would come straight back here and recurse until the stack ran out. The guard turns that
-        // into an error rather than a crash.
-        [ThreadStatic]
-        private static bool _inNumericStub;
+        // How the C# library makes a Rational of two Integers it has no RubyRational for yet:
+        // Kernel.Rational(numerator, denominator).
+        internal static object/*!*/ ToRational(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ toRational,
+            RubyScope/*!*/ scope, object numerator, object denominator) {
 
-        [RubyMethod("Complex", RubyMethodAttributes.PrivateInstance, Compatibility = RubyCompatibility.Ruby19)]
-        [RubyMethod("Complex", RubyMethodAttributes.PublicSingleton, Compatibility = RubyCompatibility.Ruby19)]
-        public static object ToComplex(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ toComplex, 
-            RubyScope/*!*/ scope, object self, object real, [DefaultParameterValue(null)]object imaginary) {
-            
-            if (_inNumericStub) {
-                throw RubyExceptions.CreateNotImplementedError("Complex is not defined for this receiver");
-            }
-            // TODO: hack: redefines this method
-            scope.RubyContext.Loader.LoadFile(scope.GlobalScope.Scope, self, MutableString.CreateAscii("complex18.rb"), LoadFlags.Require);
-            var site = toComplex.GetCallSite("Complex", 2);
-            _inNumericStub = true;
-            try {
-                return site.Target(site, self, real, imaginary);
-            } finally {
-                _inNumericStub = false;
-            }
+            var site = toRational.GetCallSite("Rational", 2);
+            return site.Target(site, scope.RubyContext.KernelModule, numerator, denominator);
         }
 
-        [RubyMethod("Rational", RubyMethodAttributes.PrivateInstance, Compatibility = RubyCompatibility.Ruby19)]
-        [RubyMethod("Rational", RubyMethodAttributes.PublicSingleton, Compatibility = RubyCompatibility.Ruby19)]
-        public static object/*!*/ ToRational(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ toRational, 
-            RubyScope/*!*/ scope, object self, object numerator, [DefaultParameterValue(null)]object denominator) {
+        // Kernel#Rational(x, y = <none>, exception: true) (MRI's nurat_f_rational) and Kernel#Complex (nucomp_f_complex).
+        // The cases a program spends its time in are answered here - an Integer over an Integer, a Rational alone, an
+        // Integer or Float pair - and everything else goes to the prelude's port of nurat_convert/nucomp_convert
+        // (Rational.__convert__ in rational.rb, Complex.__convert__ in complex.rb), which knows Strings, Floats, the
+        // #to_r/#to_c protocol and its errors. Rational(x) and Rational(x, nil) are different calls - the second is a
+        // TypeError - so the denominator is optional rather than defaulted. The exception: keyword arrives in place of
+        // the first optional argument that was not given (TakeExceptionOption).
 
-            if (_inNumericStub) {
-                throw RubyExceptions.CreateNotImplementedError("Rational is not defined for this receiver");
+        [RubyMethod("Rational", RubyMethodAttributes.PrivateInstance)]
+        public static object ToRational(CallSiteStorage<Func<CallSite, object, object, object, object, object, object>>/*!*/ convert,
+            RubyContext/*!*/ context, object self, object value, [Optional]object denominator, [Keywords, Optional]object options) {
+
+            RubyClass cls = GetRationalClass(context);
+            if (options == Missing.Value && cls != null) {
+                if (denominator == Missing.Value) {
+                    if (RubyRational.IsIntegerValue(value)) {
+                        return new RubyRational(cls, value, ScriptingRuntimeHelpers.Int32ToObject(1));
+                    }
+                    if (value is RubyRational) {
+                        return value;
+                    }
+                } else if (RubyRational.IsIntegerValue(value) && RubyRational.IsIntegerValue(denominator)) {
+                    return RubyRational.Canonicalize(cls, value, denominator);
+                }
             }
-            // TODO: hack: redefines this method
-            scope.RubyContext.Loader.LoadFile(scope.GlobalScope.Scope, self, MutableString.CreateAscii("rational18.rb"), LoadFlags.Require);
-            var site = toRational.GetCallSite("Rational", 2);
-            _inNumericStub = true;
-            try {
-                return site.Target(site, self, numerator, denominator);
-            } finally {
-                _inNumericStub = false;
+
+            bool raise = TakeExceptionOption(context, ref denominator, options, 2);
+            bool given2 = denominator != Missing.Value;
+            var site = convert.GetCallSite("__convert__", 4);
+            return site.Target(site, context.GetClass(typeof(RubyRational)), value, given2 ? denominator : null, given2, raise);
+        }
+
+        // Kernel.Rational and Kernel.Complex: methods of their own, which a backtrace names "Kernel.Rational" as MRI's does.
+        [RubyMethod("Rational", RubyMethodAttributes.PublicSingleton)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("ToRational")]
+        public static object SingletonToRational(CallSiteStorage<Func<CallSite, object, object, object, object, object, object>>/*!*/ convert,
+            RubyContext/*!*/ context, object self, object value, [Optional]object denominator, [Keywords, Optional]object options) {
+            return ToRational(convert, context, self, value, denominator, options);
+        }
+
+        private static bool IsIntegerOrFloat(object value) {
+            return value is int || value is long || value is double;
+        }
+
+        [RubyMethod("Complex", RubyMethodAttributes.PrivateInstance)]
+        public static object ToComplex(CallSiteStorage<Func<CallSite, object, object, object, object, object, object>>/*!*/ convert,
+            RubyContext/*!*/ context, object self, object real, [Optional]object imaginary, [Keywords, Optional]object options) {
+
+            RubyClass cls = context.GetClass(typeof(RubyComplex));
+            if (options == Missing.Value) {
+                if (imaginary == Missing.Value) {
+                    if (IsIntegerOrFloat(real)) {
+                        return new RubyComplex(cls, real, ScriptingRuntimeHelpers.Int32ToObject(0));
+                    }
+                    // Complex(c) answers a Complex as it is
+                    if (real is RubyComplex && context.GetClassOf(real) == cls) {
+                        return real;
+                    }
+                } else if (IsIntegerOrFloat(real) && IsIntegerOrFloat(imaginary)) {
+                    return new RubyComplex(cls, real, imaginary);
+                }
             }
+
+            bool raise = TakeExceptionOption(context, ref imaginary, options, 2);
+            if (imaginary == Missing.Value && real is RubyComplex && context.GetClassOf(real) == cls) {
+                return real;
+            }
+            bool given2 = imaginary != Missing.Value;
+            var site = convert.GetCallSite("__convert__", 4);
+            return site.Target(site, cls, real, given2 ? imaginary : null, given2, raise);
+        }
+
+        [RubyMethod("Complex", RubyMethodAttributes.PublicSingleton)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("ToComplex")]
+        public static object SingletonToComplex(CallSiteStorage<Func<CallSite, object, object, object, object, object, object>>/*!*/ convert,
+            RubyContext/*!*/ context, object self, object real, [Optional]object imaginary, [Keywords, Optional]object options) {
+            return ToComplex(convert, context, self, real, imaginary, options);
+        }
+
+        // The Rational class of the context that last asked (one per process in practice).
+        private static RubyClass _rationalClass;
+
+        internal static RubyClass GetRationalClass(RubyContext/*!*/ context) {
+            RubyClass cls = _rationalClass;
+            if (cls != null && cls.Context == context) {
+                return cls;
+            }
+            object value;
+            cls = context.ObjectClass.TryGetConstant(null, "Rational", out value) ? value as RubyClass : null;
+            // the Rational class, whose instances are RubyRationals
+            if (cls == null || cls.IsSingletonClass || cls.Name != "Rational" || cls.GetUnderlyingSystemType() != typeof(RubyRational)) {
+                return null;
+            }
+            _rationalClass = cls;
+            return cls;
+        }
+
+        /// <summary>
+        /// rational.rb's Rational.__new_internal__ (MRI's nurat_s_new_internal, which a C function like
+        /// Time#subsec calls without going through Kernel#Rational): a frozen Rational with the given parts,
+        /// which must already be canonical - in lowest terms, the denominator positive. Returns null when
+        /// the Rational class is not there to make one (rational.rb not loaded yet).
+        /// </summary>
+        internal static object CreateCanonicalRational(RubyContext/*!*/ context, BigInteger numerator, BigInteger denominator) {
+            Debug.Assert(denominator.Sign > 0 && BigInteger.GreatestCommonDivisor(numerator, denominator).IsOne);
+            RubyClass cls = GetRationalClass(context);
+            if (cls == null) {
+                return null;
+            }
+            return new RubyRational(cls, Protocols.Normalize(numerator), Protocols.Normalize(denominator));
         }
 
         #endregion
@@ -370,7 +837,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("binding", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("binding", RubyMethodAttributes.PublicSingleton)]
         public static Binding/*!*/ GetLocalScope(RubyScope/*!*/ scope, object self) {
-            var result = Binding.Create(scope, scope.RubyContext.RubyOptions.Compatibility < RubyCompatibility.Ruby19 ? self : scope.SelfObject);
+            var result = Binding.Create(scope, scope.SelfObject);
 
             // Binding#source_location is the line that called #binding
             string path;
@@ -394,11 +861,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("local_variables", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("local_variables", RubyMethodAttributes.PublicSingleton)]
         public static RubyArray/*!*/ GetLocalVariableNames(RubyScope/*!*/ scope, object self) {
-            // `?rest?', `?kw?' and the like are the compiler's: where anonymous and forwarded
-            // parameters, and the argument list a zsuper passes on, are kept
-            var names = scope.GetVisibleLocalNames();
-            names.RemoveAll(name => name.Length > 0 && name[0] == '?');
-            return new RubyArray(names.Count).AddRange(scope.RubyContext.StringifyIdentifiers(names));
+            return scope.GetLocalVariableSymbols();
         }
 
         [RubyMethod("caller", RubyMethodAttributes.PrivateInstance)]
@@ -623,17 +1086,13 @@ namespace IronRuby.Builtins {
         [RubyMethod("fail", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("fail", RubyMethodAttributes.PublicSingleton)]
         [RubyStackTraceHidden]
+        [ReceivesKeywords]
         public static void RaiseException(RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ storage0, BinaryOpStorage/*!*/ storage1,
             CallSiteStorage<Action<CallSite, Exception, object>>/*!*/ setBackTraceStorage,
             RubyScope/*!*/ scope, object self, params object[]/*!*/ args) {
 
             RubyContext context = scope.RubyContext;
             Exception exception = CreateExceptionToRaise(respondToStorage, storage0, storage1, setBackTraceStorage, context, args);
-#if DEBUG && FEATURE_THREAD && FEATURE_EXCEPTION_STATE
-            if (RubyOptions.UseThreadAbortForSyncRaise) {
-                RubyUtils.RaiseAsyncException(Thread.CurrentThread, exception);
-            }
-#endif
             if ((TracePoint.ActiveEvents & (int)TraceEvents.Raise) != 0) {
                 TracePoint.OnException(TraceEvents.Raise, scope, context, exception);
             }
@@ -643,18 +1102,13 @@ namespace IronRuby.Builtins {
             // hand those back again.
             if (!RubyExceptionData.GetInstance(exception).HasBacktrace) {
                 exception.RemoveData(typeof(Microsoft.Scripting.Interpreter.InterpretedFrameInfo));
+                RubyExceptionData.GetInstance(exception).ResetRaiseBacktrace();
             }
 
             // rethrow semantics, preserves the backtrace associated with the exception:
             throw exception;
         }
 
-        /// <summary>
-        /// Builds the exception `raise` would throw, without throwing it. Fiber#raise is written
-        /// in Ruby (Src/StdLib/ironruby/ruby4.rb) and has to hand the exception to another fiber,
-        /// so it needs the argument handling - including `cause:`, which MRI resolves in the
-        /// *calling* context - without the throw. Private, and not part of MRI's Kernel.
-        /// </summary>
         /// <summary>
         /// Where a source file that has run was when it started - see
         /// RubyContext.RegisterSourceFileLocation - or nil. Private, and not part of MRI's Kernel.
@@ -665,7 +1119,14 @@ namespace IronRuby.Builtins {
             return (result != null) ? context.EncodePath(result) : null;
         }
 
+        /// <summary>
+        /// Builds the exception `raise` would throw, without throwing it. Fiber#raise is written
+        /// in Ruby (Src/StdLib/ironruby/ruby4.rb) and has to hand the exception to another fiber,
+        /// so it needs the argument handling - including `cause:`, which MRI resolves in the
+        /// *calling* context - without the throw. Private, and not part of MRI's Kernel.
+        /// </summary>
         [RubyMethod("__build_exception__", RubyMethodAttributes.PrivateInstance)]
+        [ReceivesKeywords]
         public static Exception/*!*/ BuildException(RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ storage0, BinaryOpStorage/*!*/ storage1,
             CallSiteStorage<Action<CallSite, Exception, object>>/*!*/ setBackTraceStorage,
             RubyContext/*!*/ context, object self, params object[]/*!*/ args) {
@@ -701,28 +1162,37 @@ namespace IronRuby.Builtins {
             }
 
             Exception exception;
+            // made here, from a String or a class whose #exception, #new and #initialize run no Ruby code: nothing can have kept it
+            bool unkept;
             if (args.Length == 0) {
                 // bare `raise` re-raises $!, or a fresh RuntimeError with an empty message.
                 exception = bareRaiseReRaisesCurrentException ? context.CurrentException : null;
+                unkept = exception == null;
                 if (exception == null) {
                     exception = RubyExceptionData.InitializeException(new RuntimeError(""), MutableString.CreateEmpty());
                 }
             } else {
+                unkept = args[0] is MutableString || args[0] is RubyClass cls && RubyExceptionData.MakesUnkeptException(cls);
                 exception = MakeException(respondToStorage, storage0, storage1, args);
 
                 if (args.Length >= 3 && args[2] != null) {
+                    if (!(args[2] is MutableString || args[2] is RubyArray)) {
+                        throw RubyExceptions.CreateTypeError("backtrace must be an Array of String or an Array of Thread::Backtrace::Location");
+                    }
                     var site = setBackTraceStorage.GetCallSite("set_backtrace", 1);
                     site.Target(site, exception, args[2]);
                 }
             }
 
             SetCause(context, exception, hasCause, cause);
+            RubyExceptionData.GetInstance(exception).RaisedUnkept = unkept;
 
             // An exception with no backtrace - new, or cleared by set_backtrace(nil) - gets one from
             // where it is raised now. The interpreter keeps the frames of the first throw on the
             // exception and would otherwise report those again.
             if (!RubyExceptionData.GetInstance(exception).HasBacktrace) {
                 exception.SetData(typeof(Microsoft.Scripting.Interpreter.InterpretedFrameInfo), null);
+                RubyExceptionData.GetInstance(exception).ResetRaiseBacktrace();
             }
             return exception;
         }
@@ -960,25 +1430,58 @@ namespace IronRuby.Builtins {
 
         #region clone, dup
 
+        /// <summary>
+        /// Kernel#clone(freeze: nil) (kernel.rb in MRI). It was a prelude method with the keyword, in front of
+        /// this one: a Ruby keyword-parameter entry on every #clone, ~2x the cost of #dup. A freeze: of nil is
+        /// a clone without the option; true or false is handed on to #initialize_clone (__ir_clone_with_freeze__).
+        /// </summary>
         [RubyMethod("clone")]
         public static object/*!*/ Clone(
             CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ initializeCopyStorage,
+            CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ initializeCloneStorage,
             CallSiteStorage<Func<CallSite, RubyClass, object>>/*!*/ allocateStorage,
-            object self) {
+            object self, [Keywords, Optional]object options) {
 
+            if (options != Missing.Value) {
+                var keywords = options as Hash;
+                if (keywords == null || !keywords.IsKeywordArguments) {
+                    throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 1, expected 0)");
+                }
+                var context = allocateStorage.Context;
+                object freeze = null;
+                List<string> unknown = null;
+                foreach (var entry in keywords) {
+                    var key = entry.Key as RubySymbol;
+                    if (key == null || key.ToString() != "freeze") {
+                        (unknown ??= new List<string>()).Add(context.Inspect(entry.Key).ToString());
+                    } else {
+                        freeze = entry.Value;
+                    }
+                }
+                if (unknown != null) {
+                    throw RubyExceptions.CreateArgumentError("unknown keyword{0}: {1}", unknown.Count > 1 ? "s" : "", String.Join(", ", unknown));
+                }
+                if (freeze != null) {
+                    if (!(freeze is bool)) {
+                        throw RubyExceptions.CreateArgumentError("unexpected value for freeze: {0}",
+                            RubyExceptions.MessageTypeName(context.GetClassName(freeze)));
+                    }
+                    return CloneWithFreeze(initializeCloneStorage, allocateStorage, self, (bool)freeze);
+                }
+            }
             return Clone(initializeCopyStorage, allocateStorage, true, self);
         }
 
         /// <summary>
-        /// What Object#clone(freeze:) in the prelude calls once it knows a freeze: value was
-        /// given. MRI passes that value on to #initialize_clone, and freezes the copy - or leaves
-        /// it alone - according to it rather than according to the original.
+        /// Object identity for the prelude, BasicObject#equal?'s, which an object's own #equal? cannot change:
+        /// Kernel#puts asks it whether it is running on $stdout itself, and a writer whose #equal? said no sent
+        /// it round for ever.
         /// </summary>
-        /// <summary>
-        /// `pattern === value' for the prelude's Enumerator::Lazy#grep/grep_v. A Regexp pattern
-        /// stores its match (or nil) as $~ of <paramref name="target"/>'s scope, the frame MRI's
-        /// C implementation would have set it in, rather than in the prelude method's own.
-        /// </summary>
+        [RubyMethod("__ir_equal__", RubyMethodAttributes.PrivateInstance)]
+        public static bool IsSameObject(object self, object other) {
+            return BasicObjectOps.IsEqual(self, other);
+        }
+
         /// <summary>
         /// MRI's rb_inspect for the prelude: #inspect, escaped when its result is in an
         /// encoding the output cannot take (see RubyContext.Inspect).
@@ -994,12 +1497,14 @@ namespace IronRuby.Builtins {
         /// itself is the prelude's __ir_gets__ / __ir_readline__.
         /// </summary>
         [RubyMethod("__ir_argf_gets__", RubyMethodAttributes.PrivateInstance)]
+        [ReceivesKeywords]
         public static object ArgfGets(CallSiteStorage<Func<CallSite, object, RubyArray, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, params object[]/*!*/ args) {
             return ArgfRead(storage, scope, self, "__ir_gets__", args);
         }
 
         [RubyMethod("__ir_argf_readline__", RubyMethodAttributes.PrivateInstance)]
+        [ReceivesKeywords]
         public static object ArgfReadline(CallSiteStorage<Func<CallSite, object, RubyArray, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, params object[]/*!*/ args) {
             return ArgfRead(storage, scope, self, "__ir_readline__", args);
@@ -1055,6 +1560,46 @@ namespace IronRuby.Builtins {
                 new Binding(scope), (block != null) ? block.Proc : null);
         }
 
+        /// <summary>
+        /// The prelude's "does obj answer this message" (the conversions in rational.rb and complex.rb ask it of
+        /// whatever they are handed - a BasicObject included, which has no #respond_to?): true if obj has the method
+        /// in any visibility, otherwise what its #respond_to? says if it has a public or protected one. An object
+        /// that can have no singleton class (an Integer, a Float, a Symbol, a frozen String) is asked #respond_to?.
+        /// The lookup is the one `class &lt;&lt; obj; self; end.method_defined?' made, but on the class obj has - its
+        /// singleton class only if it already has one: making one to ask through gave every value converted (each
+        /// Rational of every Time#subsec) a class of its own, which each call site it reached then had to bind afresh.
+        /// </summary>
+        [RubyMethod("__ir_responds_to__", RubyMethodAttributes.PrivateInstance)]
+        public static bool RespondsTo(ConversionStorage<string>/*!*/ stringCast, RespondToStorage/*!*/ respondToStorage,
+            object self, object obj, object methodName) {
+
+            var context = respondToStorage.Context;
+            var respondToSite = respondToStorage.GetCallSite();
+            if (!RubyUtils.CanDefineSingletonMethod(obj)) {
+                return Protocols.IsTrue(respondToSite.Target(respondToSite, obj, methodName));
+            }
+
+            // method_defined? || private_method_defined?, as Module#method_defined? answers them:
+            string name = Protocols.CastToSymbol(stringCast, methodName);
+            RubyClass cls = context.GetImmediateClassOf(obj);
+            if (GetDefinedVisibility(cls, name) != RubyMethodVisibility.None) {
+                return true;
+            }
+
+            var respondTo = GetDefinedVisibility(cls, "respond_to?");
+            return (respondTo == RubyMethodVisibility.Public || respondTo == RubyMethodVisibility.Protected) &&
+                Protocols.IsTrue(respondToSite.Target(respondToSite, obj, methodName));
+        }
+
+        private static RubyMethodVisibility GetDefinedVisibility(RubyClass/*!*/ cls, string/*!*/ name) {
+            var method = cls.GetMethodLookup(name);
+            if (!method.Found) {
+                return RubyMethodVisibility.None;
+            }
+            var libraryMethod = method.Info as RubyLibraryMethodInfo;
+            return (libraryMethod != null && libraryMethod.IsNotImplemented) ? RubyMethodVisibility.None : method.Visibility;
+        }
+
         [RubyMethod("__ir_clone_with_freeze__", RubyMethodAttributes.PrivateInstance)]
         public static object/*!*/ CloneWithFreeze(
             CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ initializeCopyStorage,
@@ -1067,7 +1612,7 @@ namespace IronRuby.Builtins {
             if (!RubyUtils.TryDuplicateObject(initializeCopyStorage, allocateStorage, self, freeze, out result)) {
                 return self;
             }
-            return context.TaintObjectBy(result, self);
+            return result;
         }
 
         [RubyMethod("dup")]
@@ -1093,7 +1638,7 @@ namespace IronRuby.Builtins {
                 // themselves in ruby4.rb) answer the receiver rather than TypeError("can't dup NilClass").
                 return self;
             }
-            return context.TaintObjectBy(result, self);
+            return result;
         }
 
         #endregion
@@ -1168,7 +1713,7 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region frozen?, freeze, tainted?, taint, untaint, trust, untrust, untrusted?
+        #region frozen?, freeze
 
         [RubyMethod("frozen?")]
         public static bool Frozen([NotNull]MutableString/*!*/ self) {
@@ -1244,6 +1789,13 @@ namespace IronRuby.Builtins {
         /// "Fixnum as Symbol" path and produce a NameError about an unrelated name.
         /// </summary>
         private static string/*!*/ ToVariableName(ConversionStorage<string>/*!*/ stringCast, object name) {
+            // what the conversion site does for these two (ConvertToSymbolAction.TryConvertStringOrSymbol), without the site
+            if (name is RubySymbol symbol) {
+                return symbol.ToString();
+            }
+            if (name is MutableString str) {
+                return str.ConvertToString();
+            }
             return Protocols.CastToSymbol(stringCast, name);
         }
 
@@ -1265,9 +1817,9 @@ namespace IronRuby.Builtins {
             if (!context.TryGetInstanceVariable(self, name, out value)) {
                 // We didn't find it, check if the name is valid
                 RubyUtils.CheckInstanceVariableName(context, self, name, nameArg);
-                return null;
+                value = null;
             }
-            return value;
+            return context.RactorsStarted ? RactorIsolation.CheckInstanceVariableRead(context, self, name, value) : value;
         }
 
         [RubyMethod("instance_variable_set")]
@@ -1275,6 +1827,9 @@ namespace IronRuby.Builtins {
             RubyContext/*!*/ context, object self, object nameArg, object value) {
             string name = ToVariableName(stringCast, nameArg);
             RubyUtils.CheckInstanceVariableName(context, self, name, nameArg);
+            if (context.RactorsStarted) {
+                RactorIsolation.CheckInstanceVariableWrite(context, self);
+            }
             context.SetInstanceVariable(self, name, value);
             return value;
         }
@@ -1321,6 +1876,9 @@ namespace IronRuby.Builtins {
         [RubyMethod("remove_instance_variable")]
         public static object RemoveInstanceVariable(RubyContext/*!*/ context, object/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name) {
             RubyUtils.CheckInstanceVariableName(context, self, name);
+            if (context.RactorsStarted) {
+                RactorIsolation.CheckInstanceVariableWrite(context, self);
+            }
 
             object value;
             if (!context.TryRemoveInstanceVariable(self, name, out value)) {
@@ -1337,6 +1895,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("global_variables", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("global_variables", RubyMethodAttributes.PublicSingleton)]
         public static RubyArray/*!*/ GetGlobalVariableNames(RubyContext/*!*/ context, object self) {
+            RactorIsolation.CheckGlobalVariables(context);
             RubyArray result = new RubyArray();
             lock (context.GlobalVariablesLock) {
                 foreach (KeyValuePair<string, GlobalVariable> global in context.GlobalVariables) {
@@ -1441,13 +2000,20 @@ namespace IronRuby.Builtins {
         [RubyMethod("autoload", RubyMethodAttributes.PublicSingleton)]
         public static void SetAutoloadedConstant(ConversionStorage<MutableString>/*!*/ toPath, RubyScope/*!*/ scope, object self,
             [DefaultProtocol, NotNull]string/*!*/ constantName, object path) {
-            ModuleOps.SetAutoloadedConstant(toPath, GetAutoloadOwner(scope), constantName, path);
+            ModuleOps.SetAutoloadedConstant(toPath, scope, GetAutoloadOwner(scope), constantName, path);
         }
 
         [RubyMethod("autoload?", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("autoload?", RubyMethodAttributes.PublicSingleton)]
         public static MutableString GetAutoloadedConstantPath(RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ constantName) {
             return ModuleOps.GetAutoloadedConstantPath(GetAutoloadOwner(scope), constantName);
+        }
+
+        [RubyMethod("autoload?", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("autoload?", RubyMethodAttributes.PublicSingleton)]
+        public static MutableString GetAutoloadedConstantPath(RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ constantName,
+            bool inherit) {
+            return ModuleOps.GetAutoloadedConstantPath(GetAutoloadOwner(scope), constantName, inherit);
         }
 
         #endregion
@@ -1463,10 +2029,10 @@ namespace IronRuby.Builtins {
             RubyClass cls = context.GetImmediateClassOf(self);
 
             // A refinement active where #respond_to? was called counts, as it does for a call. Without
-            // one - nearly always - the answer comes from the class's lock-free method-lookup cache,
-            // and the site keeps it while the class's method version stays the same.
+            // one with the name - nearly always - the answer comes from the class's lock-free
+            // method-lookup cache, and the site keeps it while the class's method version stays the same.
             int version = -1;
-            if (scope.GetActiveRefinements().IsEmpty) {
+            if (!context.IsRefinedMethodName(methodName) || scope.GetActiveRefinements().IsEmpty) {
                 bool answer;
                 if (respondToMissingStorage.TryGetAnswer(cls, methodName, includePrivate, out answer)) {
                     return answer;
@@ -1574,12 +2140,26 @@ namespace IronRuby.Builtins {
         //
         // The name is converted here rather than by the binder, so that a bad one is reported
         // from inside public_send, as MRI's backtrace has it.
+        // obj.public_send(:name): no argument list to make and splat again
         [RubyMethod("public_send")]
+        public static object PublicSendMessage(ConversionStorage<string>/*!*/ stringCast,
+            SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object>>/*!*/ sendStorage,
+            RubyScope/*!*/ scope, BlockParam block, object self, object name) {
+
+            string methodName = ToVariableName(stringCast, name);
+            var site = GetSendSite(sendStorage, scope, methodName, new RubyCallSignature(0,
+                RubyCallFlags.HasScope | RubyCallFlags.HasBlock | RubyCallFlags.IsInteropCall)
+            );
+            return site.Target(site, scope, self, block != null ? block.Proc : null);
+        }
+
+        [RubyMethod("public_send")]
+        [ReceivesKeywords]
         public static object PublicSendMessage(ConversionStorage<string>/*!*/ stringCast,
             SendSiteStorage<Func<CallSite, RubyScope, object, Proc, RubyArray, object>>/*!*/ sendStorage,
             RubyScope/*!*/ scope, BlockParam block, object self, object name, params object[]/*!*/ args) {
 
-            string methodName = Protocols.CastToSymbol(stringCast, name);
+            string methodName = ToVariableName(stringCast, name);
             var site = GetSendSite(sendStorage, scope, methodName, new RubyCallSignature(1,
                 RubyCallFlags.HasScope | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock | RubyCallFlags.IsInteropCall)
             );
@@ -1588,6 +2168,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 0
         [RubyMethod("send")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
             var site = GetSendSite(storage, scope, methodName,
@@ -1598,6 +2179,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 0&
         [RubyMethod("send")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
             var site = GetSendSite(storage, scope, methodName,
@@ -1608,6 +2190,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 1
         [RubyMethod("send")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1) {
@@ -1621,6 +2204,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 1&
         [RubyMethod("send")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1) {
@@ -1633,6 +2217,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 2
         [RubyMethod("send")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1, object arg2) {
@@ -1646,6 +2231,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 2&
         [RubyMethod("send")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1, object arg2) {
@@ -1658,6 +2244,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 3
         [RubyMethod("send")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1, object arg2, object arg3) {
@@ -1671,6 +2258,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 3&
         [RubyMethod("send")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1, object arg2, object arg3) {
@@ -1683,6 +2271,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: N
         [RubyMethod("send")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, RubyArray, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             params object[]/*!*/ args) {
@@ -1696,6 +2285,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: N&
         [RubyMethod("send")]
+        [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, RubyArray, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             params object[]/*!*/ args) {
@@ -1760,7 +2350,7 @@ namespace IronRuby.Builtins {
             RubyClass cls = context.GetClassOf(self);
             Type type = (asType != null) ? Protocols.ToType(context, asType) : null;
             if (!cls.TryGetClrMember(name, type, out info)) {
-                throw RubyExceptions.CreateNameError("undefined CLR method `{0}' for class `{1}'", name, cls.Name);
+                throw RubyExceptions.CreateNameError("undefined CLR method '{0}' for class '{1}'", name, cls.Name);
             }
 
             return new RubyMethod(self, info, name);
@@ -1814,7 +2404,7 @@ namespace IronRuby.Builtins {
                 if (info.Visibility == RubyMethodVisibility.Public) {
                     return new RubyMethod(self, info, name);
                 }
-                throw RubyExceptions.CreateNameError("method `{0}' for class `{1}' is {2}",
+                throw RubyExceptions.CreateNameError("method '{0}' for class '{1}' is {2}",
                     name, context.GetClassDisplayName(self),
                     info.Visibility == RubyMethodVisibility.Private ? "private" : "protected");
             }
@@ -1978,7 +2568,7 @@ namespace IronRuby.Builtins {
 
         private static RubyArray/*!*/ GetMethods(RubyContext/*!*/ context, object self, bool inherited, RubyMethodAttributes attributes) {
             RubyClass immediateClass = context.GetImmediateClassOf(self);
-            return ModuleOps.GetMethods(immediateClass, inherited, attributes);
+            return ModuleOps.GetMethods(immediateClass, inherited, attributes, null, true);
         }
 
         #endregion
@@ -1986,7 +2576,6 @@ namespace IronRuby.Builtins {
 
         #region `, exec, system, fork, 1.9: spawn
 
-#if FEATURE_PROCESS
         // Kernel#`, #exec, #system and #spawn are in the prelude, on top of Process.spawn:
         // they are the same call with different treatment of the child, and the argument
         // handling they share - an env hash, a [command, argv0] pair, an options hash - is
@@ -2002,7 +2591,6 @@ namespace IronRuby.Builtins {
             throw RubyExceptions.CreateNotImplementedError("fork() function is unimplemented on this machine");
         }
 
-#endif
         #endregion
 
         #region select, sleep
@@ -2010,48 +2598,65 @@ namespace IronRuby.Builtins {
         [RubyMethod("select", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("select", RubyMethodAttributes.PublicSingleton)]
         public static RubyArray Select(RespondToStorage/*!*/ respondToStorage,
-            CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage, UnaryOpStorage/*!*/ toFloatStorage,
             RubyContext/*!*/ context, object self,
             object read, [Optional]object write, [Optional]object error, [Optional]object timeout) {
-            return RubyIOOps.Select(respondToStorage, toIoStorage, context, null, read, write, error, timeout);
+            return RubyIOOps.Select(respondToStorage, toIoStorage, toFloatStorage, context, null, read, write, error, timeout);
         }
 
-#if FEATURE_THREAD
-        [RubyMethod("sleep", RubyMethodAttributes.PrivateInstance, BuildConfig = "FEATURE_THREAD")]
-        [RubyMethod("sleep", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_THREAD")]
+        [RubyMethod("sleep", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("sleep", RubyMethodAttributes.PublicSingleton)]
         public static void Sleep(object self) {
             ThreadOps.DoSleep();
         }
 
-        [RubyMethod("sleep", RubyMethodAttributes.PrivateInstance, BuildConfig = "FEATURE_THREAD")]
-        [RubyMethod("sleep", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_THREAD")]
+        [RubyMethod("sleep", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("sleep", RubyMethodAttributes.PublicSingleton)]
         public static int Sleep(object self, int seconds) {
             if (seconds < 0) {
-                throw RubyExceptions.CreateArgumentError("time interval must be positive");
+                throw RubyExceptions.CreateArgumentError("time interval must not be negative");
             }
 
-            long ms = seconds * 1000;
+            long ms = seconds * 1000L;
             return ThreadOps.DoSleep(ms > Int32.MaxValue ? Timeout.Infinite : (int)ms);
         }
 
-        [RubyMethod("sleep", RubyMethodAttributes.PrivateInstance, BuildConfig = "FEATURE_THREAD")]
-        [RubyMethod("sleep", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_THREAD")]
+        [RubyMethod("sleep", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("sleep", RubyMethodAttributes.PublicSingleton)]
         public static int Sleep(object self, double seconds) {
+            // MRI's rb_time_interval
+            if (Double.IsNaN(seconds)) {
+                throw RubyExceptions.CreateRangeError("NaN out of Time range");
+            }
             if (seconds < 0) {
-                throw RubyExceptions.CreateArgumentError("time interval must be positive");
+                throw RubyExceptions.CreateArgumentError("time interval must not be negative");
             }
 
             double ms = seconds * 1000;
             return ms > Int32.MaxValue ? ThreadOps.DoSleep(Timeout.Infinite) : ThreadOps.DoSleep(ms);
         }
-#endif
+
+        [RubyMethod("sleep", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("sleep", RubyMethodAttributes.PublicSingleton)]
+        public static int Sleep(RubyContext/*!*/ context, object self, object seconds) {
+            switch (seconds) {
+                case null:
+                    // A nil duration (3.3) is the same as none: sleep until woken.
+                    ThreadOps.DoSleep();
+                    return 0;
+                case BigInteger:
+                    throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
+                default:
+                    // Numerics that answer #divmod (Rational) are split up by the prelude's Kernel#sleep.
+                    throw RubyExceptions.CreateTypeError("can't convert {0} into time interval", context.GetClassDisplayName(seconds));
+            }
+        }
 
         #endregion
 
         #region test
-#if FEATURE_FILESYSTEM
-        [RubyMethod("test", RubyMethodAttributes.PrivateInstance, BuildConfig = "FEATURE_FILESYSTEM")]
-        [RubyMethod("test", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("test", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("test", RubyMethodAttributes.PublicSingleton)]
         public static object Test(ConversionStorage<MutableString>/*!*/ toPath, object self, [NotNull]MutableString/*!*/ cmd, object path) {
             if (cmd.IsEmpty) {
                 throw RubyExceptions.CreateTypeConversionError("String", "Integer");
@@ -2059,8 +2664,8 @@ namespace IronRuby.Builtins {
             return Test(toPath, self, cmd.GetChar(0), path);
         }
 
-        [RubyMethod("test", RubyMethodAttributes.PrivateInstance, BuildConfig = "FEATURE_FILESYSTEM")]
-        [RubyMethod("test", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("test", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("test", RubyMethodAttributes.PublicSingleton)]
         public static object Test(ConversionStorage<MutableString>/*!*/ toPath, object self, [DefaultProtocol]int cmd, object path) {
             RubyContext context = toPath.Context;
             MutableString pathStr = Protocols.CastToPath(toPath, path);
@@ -2107,8 +2712,8 @@ namespace IronRuby.Builtins {
             }
         }
 
-        [RubyMethod("test", RubyMethodAttributes.PrivateInstance, BuildConfig = "FEATURE_FILESYSTEM")]
-        [RubyMethod("test", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("test", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("test", RubyMethodAttributes.PublicSingleton)]
         public static object Test(ConversionStorage<MutableString>/*!*/ toPath, object self, [NotNull]MutableString/*!*/ cmd,
             object path1, object path2) {
 
@@ -2118,8 +2723,8 @@ namespace IronRuby.Builtins {
             return Test(toPath, self, cmd.GetChar(0), path1, path2);
         }
 
-        [RubyMethod("test", RubyMethodAttributes.PrivateInstance, BuildConfig = "FEATURE_FILESYSTEM")]
-        [RubyMethod("test", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("test", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("test", RubyMethodAttributes.PublicSingleton)]
         public static object Test(ConversionStorage<MutableString>/*!*/ toPath, object self, [DefaultProtocol]int cmd,
             object path1, object path2) {
 
@@ -2156,7 +2761,6 @@ namespace IronRuby.Builtins {
             FileSystemInfo fsi = TryStat(context, path, followLinks);
             return fsi != null && predicate(fsi);
         }
-#endif
         #endregion
 
         #region syscall, trap
@@ -2169,24 +2773,22 @@ namespace IronRuby.Builtins {
             throw RubyExceptions.CreateNotImplementedError("syscall() function is unimplemented on this machine");
         }
 
-#if FEATURE_PROCESS
-        [RubyMethod("trap", RubyMethodAttributes.PrivateInstance, BuildConfig = "FEATURE_PROCESS")]
-        [RubyMethod("trap", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_PROCESS")]
+        [RubyMethod("trap", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("trap", RubyMethodAttributes.PublicSingleton)]
         public static object Trap(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ callStorage,
             ConversionStorage<MutableString>/*!*/ stringCast,
             RubyContext/*!*/ context, object self, object signalId, object command) {
             return Signal.Trap(callStorage, stringCast, context, self, signalId, command);
         }
 
-        [RubyMethod("trap", RubyMethodAttributes.PrivateInstance, BuildConfig = "FEATURE_PROCESS")]
-        [RubyMethod("trap", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_PROCESS")]
+        [RubyMethod("trap", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("trap", RubyMethodAttributes.PublicSingleton)]
         public static object Trap(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ callStorage,
             ConversionStorage<MutableString>/*!*/ stringCast,
             RubyContext/*!*/ context, [NotNull]BlockParam/*!*/ block, object self, object signalId) {
             return Signal.Trap(callStorage, stringCast, context, block, self, signalId);
         }
 
-#endif
         #endregion
 
         #region abort, exit, exit!, at_exit
@@ -2297,12 +2899,17 @@ namespace IronRuby.Builtins {
         [RubyMethod("require", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("require", RubyMethodAttributes.PublicSingleton)]
         public static bool Require(ConversionStorage<MutableString>/*!*/ toPath, RubyScope/*!*/ scope, object self, object libraryName) {
-            return scope.RubyContext.Loader.LoadFile(
-                scope.GlobalScope.Scope, 
-                self, 
-                Protocols.CastToPath(toPath, libraryName), 
-                LoadFlags.Require | LoadFlags.WarnCircular
-            );
+            var path = Protocols.CastToPath(toPath, libraryName);
+            // a non-main Ractor has the main Ractor load the file (Ractor._require)
+            return RactorIsolation.IsNonMain(scope.RubyContext) ? RequireInMainRactor(scope, self, path) : Require(scope, self, path);
+        }
+
+        private static bool Require(RubyScope/*!*/ scope, object self, MutableString/*!*/ path) {
+            return scope.RubyContext.Loader.LoadFile(scope.GlobalScope.Scope, self, path, LoadFlags.Require | LoadFlags.WarnCircular);
+        }
+
+        private static bool RequireInMainRactor(RubyScope/*!*/ scope, object self, MutableString/*!*/ path) {
+            return RubyRactor.RunAsMain(() => Require(scope, self, path));
         }
 
         [RubyMethod("load_assembly", RubyMethodAttributes.PrivateInstance)]
@@ -2311,7 +2918,7 @@ namespace IronRuby.Builtins {
             [DefaultProtocol, NotNull]MutableString/*!*/ assemblyName, [DefaultProtocol, Optional, NotNull]MutableString libraryNamespace) {
 
             string initializer = libraryNamespace != null ? LibraryInitializer.GetFullTypeName(libraryNamespace.ConvertToString()) : null;
-            return context.Loader.LoadAssembly(assemblyName.ConvertToString(), initializer, true, true) != null;
+            return context.Loader.LoadAssembly(assemblyName.ConvertToString(), initializer, true) != null;
         }
 
         [RubyMethod("using_clr_extensions", RubyMethodAttributes.PrivateInstance)]
@@ -2323,12 +2930,13 @@ namespace IronRuby.Builtins {
             } else if (namespaceModule.NamespaceTracker == null) {
                 throw RubyExceptions.CreateNotClrNamespaceError(namespaceModule);
             } else if (context != namespaceModule.Context) {
-                throw RubyExceptions.CreateTypeError("Cannot use namespace `{0}' defined in a foreign runtime #{1}",
+                throw RubyExceptions.CreateTypeError("Cannot use namespace '{0}' defined in a foreign runtime #{1}",
                     namespaceModule.NamespaceTracker.Name, namespaceModule.Context.RuntimeId);
             } else {
                 ns = namespaceModule.NamespaceTracker.Name;
             }
 
+            context.ReportUsingClrExtensionsDeprecation(namespaceModule != null ? namespaceModule.Name : null);
             context.ActivateExtensions(ns);
         }
 
@@ -2358,14 +2966,10 @@ namespace IronRuby.Builtins {
         private static RubyIO CheckOpenPipe(RubyContext/*!*/ context, MutableString path, IOMode mode) {
             string fileName = path.ConvertToString();
             if (fileName.Length > 0 && fileName[0] == '|') {
-#if FEATURE_PROCESS
                 if (fileName.Length > 1 && fileName[1] == '-') {
                     throw new NotImplementedError("forking a process is not supported");
                 }
                 return RubyIOOps.OpenPipe(context, path.GetSlice(1), mode);
-#else
-                throw new NotSupportedException("open cannot create a subprocess");
-#endif
             }
             return null;
         }
@@ -2500,6 +3104,12 @@ namespace IronRuby.Builtins {
             PrintOps.Print(writeStorage, writeStorage.Context.StandardOutput, args);
         }
 
+        // MRI's rb_f_printf prints nothing for no arguments
+        [RubyMethod("printf", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("printf", RubyMethodAttributes.PublicSingleton)]
+        public static void PrintFormatted(object self) {
+        }
+
         // this overload is called only if the first parameter is string:
         [RubyMethod("printf", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("printf", RubyMethodAttributes.PublicSingleton)]
@@ -2575,9 +3185,23 @@ namespace IronRuby.Builtins {
             PrintOps.Puts(writeStorage, tosConversion, tryToAry, writeStorage.Context.StandardOutput, args);
         }
 
+        /// <summary>
+        /// Ruby 4.0's hook for naming the instance variables #inspect shows: nil, all of them.
+        /// RubyUtils.InspectObject does not call this one, which would make every #inspect pay for a call.
+        /// </summary>
+        [RubyMethod("instance_variables_to_inspect", RubyMethodAttributes.PrivateInstance)]
+        public static object GetInstanceVariablesToInspect(object self) {
+            return null;
+        }
+
         [RubyMethod("display")]
         public static void Display(BinaryOpStorage/*!*/ writeStorage, object self) {
             Protocols.Write(writeStorage, writeStorage.Context.StandardOutput, self);
+        }
+
+        [RubyMethod("display")]
+        public static void Display(BinaryOpStorage/*!*/ writeStorage, object self, object port) {
+            Protocols.Write(writeStorage, port, self);
         }
 
         [RubyMethod("warn", RubyMethodAttributes.PrivateInstance)]
@@ -2643,7 +3267,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("gets", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("gets", RubyMethodAttributes.PublicSingleton)]
         public static object ReadInputLine(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ storage, RubyScope/*!*/ scope, object self,
-            MutableString separator, [NotNull]Hash/*!*/ options) {
+            MutableString separator, [Keywords, NotNull]Hash/*!*/ options) {
 
             if (!options.IsKeywordArguments) {
                 throw RubyExceptions.CreateImplicitConversionError("Hash", "Integer");
@@ -2662,7 +3286,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("gets", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("gets", RubyMethodAttributes.PublicSingleton)]
         public static object ReadInputLine(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ storage, RubyScope/*!*/ scope, object self,
-            [NotNull]Hash/*!*/ options) {
+            [Keywords, NotNull]Hash/*!*/ options) {
             return ReadInputLine(storage, scope, self, storage.Context.InputSeparator, options);
         }
 
@@ -2680,22 +3304,79 @@ namespace IronRuby.Builtins {
         //sub
         //sub!
 
+        // Format errors are common, and MRI's backtrace names the method as it was called: Kernel#format,
+        // Kernel#sprintf, Kernel.format or Kernel.sprintf. A backtrace here names a library frame by its CLR
+        // method, so each is one of its own. NoInlining keeps the frame of the one-line ones.
+        //
+        // MRI: a missing format string is "too few arguments", not an arity error.
         [RubyMethod("format", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("format", RubyMethodAttributes.PublicSingleton)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Sprintf")]
+        public static MutableString/*!*/ Format(object self) {
+            throw RubyExceptions.CreateArgumentError("too few arguments");
+        }
+
         [RubyMethod("sprintf", RubyMethodAttributes.PrivateInstance)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static MutableString/*!*/ Sprintf(object self) {
+            throw RubyExceptions.CreateArgumentError("too few arguments");
+        }
+
+        [RubyMethod("format", RubyMethodAttributes.PublicSingleton)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Sprintf")]
+        public static MutableString/*!*/ SingletonFormat(object self) {
+            throw RubyExceptions.CreateArgumentError("too few arguments");
+        }
+
         [RubyMethod("sprintf", RubyMethodAttributes.PublicSingleton)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Sprintf")]
+        public static MutableString/*!*/ SingletonSprintf(object self) {
+            throw RubyExceptions.CreateArgumentError("too few arguments");
+        }
+
+        [RubyMethod("format", RubyMethodAttributes.PrivateInstance)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Sprintf")]
+        public static MutableString/*!*/ Format(StringFormatterSiteStorage/*!*/ storage,
+            object self, [DefaultProtocol, NotNull]MutableString/*!*/ format, params object[]/*!*/ args) {
+            return Sprintf(storage, format, args);
+        }
+
+        [RubyMethod("sprintf", RubyMethodAttributes.PrivateInstance)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         public static MutableString/*!*/ Sprintf(StringFormatterSiteStorage/*!*/ storage,
             object self, [DefaultProtocol, NotNull]MutableString/*!*/ format, params object[]/*!*/ args) {
+            return Sprintf(storage, format, args);
+        }
 
+        [RubyMethod("format", RubyMethodAttributes.PublicSingleton)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Sprintf")]
+        public static MutableString/*!*/ SingletonFormat(StringFormatterSiteStorage/*!*/ storage,
+            object self, [DefaultProtocol, NotNull]MutableString/*!*/ format, params object[]/*!*/ args) {
+            return Sprintf(storage, format, args);
+        }
+
+        [RubyMethod("sprintf", RubyMethodAttributes.PublicSingleton)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Sprintf")]
+        public static MutableString/*!*/ SingletonSprintf(StringFormatterSiteStorage/*!*/ storage,
+            object self, [DefaultProtocol, NotNull]MutableString/*!*/ format, params object[]/*!*/ args) {
+            return Sprintf(storage, format, args);
+        }
+
+        internal static MutableString/*!*/ Sprintf(StringFormatterSiteStorage/*!*/ storage, MutableString/*!*/ format, object[]/*!*/ args) {
+            // StringFormatter refuses a format in an ASCII incompatible encoding
             return new StringFormatter(storage, format.ConvertToString(), format.Encoding, args).Format();
         }
 
         #endregion
 
         #region rand, srand
-#if FEATURE_CRYPTOGRAPHY
-        [RubyMethod("srand", RubyMethodAttributes.PrivateInstance, BuildConfig = "FEATURE_CRYPTOGRAPHY")]
-        [RubyMethod("srand", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_CRYPTOGRAPHY")]
+        [RubyMethod("srand", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("srand", RubyMethodAttributes.PublicSingleton)]
         public static object SeedRandomNumberGenerator(RubyContext/*!*/ context, object self) {
             // This should use a combination of the time, the process id, and a sequence number.
 
@@ -2708,14 +3389,13 @@ namespace IronRuby.Builtins {
             return SeedRandomNumberGenerator(context, self, secureRandomNumber);
         }
 
-        [RubyMethod("srand", RubyMethodAttributes.PrivateInstance, BuildConfig = "FEATURE_CRYPTOGRAPHY")]
-        [RubyMethod("srand", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_CRYPTOGRAPHY")]
+        [RubyMethod("srand", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("srand", RubyMethodAttributes.PublicSingleton)]
         public static object SeedRandomNumberGenerator(RubyContext/*!*/ context, object self, [DefaultProtocol]IntegerValue seed) {
             object result = context.RandomNumberGeneratorSeed;
             context.SeedRandomNumberGenerator(seed);
             return result;
         }
-#endif
         [RubyMethod("rand", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("rand", RubyMethodAttributes.PublicSingleton)]
         public static double Random(RubyContext/*!*/ context, object self) {
@@ -2770,13 +3450,25 @@ namespace IronRuby.Builtins {
 
         #region set_trace_func, trace_var, untrace_var
 
+        /// <summary>
+        /// set_trace_func(proc): replaces the hook of every earlier call with one that is called with
+        /// (event, file, line, id, binding, klass) for each of MRI's RUBY_EVENT_ALL events on any
+        /// thread. It is a TracePoint underneath, as MRI's is.
+        /// </summary>
         [RubyMethod("set_trace_func", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("set_trace_func", RubyMethodAttributes.PublicSingleton)]
-        public static Proc SetTraceListener(RubyContext/*!*/ context, object self, Proc listener) {
-            if (listener != null && !context.RubyOptions.EnableTracing) {
-                throw new NotSupportedException("Tracing is not supported unless -trace option is specified.");
+        public static Proc SetTraceFunc(RubyContext/*!*/ context, object self, object traceFunc) {
+            Proc proc = CastTraceFunc(traceFunc);
+            TracePoint.SetTraceFunc(context, proc, null);
+            return proc;
+        }
+
+        internal static Proc CastTraceFunc(object traceFunc) {
+            var proc = traceFunc as Proc;
+            if (traceFunc != null && proc == null) {
+                throw RubyExceptions.CreateTypeError("trace_func needs to be Proc");
             }
-            return context.TraceListener = listener;
+            return proc;
         }
 
         //trace_var
@@ -2788,6 +3480,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("to_enum")]
         [RubyMethod("enum_for")]
+        [ReceivesKeywords]
         public static Enumerator/*!*/ Create(object self, [DefaultProtocol, NotNull]string/*!*/ enumeratorName, params object[]/*!*/ targetParameters) {
             return new Enumerator(self, enumeratorName, targetParameters);
         }

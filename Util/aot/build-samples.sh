@@ -13,7 +13,7 @@ OUT="${1:-/tmp/ironruby-aot}"
 export DOTNET_ROOT=/usr/local/dotnet
 : "${DLR_SOURCE_DIR:=/root/workspace/dlr/src/core}"
 
-/usr/local/dotnet/dotnet build "$AOT_DIR/IronRuby.Aot" -c Release -p:DlrSourceDir="$DLR_SOURCE_DIR" 2>&1 | grep -E " error |rror\(s\)" | sort -u
+/usr/local/dotnet/dotnet build "$AOT_DIR/IronRuby.Aot" -c Release -p:DlrSourceDir="$DLR_SOURCE_DIR" -p:IronRubyAotHostTfm=net10.0 2>&1 | grep -E " error |rror\(s\)" | sort -u
 AOT="$AOT_DIR/IronRuby.Aot/bin/Release/net10.0/IronRuby.Aot"
 [ -x "$AOT" ] || { echo "build failed" >&2; exit 1; }
 

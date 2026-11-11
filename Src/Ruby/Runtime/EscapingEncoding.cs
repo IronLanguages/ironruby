@@ -13,14 +13,12 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_ENCODING
 
 using System;
 using System.Buffers;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Unicode;
-using IronRuby.Builtins;
 
 namespace IronRuby.Runtime {
 
@@ -272,6 +270,31 @@ namespace IronRuby.Runtime {
             return false;
         }
 
+        // Encoding's own string overloads copy the string into a char[] first - twice for GetBytes(string), which is how
+        // every source file reaches prism (3 MB of the 60 MB `ir -e 1` allocates). Without surrogates there is nothing
+        // unpaired, and the inner encoding answers as the char[] overloads below would.
+        public override int GetByteCount(string/*!*/ s) {
+            return HasNoSurrogates(s) ? _inner.GetByteCount(s) : base.GetByteCount(s);
+        }
+
+        public override byte[]/*!*/ GetBytes(string/*!*/ s) {
+            return HasNoSurrogates(s) ? _inner.GetBytes(s) : base.GetBytes(s);
+        }
+
+        private static bool HasNoSurrogates(string s) {
+            if (s == null) {
+                return false;
+            }
+            // A plain loop rather than IndexOfAnyInRange: that generic method has no precompiled code and its JIT
+            // compilation (~2 ms) takes longer than this loop does over the whole prelude.
+            foreach (char c in s) {
+                if (char.IsSurrogate(c)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         public override int GetByteCount(char[]/*!*/ chars, int index, int count) {
             if (!ContainsUnpaired(chars, index, count)) {
                 return _inner.GetByteCount(chars, index, count);
@@ -341,4 +364,3 @@ namespace IronRuby.Runtime {
         }
     }
 }
-#endif

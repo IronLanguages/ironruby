@@ -1,7 +1,7 @@
 # IronRuby Notepad: Windows Notepad, written in Ruby, on IronRuby and Windows Forms.
 #
-#   notepad.cmd [file]              double-click it, drop a file on it, or run it
-#   ..\..\ir.cmd notepad.rb [file]  the same, keeping the console for Ruby's output
+#   notepad.cmd [file]                    double-click it, drop a file on it, or run it
+#   ..\..\ironruby.cmd notepad.rb [file]  the same, keeping the console for Ruby's output
 #
 # What Notepad does, this does: New, New Window, Open, Save, Save As, Page Setup and
 # Print with a header and page numbers; Undo and Redo, Cut, Copy, Paste, Delete, Find,
@@ -50,8 +50,9 @@ module IronRubyNotepad
       D::Point.new(*point[0, 8].unpack("l2"))
     end
 
-    # ir.exe is a console program, so started from Explorer it gets a console window of
-    # its own. When nobody else is attached to it, let go of it: that closes the window.
+    # ir.exe and ironruby.exe are console programs, so started from Explorer they get a
+    # console window of their own. When nobody else is attached to it, let go of it: that
+    # closes the window. Under ironrubyw.exe, which notepad.cmd uses, there is none.
     def self.detach_console_if_alone
       list = Fiddle::Pointer.malloc(64)
       return unless CONSOLE_PROCESSES.call(list, 16) == 1

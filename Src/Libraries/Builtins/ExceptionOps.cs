@@ -13,29 +13,17 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
-using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
-using System.Dynamic;
-using System.Diagnostics;
 using System.Reflection;
-using IronRuby.Compiler;
 using IronRuby.Compiler.Generation;
 
 namespace IronRuby.Builtins {
-    using Ast = Expression;
-    using AstFactory = IronRuby.Compiler.Ast.AstFactory;
-    using AstUtils = Microsoft.Scripting.Ast.Utils;
 
     // Exception
     // -- fatal
@@ -136,6 +124,16 @@ namespace IronRuby.Builtins {
             return RubyExceptionData.GetInstance(self).Cause;
         }
 
+        /// <summary>
+        /// The backtrace of the raise when a #set_backtrace of the exception's own was handed it
+        /// (RubyExceptionData.RaiseBacktrace): #backtrace_locations in the prelude (ruby4.rb) falls
+        /// back to it when that method did not store it, as MRI keeps the locations of the raise.
+        /// </summary>
+        [RubyMethod("__raise_backtrace__", RubyMethodAttributes.PrivateInstance)]
+        public static RubyArray GetRaiseBacktrace(Exception/*!*/ self) {
+            return RubyExceptionData.GetInstance(self).RaiseBacktrace;
+        }
+
         [RubyMethod("set_backtrace", RubyMethodAttributes.PublicInstance)]
         public static RubyArray/*!*/ SetBacktrace(Exception/*!*/ self, [NotNull]MutableString/*!*/ backtrace) {
             return RubyExceptionData.GetInstance(self).Backtrace = RubyArray.Create(backtrace);
@@ -144,10 +142,16 @@ namespace IronRuby.Builtins {
         [RubyMethod("set_backtrace", RubyMethodAttributes.PublicInstance)]
         public static RubyArray SetBacktrace(Exception/*!*/ self, RubyArray backtrace) {
             if (backtrace != null && !CollectionUtils.TrueForAll(backtrace, (item) => item is MutableString)) {
-                throw RubyExceptions.CreateTypeError("backtrace must be Array of String");
+                throw RubyExceptions.CreateTypeError("backtrace must be an Array of String or an Array of Thread::Backtrace::Location");
             }
 
             return RubyExceptionData.GetInstance(self).Backtrace = backtrace;
+        }
+
+        [RubyMethod("set_backtrace", RubyMethodAttributes.PublicInstance)]
+        public static RubyArray SetBacktrace(Exception/*!*/ self, object backtrace) {
+            // anything but nil, a String or an Array of Strings
+            throw RubyExceptions.CreateTypeError("backtrace must be an Array of String or an Array of Thread::Backtrace::Location");
         }
 
         /// <summary>
@@ -184,11 +188,15 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("to_s")]
-        public static object StringRepresentation(ConversionStorage<MutableString>/*!*/ tosConversion, Exception/*!*/ self) {
+        public static object StringRepresentation(ConversionStorage<MutableString>/*!*/ strTryCast, ConversionStorage<MutableString>/*!*/ tosConversion, Exception/*!*/ self) {
             object message = RubyExceptionData.GetInstance(self).Message;
-            // MRI applies String() to whatever was passed as the message, so
-            // `raise MyError, some_object` reports some_object.to_s.
-            return message is MutableString ? message : Protocols.ConvertToString(tosConversion, message);
+            if (message is MutableString) {
+                return message;
+            }
+            // MRI applies String() to whatever was passed as the message: #to_str when the
+            // object offers one, #to_s otherwise.
+            MutableString str = Protocols.TryCastToString(strTryCast, message);
+            return str ?? (object)Protocols.ConvertToString(tosConversion, message);
         }
 
         /// <summary>

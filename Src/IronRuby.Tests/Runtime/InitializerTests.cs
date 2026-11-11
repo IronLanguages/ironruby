@@ -13,7 +13,6 @@
  *
  * ***************************************************************************/
 
-using IronRuby.Runtime;
 namespace IronRuby.Tests {
     public partial class Tests {
 
@@ -74,59 +73,8 @@ end
 
 x = A.new { break 'foo' }
 1.times(&$b) rescue p $!
-");
+", 1, 0);
             }, @"#<LocalJumpError: break from proc-closure>");
-        }
-
-        /// <summary>
-        /// Retry returns from the 'new' frame (skipping initialize frame) as that frame is its proc-converter.
-        /// The block is not redefined however. Only the proc-converter frame is updated to the new instance of the 'new' frame.
-        /// </summary>
-        public void Scenario_RubyInitializers3() {
-            AssertOutput(delegate() {
-                CompilerTest(@"
-class A
-  def initialize *a
-    yield
-  end
-end
-
-$i = 0
-y = A.new($i += 1) {
-  puts $i
-  if $i < 3 then
-    retry
-  end
-}
-");
-            }, @"
-1
-2
-3");
-        }
-
-        /// <summary>
-        /// The same case as Scenario_RubyInitializers3, but with initializer defined in library.
-        /// </summary>
-        public void Scenario_RubyInitializers4A() {
-            AssertOutput(delegate() {
-                CompilerTest(@"
-$i = 0
-y = Array.new($i += 1) {
-  puts $i
-  if $i < 3 then
-    retry
-  end
-}
-puts y.inspect
-");
-            }, @"
-1
-2
-3
-3
-3
-[nil, nil, nil]");
         }
 
         /// <summary>
@@ -189,7 +137,7 @@ class C
   new
 end
 ", @"
-#<TypeError: Cannot undefine `initialize' method>
+#<TypeError: Cannot undefine 'initialize' method>
 [1, 2, 3]
 init
 ");

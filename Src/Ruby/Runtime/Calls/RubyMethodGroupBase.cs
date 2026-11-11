@@ -13,11 +13,8 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
+using System.Dynamic;
 
 using System;
 using System.Collections;
@@ -28,9 +25,7 @@ using IronRuby.Builtins;
 using IronRuby.Compiler;
 using IronRuby.Compiler.Generation;
 using Microsoft.Scripting.Actions.Calls;
-using Microsoft.Scripting.Generation;
 using Microsoft.Scripting.Utils;
-using AstFactory = IronRuby.Compiler.Ast.AstFactory;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Runtime.Calls {
@@ -92,8 +87,9 @@ namespace IronRuby.Runtime.Calls {
             if (mine.Length != theirs.Length) {
                 return false;
             }
+            // (a name's own method that only calls another counts as that one, see SameRubyMethodAttribute)
             for (int i = 0; i < mine.Length; i++) {
-                if (!Equals(mine[i].ReflectionInfo, theirs[i].ReflectionInfo)) {
+                if (!Equals(SameRubyMethodAttribute.GetTarget(mine[i].ReflectionInfo), SameRubyMethodAttribute.GetTarget(theirs[i].ReflectionInfo))) {
                     return false;
                 }
             }
@@ -103,7 +99,7 @@ namespace IronRuby.Runtime.Calls {
         public override int GetEquivalenceHashCode() {
             int result = 0;
             foreach (var method in MethodBases) {
-                result ^= method.ReflectionInfo.GetHashCode();
+                result ^= SameRubyMethodAttribute.GetTarget(method.ReflectionInfo).GetHashCode();
             }
             return result;
         }
@@ -111,7 +107,20 @@ namespace IronRuby.Runtime.Calls {
         internal abstract SelfCallConvention CallConvention { get; }
         internal abstract bool ImplicitProtocolConversions { get; }
 
+        // The overloads never change once the group has them, so neither does the arity; working it
+        // out reads every overload's parameters and their attributes. Int32.MinValue is "not yet":
+        // no arity is that small.
+        private int _arity = Int32.MinValue;
+
         public override int GetArity() {
+            int arity = _arity;
+            if (arity == Int32.MinValue) {
+                _arity = arity = ComputeArity();
+            }
+            return arity;
+        }
+
+        protected virtual int ComputeArity() {
             int minParameters = Int32.MaxValue;
             int maxParameters = 0;
             bool hasOptional = false;
@@ -141,8 +150,14 @@ namespace IronRuby.Runtime.Calls {
             var boundMethods = new List<OverloadInfo>();
             foreach (OverloadInfo method in MethodBases) {
                 if (method.IsGenericMethodDefinition) {
-                    if (typeArguments.Length == method.GenericArguments.Count) {
-                        boundMethods.Add(method.MakeGenericMethod(typeArguments));
+                    // an overload whose constraints the type arguments break is not one they select (#141):
+                    if (typeArguments.Length == method.GenericArguments.Count &&
+                        Protocols.FindGenericConstraintViolation(ArrayUtils.ToArray(method.GenericArguments), typeArguments, out _, out _) < 0) {
+                        try {
+                            boundMethods.Add(method.MakeGenericMethod(typeArguments));
+                        } catch (ArgumentException) {
+                            // a constraint between the parameters themselves (where S : T), which only the CLR checks
+                        }
                     }
                 } else if (typeArguments.Length == 0) {
                     boundMethods.Add(method);
@@ -154,6 +169,20 @@ namespace IronRuby.Runtime.Calls {
             }
 
             return Copy(boundMethods.ToArray());
+        }
+
+        /// <summary>
+        /// The error for type arguments of the right number that no generic overload takes because of its constraints, or null.
+        /// </summary>
+        public Exception GetGenericConstraintError(string/*!*/ name, Type/*!*/[]/*!*/ typeArguments, object/*!*/[]/*!*/ typeArgs) {
+            foreach (OverloadInfo method in MethodBases) {
+                if (method.IsGenericMethodDefinition && typeArguments.Length == method.GenericArguments.Count) {
+                    Type[] genericParameters = ArrayUtils.ToArray(method.GenericArguments);
+                    int index = Protocols.FindGenericConstraintViolation(genericParameters, typeArguments, out string constraint, out Type bound);
+                    return Protocols.CreateGenericConstraintError(Context, name, genericParameters, typeArgs, index, constraint, bound);
+                }
+            }
+            return null;
         }
 
         /// <summary>
@@ -194,16 +223,6 @@ namespace IronRuby.Runtime.Calls {
         #endregion
 
         #region Dynamic Sites
-
-        private static Type/*!*/ GetAssociatedSystemType(RubyModule/*!*/ module) {
-            if (module.IsClass) {
-                Type type = ((RubyClass)module).GetUnderlyingSystemType();
-                if (type != null) {
-                    return type;
-                }
-            }
-            return typeof(SuperCallAction);
-        }
 
         internal override void BuildSuperCallNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ name, RubyModule/*!*/ declaringModule) {
             Assert.NotNull(declaringModule, metaBuilder, args);
@@ -257,11 +276,7 @@ namespace IronRuby.Runtime.Calls {
                                 ArrayUtils.ToArray(overload.Parameters, (pi) => pi.ParameterType),
                                 genericArguments,
                                 underlyingType,
-#if FEATURE_REFEMIT // TODO: should we always prefix with #base# ???
                                 ClsTypeEmitter.BaseMethodPrefix + overload.Name,
-#else
-                                overload.Name,
-#endif
                                 BindingFlags.Public | bindingFlags
                             );
 
@@ -306,15 +321,98 @@ namespace IronRuby.Runtime.Calls {
             IList<OverloadInfo>/*!*/ overloads, SelfCallConvention callConvention, bool implicitProtocolConversions, 
             out RubyOverloadResolver/*!*/ resolver) {
 
-            resolver = new RubyOverloadResolver(metaBuilder, args, callConvention, implicitProtocolConversions);
-            var bindingTarget = resolver.ResolveOverload(name, overloads, NarrowingLevel.None, NarrowingLevel.All);
+            // A CLR method (not a Ruby library method) binds keywords by name, and takes a block as its
+            // trailing delegate parameter. Either falls back to what Ruby does with a method that has no
+            // such parameter: the keywords become a positional Hash, the block goes unused.
+            Hash keywords = null;
+            bool blockAsArgument = false;
+            if (implicitProtocolConversions) {
+                keywords = RubyOverloadResolver.GetKeywordArguments(args);
+                blockAsArgument = RubyOverloadResolver.CanPassBlockAsArgument(args);
+            }
+
+            BindingTarget bindingTarget = null;
+            BindingTarget firstFailure = null;
+            RubyOverloadResolver firstFailedResolver = null;
+            resolver = null;
+            for (int attempt = 0; attempt < 4; attempt++) {
+                bool byName = (attempt & 2) == 0;
+                bool withBlock = (attempt & 1) == 0;
+                if (byName && keywords == null || withBlock && !blockAsArgument) {
+                    continue;
+                }
+
+                resolver = new RubyOverloadResolver(metaBuilder, args, callConvention, implicitProtocolConversions, name);
+                resolver.Overloads = overloads;
+                if (byName) {
+                    resolver.BindKeywordsByName(keywords, overloads);
+                }
+                if (withBlock) {
+                    resolver.PassBlockAsArgument();
+                }
+
+                bindingTarget = resolver.ResolveOverload(name, overloads, NarrowingLevel.None, NarrowingLevel.All);
+                if (bindingTarget.Success
+                    && (!withBlock || BlockBindsToDelegate(bindingTarget.Overload, args, byName && keywords != null, callConvention))
+                    && (byName || keywords == null || KeywordsBindAsHash(bindingTarget.Overload, args, callConvention))) {
+                    break;
+                }
+
+                // A block that fits several delegate overloads equally (Sum(Func<T, int>), Sum(Func<T, double>), ...) is
+                // not dropped for an overload that takes none, which would ignore it without a word: that is an error.
+                if (withBlock && bindingTarget.Result == BindingResult.AmbiguousMatch) {
+                    break;
+                }
+
+                if (firstFailure == null && !withBlock) {
+                    firstFailure = bindingTarget;
+                    firstFailedResolver = resolver;
+                }
+                if (attempt == 3) {
+                    // Nothing binds: report why the keywords do not bind by name, if the call passes any,
+                    // or else why the arguments do not - a block that fits no delegate parameter is unused.
+                    bindingTarget = firstFailure;
+                    resolver = firstFailedResolver;
+                }
+            }
+
+            if (keywords != null) {
+                // which keywords the call passes decided how they bind:
+                resolver.AddKeywordArgumentsTest(metaBuilder, keywords);
+            }
 
             bool calleeHasBlockParam = bindingTarget.Success && HasBlockParameter(bindingTarget.Overload);
             
             // At runtime the BlockParam is created with a new RFC instance that identifies the library method frame as 
             // a proc-converter target of a method unwinder triggered by break from a block.
-            if (args.Signature.HasBlock && calleeHasBlockParam) {
-                metaBuilder.ControlFlowBuilder = RuleControlFlowBuilder;
+            if (args.Signature.HasBlock) {
+                if (blockAsArgument) {
+                    // Whether and where the block binds depends on its arity:
+                    metaBuilder.AddRestriction(Ast.AndAlso(
+                        Ast.NotEqual(args.GetBlockExpression(), AstUtils.Constant(null)),
+                        Ast.Equal(
+                            Methods.GetProcArity.OpCall(AstUtils.Convert(args.GetBlockExpression(), typeof(Proc))),
+                            AstUtils.Constant(args.GetBlock().Dispatcher.Arity)
+                        )
+                    ));
+                }
+
+                if (resolver.PassesBlockAsArgument) {
+                    // The call is the block's flow-control frame, as for a library method that yields:
+                    // break in the block (called back through the delegate) ends the call.
+                    if (metaBuilder.BfcVariable == null) {
+                        metaBuilder.BfcVariable = metaBuilder.GetTemporary(typeof(BlockParam), "#bfc");
+                    }
+                    metaBuilder.ControlFlowBuilder = RuleControlFlowBuilder;
+                } else if (calleeHasBlockParam) {
+                    metaBuilder.ControlFlowBuilder = RuleControlFlowBuilder;
+                } else if (args.GetMetaBlock().Value == null) {
+                    // The block argument was nil when this rule was built (x.count(&b) with b nil), and
+                    // that is why an overload without a BlockParam was chosen. The rule must say so:
+                    // without this test the same call site would keep that overload, and ignore the
+                    // block, once a real one came through it.
+                    metaBuilder.AddRestriction(Ast.Equal(args.GetBlockExpression(), AstUtils.Constant(null)));
+                }
             }
 
             // add restrictions used for overload resolution:
@@ -324,20 +422,58 @@ namespace IronRuby.Runtime.Calls {
         }
 
         /// <summary>
+        /// Keywords that do not bind by name may still be passed on as a positional Hash, the way Ruby
+        /// passes them to a method without keyword parameters - but only to a parameter that takes a
+        /// Hash as it is (Hash, IDictionary, Object, ...), not to one Ruby's conversion protocols would
+        /// try to turn it into an Integer or a String.
+        /// </summary>
+        private static bool KeywordsBindAsHash(OverloadInfo/*!*/ overload, CallArguments/*!*/ args, SelfCallConvention callConvention) {
+            int index = RubyOverloadResolver.GetHiddenParameterCount(overload, callConvention) + args.SimpleArgumentCount - 1
+                + (args.Signature.HasSplattedArgument ? args.GetSplattedArgument().Count : 0);
+
+            int last = overload.ParameterCount - 1;
+            Type type;
+            if (index >= last && last >= 0 && overload.IsParamArray(last)) {
+                type = overload.Parameters[last].ParameterType.GetElementType();
+            } else if (index <= last) {
+                type = overload.Parameters[index].ParameterType;
+            } else {
+                return false;
+            }
+            return type != null && type.IsAssignableFrom(typeof(Hash));
+        }
+
+        /// <summary>
+        /// True if the block, passed after the other positional arguments, landed on a parameter of a
+        /// delegate type - not on an Object or params parameter that happens to accept a Proc.
+        /// </summary>
+        private static bool BlockBindsToDelegate(OverloadInfo/*!*/ overload, CallArguments/*!*/ args, bool keywordsByName,
+            SelfCallConvention callConvention) {
+
+            int index = RubyOverloadResolver.GetHiddenParameterCount(overload, callConvention)
+                + args.SimpleArgumentCount + (args.Signature.HasSplattedArgument ? args.GetSplattedArgument().Count : 0)
+                - (keywordsByName ? 1 : 0);
+
+            return index < overload.ParameterCount
+                && !overload.IsParamArray(index)
+                && typeof(Delegate).IsAssignableFrom(overload.Parameters[index].ParameterType);
+        }
+
+        /// <summary>
         /// Resolves an library method overload and builds call expression.
         /// The resulting expression on meta-builder doesn't handle block control flow yet.
         /// </summary>
         internal static void BuildCallNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ name,
             IList<OverloadInfo>/*!*/ overloads, SelfCallConvention callConvention, bool implicitProtocolConversions) {
 
+            if (!implicitProtocolConversions && !TakesPositionalCount(metaBuilder, args, overloads, callConvention)) {
+                return;
+            }
+
             RubyOverloadResolver resolver;
             var bindingTarget = ResolveOverload(metaBuilder, args, name, overloads, callConvention, implicitProtocolConversions, out resolver);
             if (bindingTarget.Success) {
-                // TODO: create a custom overload info:
-                if (ReferenceEquals(bindingTarget.Overload.ReflectionInfo, Methods.CreateDefaultInstance)) {
-                    Debug.Assert(args.TargetClass.TypeTracker.Type.IsValueType);
-                    metaBuilder.Result = Ast.New(args.TargetClass.TypeTracker.Type);
-                } else if (args.Signature.IsVirtualCall && bindingTarget.Overload.IsVirtual) {
+                if (args.Signature.IsVirtualCall && bindingTarget.Overload.IsVirtual) {
                     // Virtual methods that have been detached from the CLR type and 
                     // defined on the corresponding Ruby class or its subclass are not
                     // directly invoked from a dynamic virtual call to prevent recursion.
@@ -355,11 +491,128 @@ namespace IronRuby.Runtime.Calls {
                     // it would invoke the C$1::Add override again leading to a stack overflow. So we need to use a base call instead.
                     metaBuilder.Result = Ast.Field(null, Fields.ForwardToBase);
                 } else {
-                    metaBuilder.Result = bindingTarget.MakeExpression();
+                    metaBuilder.Result = KeepOutOfSlowTailCall(bindingTarget.MakeExpression(), bindingTarget.Overload);
+
+                    // A keyword Hash is a positional argument to a method that does not receive keywords, which may keep it:
+                    // it stops saying it is keyword arguments, as it does for a Ruby method (RubyMethodInfo.BuildCallNoFlow).
+                    // The rule's tests have read it already.
+                    if (!RubyOverloadResolver.ReceivesKeywordArguments(bindingTarget.Overload.ReflectionInfo)) {
+                        var last = resolver.GetLastArgumentExpression();
+                        if (last != null && last.Type.IsAssignableFrom(typeof(Hash)) && !RestrictsToNonHash(bindingTarget, last)) {
+                            last = AstUtils.Box(last);
+                            metaBuilder.Result = Ast.Block(
+                                Ast.IfThen(Ast.TypeEqual(last, typeof(Hash)), Methods.ClearKeywordArguments.OpCall(last)),
+                                metaBuilder.Result
+                            );
+                        }
+                    }
                 }
+            } else if (bindingTarget.Result == BindingResult.IncorrectArgumentCount) {
+                metaBuilder.SetArityError(resolver.MakeInvalidParametersError(bindingTarget).Expression);
             } else {
                 metaBuilder.SetError(resolver.MakeInvalidParametersError(bindingTarget).Expression);
             }
+        }
+
+        /// <summary>
+        /// A rule's lambda is compiled with tail calls, so the call to the library method is a `tail.' call when it is the
+        /// last thing the rule does. One the runtime cannot make in place - the callee takes more arguments on the stack
+        /// than its caller, as a method with storages, an optional argument and keywords does - goes through its tail call
+        /// helpers, which copy the arguments into a buffer they allocate: Integer("123", 10) cost ~155 ns with them and
+        /// ~90 ns without. The call of a method of more than six parameters (past the argument registers of x64 Unix)
+        /// stays an ordinary call, its value returned after it.
+        /// </summary>
+        private static Expression/*!*/ KeepOutOfSlowTailCall(Expression/*!*/ call, OverloadInfo/*!*/ overload) {
+            if (overload.ParameterCount + (overload.IsStatic ? 0 : 1) <= 6 || call.Type == typeof(void)) {
+                return call;
+            }
+            var result = Ast.Variable(call.Type, "#result");
+            return Ast.Block(call.Type, new[] { result }, Ast.Assign(result, call), result);
+        }
+
+        /// <summary>
+        /// Whether the rule only applies when the argument <paramref name="expression"/> is of a class other than Hash: the
+        /// overloads told its class apart, so the rule tests it exactly. Then the keyword mark need not be looked for - the
+        /// test would be one more step on every call of a rule while it is interpreted.
+        /// </summary>
+        private static bool RestrictsToNonHash(BindingTarget/*!*/ bindingTarget, Expression/*!*/ expression) {
+            foreach (var arg in bindingTarget.RestrictedArguments.GetObjects()) {
+                if (arg.Expression == expression) {
+                    return arg.Restrictions != BindingRestrictions.Empty && ExcludesHash(arg.Restrictions.ToExpression(), expression);
+                }
+            }
+            return false;
+        }
+
+        private static bool ExcludesHash(Expression/*!*/ test, Expression/*!*/ expression) {
+            if (test.NodeType == ExpressionType.AndAlso) {
+                var and = (BinaryExpression)test;
+                return ExcludesHash(and.Left, expression) || ExcludesHash(and.Right, expression);
+            }
+            return test.NodeType == ExpressionType.TypeEqual && ((TypeBinaryExpression)test).Expression == expression &&
+                !typeof(Hash).IsAssignableFrom(((TypeBinaryExpression)test).TypeOperand);
+        }
+
+        /// <summary>
+        /// A library method that takes keywords in a [Keywords] parameter is called with as many positional arguments - not
+        /// counting a trailing keyword Hash - as one of its overloads takes, or else it raises MRI's "wrong number of arguments"
+        /// that counts them (Integer(exception: false) is "given 0, expected 1..2"), not whatever binding the Hash to a
+        /// positional parameter would do. False if the error is set.
+        /// </summary>
+        private static bool TakesPositionalCount(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, IList<OverloadInfo>/*!*/ overloads,
+            SelfCallConvention callConvention) {
+
+            if (args.Signature.HasRhsArgument) {
+                return true;
+            }
+
+            int restFrom;
+            var arities = RubyOverloadResolver.GetPositionalArities(overloads, callConvention, out restFrom);
+            if (arities == null) {
+                return true;
+            }
+
+            // The arguments, the items of a splatted list among them - the way the resolver counts them (a ruby2_keywords
+            // hash at the end of the list is keywords again, see MetaObjectBuilder.AddSplattedArgumentTest):
+            int count = args.SimpleArgumentCount;
+            IList list = null;
+            if (args.Signature.HasSplattedArgument) {
+                list = RubyOps.SplatRuby2Keywords((IList)args.GetSplattedArgument());
+                count += list.Count;
+            }
+
+            object last = (list != null) ? (list.Count > 0 ? list[list.Count - 1] : null) : (count > 0 ? args.GetSimpleArgument(count - 1) : null);
+            bool isKeywords = RubyOps.IsKeywordArgumentsHash(last);
+            bool takes = RubyOverloadResolver.AcceptsPositionalCount(arities, restFrom, isKeywords ? count - 1 : count);
+
+            // Whether the last argument is a keyword Hash decides it, so the rule holds for calls that pass one, or for those
+            // that do not; a splatted call's for lists of this length.
+            bool keywordsDecide = count > 0 && takes != RubyOverloadResolver.AcceptsPositionalCount(arities, restFrom, isKeywords ? count : count - 1);
+            if (list != null && (keywordsDecide || !takes)) {
+                int listLength;
+                ParameterExpression listVariable;
+                metaBuilder.AddSplattedArgumentTest((IList)args.GetSplattedArgument(), args.GetSplattedMetaArgument().Expression, out listLength, out listVariable);
+                if (keywordsDecide && listLength > 0) {
+                    Expression test = Methods.IsKeywordArgumentsHash.OpCall(
+                        Ast.Call(listVariable, typeof(IList).GetMethod("get_Item"), AstUtils.Constant(listLength - 1))
+                    );
+                    metaBuilder.AddCondition(isKeywords ? test : Ast.Not(test));
+                    keywordsDecide = false;
+                }
+            }
+
+            if (keywordsDecide) {
+                Expression test = Methods.IsKeywordArgumentsHash.OpCall(AstUtils.Box(args.GetSimpleArgumentExpression(args.SimpleArgumentCount - 1)));
+                metaBuilder.AddRestriction(isKeywords ? test : Ast.Not(test));
+            }
+
+            if (!takes) {
+                metaBuilder.SetArityError(Methods.MakeWrongNumberOfArgumentsErrorN.OpCall(
+                    AstUtils.Constant(isKeywords ? count - 1 : count),
+                    AstUtils.Constant(RubyOverloadResolver.DescribePositionalArities(arities, restFrom))
+                ));
+            }
+            return takes;
         }
 
         /// <summary>

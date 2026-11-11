@@ -101,9 +101,9 @@ d.d1
 d.d2
 d.u
 d.w
-");
+", 1, 0);
             }, @"
-undefined method `d2' for class `C'
+undefined method 'd2' for class 'C'
 M::m1
 M::m2
 c1
@@ -137,7 +137,7 @@ end
                 CompilerTest(@"
 def u; end
 p ((undef u))
-", 1, 0); 
+", 0, 0); 
             }, "nil");
         }
 
@@ -191,8 +191,8 @@ p method(:m_object) rescue p $!
 ", @"
 #<Method: Object(Kernel)#m_kernel() UndefMethodLookup2.rb:2>
 #<Method: Object#m_object() UndefMethodLookup2.rb:3>
-#<NameError: undefined method `m_kernel' for class `Object'>
-#<NameError: undefined method `m_object' for class `Object'>
+#<NameError: undefined method 'm_kernel' for class 'Object'>
+#<NameError: undefined method 'm_object' for class 'Object'>
 ");
         }
 
@@ -222,7 +222,7 @@ p d.method(:f) rescue p $!
 #<Method: D#f() UndefMethodLookup3.rb:3>
 ---
 #<UnboundMethod: D#f() UndefMethodLookup3.rb:3>
-#<NameError: undefined method `f' for class `D'>
+#<NameError: undefined method 'f' for class 'D'>
 ");
         }
 
@@ -249,36 +249,12 @@ p C.instance_method(:f) rescue p $!
 p D.instance_method(:f) rescue p $!
 ", @"
 C
-#<NameError: undefined method `f' for class `C'>
+#<NameError: undefined method 'f' for class 'C'>
 ---
 #<UnboundMethod: C#f() UndefMethodLookup4.rb:3>
 #<UnboundMethod: D#f() UndefMethodLookup4.rb:7>
 ");
         }
-
-#if OBSOLETE
-        /// <summary>
-        /// Undef in define_method.
-        /// </summary>
-        [Options(Compatibility = RubyCompatibility.Ruby186)]
-        public void UndefMethodLookup5() {
-            TestOutput(@"
-class D
-end
-
-class E
-  D.send(:define_method, :bar) {
-    undef f rescue p $!
-  }
-end
-
-d = D.new
-d.bar
-", @"
-<NameError: undefined method `f' for class `D'>
-");
-        }
-#endif
 
         /// <summary>
         /// Undef in define_method.
@@ -297,7 +273,7 @@ end
 d = D.new
 d.bar
 ", @"
-#<NameError: undefined method `f' for class `E'>
+#<NameError: undefined method 'f' for class 'E'>
 ");
         }
     }

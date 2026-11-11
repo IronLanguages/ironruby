@@ -13,20 +13,14 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System.Diagnostics;
 using Microsoft.Scripting;
-using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
 
 namespace IronRuby.Compiler.Ast {
     using Ast = MSA.Expression;
-    using AstUtils = Microsoft.Scripting.Ast.Utils;
 
     /// <summary>
     /// Represents a symbol literal encoded by the containing source file encoding.
@@ -36,7 +30,7 @@ namespace IronRuby.Compiler.Ast {
             : base(value, encoding, location) {
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             Debug.Assert(Value is string);
             return Ast.Constant(gen.Context.CreateSymbol((string)Value, Encoding));
         }

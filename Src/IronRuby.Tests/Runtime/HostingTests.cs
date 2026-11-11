@@ -17,16 +17,11 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
-using System.Diagnostics;
 
 using Microsoft.Scripting;
 using Microsoft.Scripting.Hosting;
-using Microsoft.Scripting.Utils;
 
 using IronRuby.Builtins;
-using IronRuby.Runtime.Calls;
-using IronRuby.Runtime;
-using System.Runtime.CompilerServices;
 
 namespace IronRuby.Tests {
     public partial class Tests {
@@ -53,20 +48,6 @@ namespace IronRuby.Tests {
             Assert(func5(1) == 6);
 
             AssertExceptionThrown<ArgumentException>(() => Engine.Execute(@"F1.to_class.new(*[])"));
-
-            if (_driver.RunPython) {
-                var py = Runtime.GetEngine("python");
-
-                Engine.Runtime.Globals.SetVariable("F2", typeof(Func<string[], string[], string[]>));
-                var pyAdd = py.Execute(@"
-def py_add(a, b): 
-  return a + b
-py_add
-");
-                Engine.Runtime.Globals.SetVariable("PyAdd", pyAdd);
-                var pyFunc = (Func<string[], string[], string[]>)Engine.Execute(@"F2.to_class.new PyAdd");
-                Assert(String.Join(";", pyFunc(new[] { "x" }, new[] { "y" })) == "x;y");
-            }
         }
 
         public void RubyHosting1A() {
@@ -143,7 +124,8 @@ py_add
             scope.SetVariable("some_variable", 123);
             Assert(compiled.Execute<int>(scope) == 123);
             
-            AssertExceptionThrown<MissingMethodException>(() => compiled.Execute());
+            // NameError: undefined local variable or method 'some_variable'
+            AssertExceptionThrown<MemberAccessException>(() => compiled.Execute());
 
             scope.SetVariable("some_variable", "foo");
             Assert(compiled.Execute<string>(scope) == "foo");
@@ -168,16 +150,18 @@ py_add
             AssertExceptionThrown<MissingMethodException>(() => Engine.Operations.InvokeMember(new object(), "foo"));
 
             // When executed against a scope top-level methods are defined on main singleton and also stored in the scope.
-            // This is equivalent to instance_evaling the code against the main singleton.
+            // They are private methods of Object as well, so that instances of other classes can call them, as in MRI
+            // (issue 163).
             var scope = Engine.CreateScope();
             Engine.Execute("def bar; 1; end", scope);
-            Assert(Context.ObjectClass.GetMethod("bar") == null);
+            Assert(Context.ObjectClass.GetMethod("bar") != null);
+            Assert(Context.ObjectClass.GetMethod("bar").IsPrivate);
             Assert(scope.GetVariable<object>("bar") != null);
             
             // we can invoke the method on a scope:
             Assert((int)Engine.Operations.InvokeMember(scope, "bar") == 1);
             
-            // Since we don't define top-level methods on Object when executing against a scope, 
+            // Since the top-level of a scope finds the method in main singleton first,
             // executions against different scopes don’t step on each other:
             var scope1 = Engine.CreateScope();
             var scope2 = Engine.CreateScope();
@@ -196,6 +180,112 @@ py_add
         /// missing_method on scope forwards to super class if the variable is not defined in scope;
         /// unmangled name is used if available and the mangled is not found in the scope.
         /// </summary>
+        /// <summary>
+        /// Code run in a host's scope defines a top-level method in main's singleton class (the scope's) and in Object (issue
+        /// 163, RubyHosting1D). Top-level `alias', `undef', `public :x'/`private :x' and main.define_method acted on main's
+        /// singleton class alone, so an instance of another class did not see what they did (issue 177). They act on Object
+        /// as well now, and this prints what CRuby 4 prints for the same file.
+        /// </summary>
+        public void RubyHosting_TopLevelOps1() {
+            var scope = Engine.CreateScope();
+            AssertOutput(() => Engine.Execute(@"
+def foo = 1
+alias bar foo
+def baz = 2
+undef baz
+def pub = 3
+public :pub
+def priv = 3
+public :priv
+private :priv
+define_method(:dm) { 4 }
+def src = 5
+define_method(:dm2, method(:src))
+define_method(:dm3, Object.instance_method(:src))
+class Hosted177
+  def calls = [bar, pub, dm, dm2, dm3, respond_to?(:baz, true)]
+end
+p Hosted177.new.calls
+p [bar, pub, priv, dm, dm2, dm3]
+p Object.private_method_defined?(:bar), Object.public_method_defined?(:pub), Object.private_method_defined?(:priv)
+p [:dm, :dm2, :dm3].map { |m| Object.public_method_defined?(m) }
+p 1.pub, 1.dm
+begin; undef nope; rescue NameError => e; p e.message; end
+begin; alias nope2 nope; rescue NameError => e; p e.message; end
+self.instance_eval { alias ie2 foo }
+p Object.private_method_defined?(:ie2), singleton_class.method_defined?(:ie2) || singleton_class.private_method_defined?(:ie2)
+", scope), @"
+[1, 3, 4, 5, 5, false]
+[1, 3, 3, 4, 5, 5]
+true
+true
+true
+[true, true, true]
+3
+4
+""undefined method 'nope' for class 'Object'""
+""undefined method 'nope' for class 'Object'""
+false
+true
+");
+            // the host still reads the methods from the scope
+            Assert(scope.GetVariable<Func<int>>("foo")() == 1);
+            Assert(scope.GetVariable<Func<int>>("pub")() == 3);
+
+            // A singleton method of main (`def self.x') is not Object's: CRuby's `alias'/`undef'/`private' of it raise
+            // NameError and its define_method TypeError, and a host's scope has them act on main's singleton class alone,
+            // as before.
+            AssertOutput(() => Engine.Execute(@"
+def self.single = 6
+alias single2 single
+define_method(:single3, method(:single))
+private :single
+p single2, single3, Object.method_defined?(:single2), Object.method_defined?(:single3), Object.private_method_defined?(:single)
+undef single2
+p respond_to?(:single2, true)
+", scope), @"
+6
+6
+false
+false
+false
+false
+");
+
+            // each scope's top level still finds its own; an instance of another class finds Object's, which the last
+            // scope to run made, as in CRuby
+            var scope1 = Engine.CreateScope();
+            var scope2 = Engine.CreateScope();
+            Engine.Execute("def op = 1; alias op2 op; class Calc177; def run = op2; end", scope1);
+            Engine.Execute("def op = 2; alias op2 op", scope2);
+            Assert(Engine.Execute<int>("op2", scope1) == 1);
+            Assert(Engine.Execute<int>("op2", scope2) == 2);
+            Assert(Engine.Execute<int>("Calc177.new.run", scope1) == 2);
+            Engine.Execute("undef op2", scope2);
+            Assert(Engine.Execute<int>("op2", scope1) == 1);
+            AssertExceptionThrown<MemberAccessException>(() => Engine.Execute("Calc177.new.run", scope1));
+
+            // a method this scope `undef'ed that Object has again from another scope: CRuby has that one, so `alias' and
+            // `public' take it rather than raising NameError for main's singleton class
+            var scope3 = Engine.CreateScope();
+            var scope4 = Engine.CreateScope();
+            Engine.Execute("def e177 = 1; undef e177", scope3);
+            Engine.Execute("def e177 = 2", scope4);
+            AssertOutput(() => Engine.Execute(@"
+alias e177b e177
+public :e177
+p Object.public_method_defined?(:e177), Object.private_method_defined?(:e177b), 1.e177
+begin; private :pub, :nope; rescue NameError => e; p e.message; end
+p Object.private_method_defined?(:pub)
+", scope3), @"
+true
+true
+2
+""undefined method 'nope' for class 'Object'""
+true
+");
+        }
+
         public void RubyHosting1E() {
             var scope = Engine.CreateScope();
             scope.SetVariable("baz", 1);
@@ -238,7 +328,32 @@ bar
                 Engine.Execute(@"
 puts method_missing(:bar) rescue p $!
 ", scope), @"
-#<NoMethodError: undefined method `bar' for main>
+#<NoMethodError: undefined method 'bar' for main>
+");
+        }
+
+        /// <summary>
+        /// A name the scope does not have goes on to the method_missing above main's, with the name and
+        /// the arguments - and a call signature that counts them right, which a define_method body checks.
+        /// </summary>
+        public void RubyHosting1G() {
+            var scope = Engine.CreateScope();
+            scope.SetVariable("bar", 1);
+
+            AssertOutput(() =>
+                Engine.Execute(@"
+class Object
+  define_method(:method_missing) { |name, arg| $stdout.write(name.to_s + ' ' + arg.to_s + ""\n"") }
+end
+begin
+  foo 2
+  p bar
+ensure
+  class Object; remove_method :method_missing; end
+end
+", scope), @"
+foo 2
+1
 ");
         }
 
@@ -282,12 +397,6 @@ bar
             Assert(Runtime.Globals.TryGetVariable("E", out value));
             Assert(((RubyModule)value).Name == "E");
 
-            // TODO:
-            // the library paths are incorrect (not combined with location of .exe file) in partial trust:
-            if (_driver.PartialTrust) return;
-
-            var searchPaths = Engine.GetSearchPaths();
-
             bool result = Engine.RequireFile("fcntl");
             Assert(result == true);
 
@@ -328,8 +437,6 @@ IronRuby.globals.z = IronRuby.globals.x + FooBar
 
         public void RubyHosting5() {
             // app-domain creation:
-            if (_driver.PartialTrust) return;
-
             Assert(Engine.RequireFile("fcntl") == true);
             Assert(Engine.Execute<bool>("Object.constants.include?(:Fcntl)") == true);
         }
@@ -400,6 +507,18 @@ a = 'ba'.gsub /b/, '1'
             AssertExceptionThrown<SyntaxErrorException>(() => Engine.Execute("}"));
         }
 
+        /// <summary>
+        /// -E takes "locale" besides the names of real encodings, as MRI's does; "external" and
+        /// "filesystem", which Encoding.find knows, are unknown encoding names there.
+        /// </summary>
+        public void HostingEncodingOption1() {
+            foreach (var arg in new[] { "-Eexternal", "-Efilesystem", "-Eutf-8:external", "--external-encoding=filesystem" }) {
+                AssertExceptionThrown<Microsoft.Scripting.Hosting.Shell.InvalidOptionException>(() =>
+                    new IronRuby.Hosting.RubyOptionsParser().Parse(new[] { arg, "-e", "1" }, new ScriptRuntimeSetup(), Ruby.CreateRubySetup(), PlatformAdaptationLayer.Default));
+            }
+            new IronRuby.Hosting.RubyOptionsParser().Parse(new[] { "-Elocale:locale", "-e", "1" }, new ScriptRuntimeSetup(), Ruby.CreateRubySetup(), PlatformAdaptationLayer.Default);
+        }
+
         public void Interactive1() {
             ScriptScope scope = Runtime.CreateScope();
             AssertOutput(() => Engine.CreateScriptSourceFromString("", SourceCodeKind.InteractiveCode).Execute(scope), "");
@@ -424,7 +543,7 @@ a = 'ba'.gsub /b/, '1'
             var scope = Engine.CreateScope();
             scope.SetVariable("ops", Engine.Operations);
             s = Engine.Execute<string>(@"ops.format({1 => 2, 3 => 4})", scope);
-            Assert(s == "{1=>2, 3=>4}");
+            Assert(s == "{1 => 2, 3 => 4}");
         }
 
         public void Scenario_RubyConsole1() {
@@ -536,333 +655,6 @@ end
             Assert(names.Contains("instance_variables"));
             Assert(!names.Contains("freeze"));
             Assert(!names.Contains("bar"));
-        }
-
-        public void PythonInterop1() {
-            if (!_driver.RunPython) return;
-
-            var py = Runtime.GetEngine("python");
-            Engine.Execute(@"
-class C
-  def foo
-    123
-  end
-end
-");
-
-            var result = py.Execute<int>(@"
-import C
-C().foo()
-");
-            Assert(result == 123);
-        }
-
-        public void PythonInterop2() {
-            if (!_driver.RunPython) return;
-
-            var py = Runtime.GetEngine("python");
-
-            py.Execute(@"
-class C(object):
-  def foo(self, a, b):
-    return a + b
-", Runtime.Globals);
-
-            Assert(Engine.Execute<int>("C.new.foo(3,4)") == 7);
-        }
-
-        public void PythonInterop3() {
-            if (!_driver.RunPython) return;
-
-            var py = Runtime.GetEngine("python");
-
-            var scope = py.CreateScope();
-            py.Execute(@"
-def python():
-  return 'Python'
-", scope);
-
-            Engine.Execute(@"
-def ruby
-  python.call + ' + Ruby'
-end
-", scope);
-
-            AssertOutput(() => py.Execute(@"
-print ruby()
-", scope), @"
-Python + Ruby
-");
-        }
-
-        public void PythonInterop4() {
-            if (!_driver.RunPython) return;
-
-            var py = Runtime.GetEngine("python");
-
-            var scope = py.CreateScope();
-            py.Execute(@"
-def get_python_class():
-  class C(object): 
-    x = 123  
-    def __str__(self):
-      return 'this is C'
-    
-
-  return C()
-", scope);
-
-            Engine.Execute(@"self.c = get_python_class.call", scope);
-
-            var s = Engine.Execute<MutableString>(@"c.to_str", scope);
-            Assert(s.ToString() == @"this is C");
-
-            var i = Engine.Execute<int>(@"c.x", scope);
-            Assert(i == 123);
-
-            // TODO: test
-            // c.y, where y is a delegate
-            // c.p, where p is a Ruby Proc
-        }
-
-        public void PythonInterop5() {
-            if (!_driver.RunPython) return;
-
-            var py = Runtime.GetEngine("python");
-
-            var scope = py.CreateScope();
-            py.Execute(@"
-from System.Collections import ArrayList
-class A(ArrayList):
-  def Count(self): return 123
-", scope);
-
-            Assert(Engine.Execute<int>(@"
-a = A().new
-a.Count
-", scope) == 123);
-            
-        }
-
-        /// <summary>
-        /// Python falls back if the member is not defined and Ruby then invokes the member with original casing.
-        /// </summary>
-        public void PythonInterop_InvokeMember_Fallback1() {
-            if (!_driver.RunPython) return;
-
-            var py = Runtime.GetEngine("python");
-            ScriptScope scope = py.CreateScope();
-            py.Execute(@"class C: pass", scope);
-
-            XAssertOutput(() => 
-                Engine.Execute(@"
-class Object
-  def Foo 
-    puts 'Object::Foo'
-  end
-
-  def bar
-    puts 'Object::bar'
-  end
-end
-
-#c.new.foo rescue p $!
-c.new.bar
-", scope), @"
-
-"
- );
-        }
-
-        /// <summary>
-        /// Python falls back if the member is not defined and Ruby then invokes the member with original casing.
-        /// </summary>
-        public void PythonInterop_InvokeMember_Fallback2() {
-            if (!_driver.RunPython) return;
-
-            var py = Runtime.GetEngine("python");
-            ScriptScope scope = py.CreateScope();
-            py.Execute(@"class C: pass", scope);
-
-            AssertOutput(() => 
-                Engine.Execute(@"
-module Kernel
-  def foo
-    Kernel.puts 'Kernel::foo'                  # TODO: puts should work w/o specifying the module
-  end
-end
-
-class Object
-  def foo
-    Kernel.puts 'Object::foo'
-    super
-  end
-end
-
-c.new.foo
-", scope), @"
-Object::foo
-Kernel::foo
-");
-        }
-
-        public class ClrIndexable1 {
-            public int Value;
-
-            public int this[int a, int b] {
-                get { return a + b; }
-                set { Value = a + b * value; }
-            }
-        }
-
-        // TODO: this is broken in both Python and Ruby InteropBinder
-        public void PythonInterop_Indexers_Fallback1() {
-            if (!_driver.RunPython) return;
-
-            var py = Runtime.GetEngine("python");
-            ScriptScope scope = py.CreateScope();
-            scope.SetVariable("ClrIndexable", typeof(ClrIndexable1));
-            py.Execute(@"
-import clr
-class C(clr.GetPythonType(ClrIndexable)): pass
-", scope);
-
-            XAssertOutput(() =>
-                Engine.Execute(@"
-clr_indexable.to_class.module_eval do
-  def [](*args)
-    p args
-  end
-
-  def []=(*args)
-    p args
-  end
-end
-
-c = C().new
-p c[1, 2]
-
-c[3, 4] = 5
-p c.Value
-", scope), @"
-3
-23
-");
-        }
-
-        public class ClassWithOperators1 {
-            public static ClassWithOperators1 operator -(ClassWithOperators1 a) { return null; }
-            public static ClassWithOperators1 operator +(ClassWithOperators1 a) { return null; }
-            public static ClassWithOperators1 operator ~(ClassWithOperators1 a) { return null; }
-
-            public static ClassWithOperators1 operator +(ClassWithOperators1 a, ClassWithOperators1 b) { return null; }
-            public static ClassWithOperators1 operator -(ClassWithOperators1 a, ClassWithOperators1 b) { return null; }
-            public static ClassWithOperators1 operator /(ClassWithOperators1 a, ClassWithOperators1 b) { return null; }
-            public static ClassWithOperators1 operator *(ClassWithOperators1 a, ClassWithOperators1 b) { return null; }
-            public static ClassWithOperators1 operator %(ClassWithOperators1 a, ClassWithOperators1 b) { return null; }
-
-            public static ClassWithOperators1 operator <<(ClassWithOperators1 a, int b) { return null; }
-            public static ClassWithOperators1 operator >>(ClassWithOperators1 a, int b) { return null; }
-            public static ClassWithOperators1 operator &(ClassWithOperators1 a, ClassWithOperators1 b) { return null; }
-            public static ClassWithOperators1 operator |(ClassWithOperators1 a, ClassWithOperators1 b) { return null; }
-            public static ClassWithOperators1 operator ^(ClassWithOperators1 a, ClassWithOperators1 b) { return null; }
-
-            public static bool operator ==(ClassWithOperators1 a, ClassWithOperators1 b) { return false; }
-            public static bool operator !=(ClassWithOperators1 a, ClassWithOperators1 b) { return false; }
-            public static bool operator >(ClassWithOperators1 a, ClassWithOperators1 b) { return false; }
-            public static bool operator >=(ClassWithOperators1 a, ClassWithOperators1 b) { return false; }
-            public static bool operator <(ClassWithOperators1 a, ClassWithOperators1 b) { return false; }
-            public static bool operator <=(ClassWithOperators1 a, ClassWithOperators1 b) { return false; }
-
-            [SpecialName] 
-            public static ClassWithOperators1 Power(ClassWithOperators1 a, ClassWithOperators1 b) { return null; }
-
-            public override bool Equals(object obj) { return base.Equals(obj); }
-            public override int GetHashCode() { return base.GetHashCode(); }
-        }
-
-        // TODO: bug in IPy
-        public void PythonInterop_Operators_Fallback1() {
-            if (!_driver.RunPython) return;
-
-            var py = Runtime.GetEngine("python");
-            ScriptScope scope = py.CreateScope();
-            scope.SetVariable("ClassWithOperators", typeof(ClassWithOperators1));
-            py.Execute(@"
-import clr
-class C(clr.GetPythonType(ClassWithOperators)): pass
-", scope);
-
-            XAssertOutput(() =>
-                Engine.Execute(@"
-BinaryOperators = [:+, :-, :/, :*, :%, :==, :>, :>=, :<, :<=, :&, :|, :^, :<<, :>>, :**]
-UnaryOperators = [:-@, :+@, :~]
-Operators = BinaryOperators + UnaryOperators
-
-class_with_operators.to_class.module_eval do
-  Operators.each do |op|
-    define_method(op) do
-      Kernel.print op, ' '
-    end
-  end
-end
-
-c = C().new
-p(c + c)
-p(c - c)
-p(c / c)
-p(c * c)
-p(c % c)
-p(c == c)
-p(c > c)
-p(c >= c)
-p(c < c)
-p(c <= c)
-p(c & c)
-p(c | c)
-p(c ^ c)
-p(c << 1)
-p(c >> 1)
-p(c ** c)
-p(-c)
-p(+c)
-p(~c)
-", scope), @"
-");
-        }
-
-        /// <summary>
-        /// We convert a call to a setter with multiple parameters to a GetMember + SetIndex.
-        /// This makes indexed properties on foreign meta-objects work.
-        /// </summary>
-        public void PythonInterop_NamedIndexers1() {
-            if (!_driver.RunPython) return;
-            
-            var py = Runtime.GetEngine("python");
-            ScriptScope scope = py.CreateScope();
-            py.Execute(@"
-class C:
-  def __init__(self):
-    self.Foo = Indexable()
-  
-class Indexable:
-  def __setitem__(self, index, value):
-    print index, value
-", scope);
-
-            AssertOutput(() =>
-                Engine.Execute(@"
-c = C().new
-c.foo[1, 2] = 3
-c.Foo[4, 5] = 6
-c.send(:foo=, 7, 8, 9)
-c.send(:Foo=, 10, 11, 12)
-", scope), @"
-(1, 2) 3
-(4, 5) 6
-(7, 8) 9
-(10, 11) 12
-");
         }
 
         public void CustomTypeDescriptor1() {

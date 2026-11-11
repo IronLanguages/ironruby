@@ -63,6 +63,13 @@ namespace IronRuby.Builtins {
             }
 
             int number = PosixSignals.ToNumber(context, signalId, true);
+
+            // a non-main Ractor's handler runs in the main Ractor, so a block has to be isolated (CRuby's rb_proc_isolate)
+            var handler = command as Proc;
+            if (handler != null && RactorIsolation.IsNonMain(context) && !Shareability.IsShareable(context, handler)) {
+                RubyRactor.Isolate(handler);
+            }
+
             if (number == SignalExit) {
                 // EXIT is not a signal at all - nothing sends it - so it is the runtime's
                 // shutdown that has to run it, which is what this hands over.
@@ -73,11 +80,6 @@ namespace IronRuby.Builtins {
                         var exitSite = callStorage.GetCallSite("call", 1);
                         exitSite.Target(exitSite, exitCommand, ScriptingRuntimeHelpers.Int32ToObject(0));
                     });
-            }
-
-            if (number == SignalInterrupt) {
-                var proc = command as Proc;
-                context.InterruptSignalHandler = (proc != null) ? new Action(() => proc.Call(null)) : null;
             }
 
             // MRI runs trap handlers on the main thread at an interrupt check, not on whatever
@@ -95,16 +97,29 @@ namespace IronRuby.Builtins {
             // the platform instead makes `Signal.trap(:INT, :SIG_DFL); Process.kill :INT; sleep`
             // hang, because .NET's own SIGINT handling swallows it.
             Action<int> defaultInvoke = (number == SignalInterrupt && mainThread != null)
-                ? new Action<int>(_ => RubyUtils.RaiseAsyncException(mainThread, new Interrupt()))
+                ? new Action<int>(_ => RubyUtils.RaiseAsyncException(mainThread, new Interrupt(String.Empty)))
                 : null;
 
             // No try/catch around the call: PosixSignals runs handlers on the main thread at a
             // safe point, so an exception out of one propagates there by itself, which is where
             // MRI raises it too.
-            return PosixSignals.Trap(number, command, signalNumber =>
+            object previous = PosixSignals.Trap(number, command, signalNumber =>
                 site.Target(site, command, ScriptingRuntimeHelpers.Int32ToObject(signalNumber)),
                 defaultInvoke
             );
+
+            if (number == SignalInterrupt) {
+                // The console's Ctrl-C hook (Console.CancelKeyPress) runs InterruptSignalHandler on
+                // .NET's signal thread. Where PosixSignals has a registration of its own for SIGINT,
+                // that one already runs the handler, on the main thread: dispatching it from the hook
+                // too ran a trap(:INT) block twice, once on the wrong thread, and raised a second
+                // Interrupt into a program already unwinding from the first.
+                var proc = command as Proc;
+                context.InterruptSignalHandler = (proc != null && !PosixSignals.IsRegistered(number))
+                    ? new Action(() => proc.Call(null))
+                    : null;
+            }
+            return previous;
         }
 
         [RubyMethod("trap", RubyMethodAttributes.PublicSingleton)]
@@ -122,7 +137,7 @@ namespace IronRuby.Builtins {
             return Trap(callStorage, stringCast, context, self, signalId, block.Proc);
         }
 
-        private const int SignalInterrupt = 2;
+        private const int SignalInterrupt = PosixSignals.SignalInterrupt;
         private const int SignalExit = 0;
 
         #endregion

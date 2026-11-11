@@ -13,17 +13,9 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-using CsBinder = Microsoft.CSharp.RuntimeBinder.Binder;
-using CSharpBinderFlags = Microsoft.CSharp.RuntimeBinder.CSharpBinderFlags;
-#else
-using Microsoft.Scripting.Ast;
-using dynamic = System.Object;
-#endif
 
 using System;
-using System.Diagnostics;
 using System.Dynamic;
 using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
@@ -32,7 +24,6 @@ using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Collections;
-using IronRuby.Runtime;
 using System.Collections.Generic;
 
 namespace IronRuby.Tests {
@@ -809,10 +800,34 @@ scope.ruby_proc = proc { |a| a + 2 }
         }
 
         public void Dlr_Methods() {
-            //assert_equal Methods.default_values(100), 'a:100 b:2'
-            //assert_equal Methods.varargs(100, 200), '100 200'
-            //assert_equal Methods.multiple_return_values, [100, 200]
-            //assert_equal Methods.with_block {|x| x + 1000}, 1100
+            object methods = Engine.Execute(@"
+class Methods
+  def default_values(a, b = 2)
+    ""a:#{a} b:#{b}""
+  end
+
+  def varargs(*args)
+    args.join(' ')
+  end
+
+  def multiple_return_values
+    return 100, 200
+  end
+end
+
+Methods.new
+");
+            dynamic m = methods;
+            AreEqual(m.default_values(100).ToString(), "a:100 b:2");
+            AreEqual(m.default_values(100, 3).ToString(), "a:100 b:3");
+            AreEqual(m.varargs(100, 200).ToString(), "100 200");
+            AreEqual(m.varargs().ToString(), "");
+
+            var values = (RubyArray)m.multiple_return_values();
+            Assert(values.Count == 2 && (int)values[0] == 100 && (int)values[1] == 200);
+
+            AreEqual(MyInvokeMemberBinder.Invoke(methods, "default_values", 1).ToString(), "a:1 b:2");
+            AreEqual(MyInvokeMemberBinder.Invoke(methods, "varargs").ToString(), "");
         }
 
         public void Dlr_Visibility() {
@@ -858,11 +873,6 @@ end");
             var classD = Runtime.Globals.GetVariable("D");
             var d = Engine.Operations.CreateInstance(classD);
             Assert(d is Hash);
-        }
-
-        public void Dlr_Languages() {
-            //# Pass in ref/out params
-            //# Named arguments
         }
 
         public class DynamicObject1 : DynamicObject {
@@ -933,7 +943,7 @@ C.xxx rescue puts $!.to_s[0, 22]
 1
 2
 2
-undefined method `xxx'
+undefined method 'xxx'
 ");
         }
 

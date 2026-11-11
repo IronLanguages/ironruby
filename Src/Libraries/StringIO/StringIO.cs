@@ -15,15 +15,12 @@
 
 using System.Runtime.InteropServices;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Actions;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Utils;
 using System;
 using System.IO;
-using System.Numerics;
-using System.Diagnostics;
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
@@ -138,7 +135,7 @@ namespace IronRuby.StandardLibrary.StringIO {
             ConversionStorage<int?>/*!*/ toInt, ConversionStorage<MutableString>/*!*/ toStr,
             BlockParam block, RubyClass/*!*/ self,
             [Optional]object content, [Optional]object mode,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             // MRI does not yield to a block here and says so rather than swallowing it.
             if (block != null) {
@@ -155,7 +152,7 @@ namespace IronRuby.StandardLibrary.StringIO {
             ConversionStorage<int?>/*!*/ toInt, ConversionStorage<MutableString>/*!*/ toStr,
             RubyContext/*!*/ context, StringIO/*!*/ self,
             [Optional]object content, [Optional]object mode,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             Initialize(toHash, toInt, toStr, context, self, content, mode, options);
             return self;
@@ -287,10 +284,6 @@ namespace IronRuby.StandardLibrary.StringIO {
             self._initialMode = other._initialMode;
             self._lineNumber = other._lineNumber;
             self._position = other._position;
-
-            // TODO: this seems to be MRI bug
-            // Shouldn't StringIO's taint be always same as the underlying string's taint?
-            context.TaintObjectBy(self, other);
             return self;
         }
 
@@ -390,7 +383,8 @@ namespace IronRuby.StandardLibrary.StringIO {
                 throw RubyExceptions.CreateEINVAL("negative length");
             }
             self.GetWritableContent().SetByteCount(length);
-            return lengthObj;
+            // MRI answers 0, whatever the length
+            return 0;
         }
 
         // MRI's strio_rewind does not check that the stream is open: a StringIO that a
@@ -575,7 +569,6 @@ namespace IronRuby.StandardLibrary.StringIO {
                     throw RubyExceptions.CreateIOError("not modifiable string");
                 }
 
-                content.TaintBy(value);
                 self._position = pos + bytesWritten;
             }
             return bytesWritten;
@@ -583,7 +576,18 @@ namespace IronRuby.StandardLibrary.StringIO {
 
         [RubyMethod("write")]
         [RubyMethod("syswrite")]
+        public static int Write(StringIO/*!*/ self, DynamicNull value) {
+            // nil.to_s is "": nothing to write, as for IO#write(nil), but the stream must be writable
+            self.GetWritableContent();
+            return 0;
+        }
+
+        [RubyMethod("write")]
+        [RubyMethod("syswrite")]
         public static int Write(ConversionStorage<MutableString>/*!*/ tosConversion, StringIO/*!*/ self, object obj) {
+            if (obj == null) {
+                return Write(self, (DynamicNull)null);
+            }
             return Write(self, Protocols.ConvertToString(tosConversion, obj));
         }
 
@@ -593,8 +597,10 @@ namespace IronRuby.StandardLibrary.StringIO {
         /// </summary>
         [RubyMethod("write")]
         public static int Write(ConversionStorage<MutableString>/*!*/ tosConversion, StringIO/*!*/ self,
-            object first, [NotNull]params object[]/*!*/ rest) {
+            object first, params object[]/*!*/ rest) {
 
+            // A lone nil after the first argument binds as the params array itself.
+            rest = rest ?? new object[] { null };
             int written = Write(tosConversion, self, first);
             foreach (object value in rest) {
                 written += Write(tosConversion, self, value);
@@ -634,6 +640,15 @@ namespace IronRuby.StandardLibrary.StringIO {
             int start = self._position;
             int length = content.GetByteCount();
 
+            if (start == 0 && length > 0 && !ReferenceEquals(buffer, content)) {
+                // All of the string: a copy that shares its content until one of the two changes
+                // (copy-on-write, see MutableString.Replace), as MRI's does - reading a long buffer
+                // used to copy it every time.
+                buffer = (buffer != null) ? buffer.Replace(content) : MutableString.Create(content);
+                self._position = length;
+                return buffer;
+            }
+
             if (buffer != null) {
                 buffer.Clear();
             } else {
@@ -642,11 +657,13 @@ namespace IronRuby.StandardLibrary.StringIO {
 
             if (start < length) {
                 self._position = length;
-                buffer.Append(content, start, length - start).TaintBy(content);
+                buffer.Append(content, start, length - start);
             } else if (eofError) {
                 throw new EOFError("end of file reached");
             }
 
+            // Only a read of so many bytes answers bytes; the rest of the string keeps its encoding.
+            buffer.ForceEncoding(content.Encoding);
             return buffer;
         }
 
@@ -690,12 +707,20 @@ namespace IronRuby.StandardLibrary.StringIO {
                 return null;
             }
 
+            int bytesRead = Math.Min(count, length - self._position);
+            if (buffer == null && self._position == 0 && bytesRead == length) {
+                // All of the string, shared as by read() above, and tagged as bytes.
+                buffer = MutableString.Create(content);
+                buffer.ForceEncoding(encoding);
+                self._position = length;
+                return buffer;
+            }
+
             if (buffer == null) {
                 buffer = MutableString.CreateBinary();
             }
 
-            int bytesRead = Math.Min(count, length - self._position);
-            buffer.Append(content, self._position, bytesRead).TaintBy(content);
+            buffer.Append(content, self._position, bytesRead);
             buffer.ForceEncoding(encoding);
             self._position += bytesRead;
             return buffer;
@@ -767,15 +792,100 @@ namespace IronRuby.StandardLibrary.StringIO {
 
         #region getc, getbyte (1.9), ungetc, ungetbyte (1.9), readchar, readbyte (1.9)
 
+        /// <summary>
+        /// One character in the stream's encoding, as many bytes as that encoding needs, as MRI's
+        /// strio_getc measures it (rb_enc_mbclen): the shortest run of bytes that is a valid
+        /// character, and when no run of up to four bytes is one, a single code unit - one byte, or
+        /// two in UTF-16 and four in UTF-32 - rather than everything up to the next valid character.
+        /// The result keeps the bytes the stream had.
+        /// </summary>
         [RubyMethod("getc")]
         public static object GetByte(StringIO/*!*/ self) {
             var content = self.GetReadableContent();
+            int position = self._position;
+            int length = content.GetByteCount();
 
-            if (self._position >= content.GetByteCount()) {
+            if (position >= length) {
                 return null;
             }
 
-            return ScriptingRuntimeHelpers.Int32ToObject(content.GetByte(self._position++));
+            RubyEncoding encoding = self._externalEncoding ?? content.Encoding;
+            byte first = content.GetByte(position);
+            int count;
+
+            if ((first < 0x80 && encoding.IsAsciiIdentity) || encoding == RubyEncoding.Binary) {
+                // an ASCII byte is a character of its own in any ASCII-compatible encoding, and
+                // every byte is one in BINARY
+                count = 1;
+            } else if (encoding == RubyEncoding.UTF8) {
+                count = GetUtf8CharacterLength(content, position, length);
+            } else {
+                count = GetCharacterLength(content, position, length, encoding);
+            }
+
+            self._position = position + count;
+            return MutableString.CreateBinary(content.GetBinarySlice(position, count), encoding);
+        }
+
+        /// <summary>
+        /// The length of the well-formed UTF-8 sequence at <paramref name="position"/> (Unicode's
+        /// table 3-7, which is what MRI's UTF-8 accepts: no overlong forms, no surrogates, nothing
+        /// past U+10FFFF), or 1 when the bytes there are not one.
+        /// </summary>
+        private static int GetUtf8CharacterLength(MutableString/*!*/ content, int position, int length) {
+            byte first = content.GetByte(position);
+            int count;
+            byte low = 0x80, high = 0xBF;
+            if (first < 0x80) {
+                return 1;
+            } else if (first >= 0xC2 && first <= 0xDF) {
+                count = 2;
+            } else if (first >= 0xE0 && first <= 0xEF) {
+                count = 3;
+                if (first == 0xE0) {
+                    low = 0xA0;
+                } else if (first == 0xED) {
+                    high = 0x9F;
+                }
+            } else if (first >= 0xF0 && first <= 0xF4) {
+                count = 4;
+                if (first == 0xF0) {
+                    low = 0x90;
+                } else if (first == 0xF4) {
+                    high = 0x8F;
+                }
+            } else {
+                return 1;
+            }
+
+            if (position + count > length) {
+                return 1;
+            }
+            byte second = content.GetByte(position + 1);
+            if (second < low || second > high) {
+                return 1;
+            }
+            for (int i = 2; i < count; i++) {
+                byte next = content.GetByte(position + i);
+                if (next < 0x80 || next > 0xBF) {
+                    return 1;
+                }
+            }
+            return count;
+        }
+
+        /// <summary>
+        /// The same measure for any other encoding, by asking which prefix of the bytes at
+        /// <paramref name="position"/> the encoding calls valid - what String#valid_encoding? asks.
+        /// </summary>
+        private static int GetCharacterLength(MutableString/*!*/ content, int position, int length, RubyEncoding/*!*/ encoding) {
+            int available = Math.Min(length - position, 4);
+            for (int count = 1; count <= available; count++) {
+                if (!MutableString.CreateBinary(content.GetBinarySlice(position, count), encoding).ContainsInvalidCharacters()) {
+                    return count;
+                }
+            }
+            return Math.Min(encoding.MinBytesPerChar, available);
         }
 
         [RubyMethod("ungetc")]
@@ -909,8 +1019,16 @@ namespace IronRuby.StandardLibrary.StringIO {
             }
 
             int separatorLength = separator.GetByteCount();
-            if (separatorLength == 0 || length < separatorLength || !line.EndsWith(separator)) {
+            if (separatorLength == 0 || length < separatorLength) {
                 return line;
+            }
+            // The separator is compared as bytes - the line is a slice of the content and its
+            // separator was found as bytes - and the line, which nothing else holds yet, is cut
+            // where it is rather than sliced into another string.
+            for (int i = 0; i < separatorLength; i++) {
+                if (line.GetByte(length - separatorLength + i) != separator.GetByte(i)) {
+                    return line;
+                }
             }
 
             int cut = length - separatorLength;
@@ -919,22 +1037,17 @@ namespace IronRuby.StandardLibrary.StringIO {
             if (separatorLength == 1 && separator.GetByte(0) == (byte)'\n' && cut > 0 && line.GetByte(cut - 1) == (byte)'\r') {
                 cut--;
             }
-            return line.GetSlice(0, cut);
+            line.SetByteCount(cut);
+            return line;
         }
 
+        // The bare call - nearly every gets - binds without the optional arguments' conversions.
         [RubyMethod("gets")]
-        public static MutableString Gets(ConversionStorage<IDictionary<object, object>>/*!*/ toHash,
-            ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
-            RubyScope/*!*/ scope, StringIO/*!*/ self,
-            [Optional]object separatorOrLimit, [Optional]object limitOrOptions,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+        public static MutableString Gets(RubyScope/*!*/ scope, StringIO/*!*/ self) {
+            return Gets(scope, self, scope.RubyContext.InputSeparator, -1, false);
+        }
 
-            MutableString separator;
-            int limit;
-            bool chomp;
-            ParseLineArguments(toHash, toStr, toInt, scope.RubyContext, separatorOrLimit, limitOrOptions, options,
-                out separator, out limit, out chomp);
-
+        private static MutableString Gets(RubyScope/*!*/ scope, StringIO/*!*/ self, MutableString separator, int limit, bool chomp) {
             var content = self.GetReadableContent();
 
             int position = self._position;
@@ -944,9 +1057,28 @@ namespace IronRuby.StandardLibrary.StringIO {
             // $_ is frame local, and the frame it belongs in is the caller's - which is why this
             // is not wrapped in Ruby the way the chomp: option once was.
             scope.GetInnerMostClosureScope().LastInputLine = result;
-            self._lineNumber++;
+            // Every read that answers a line counts, cut short by a limit or not - but the nil at
+            // the end is not a line, and neither is the "" of gets(0) (MRI's strio_gets).
+            if (result != null && limit != 0) {
+                self._lineNumber++;
+            }
 
             return result;
+        }
+
+        [RubyMethod("gets")]
+        public static MutableString Gets(ConversionStorage<IDictionary<object, object>>/*!*/ toHash,
+            ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
+            RubyScope/*!*/ scope, StringIO/*!*/ self,
+            [Optional]object separatorOrLimit, [Optional]object limitOrOptions,
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+
+            MutableString separator;
+            int limit;
+            bool chomp;
+            ParseLineArguments(toHash, toStr, toInt, scope.RubyContext, separatorOrLimit, limitOrOptions, options,
+                out separator, out limit, out chomp);
+            return Gets(scope, self, separator, limit, chomp);
         }
 
         [RubyMethod("readline")]
@@ -954,7 +1086,7 @@ namespace IronRuby.StandardLibrary.StringIO {
             ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
             RubyScope/*!*/ scope, StringIO/*!*/ self,
             [Optional]object separatorOrLimit, [Optional]object limitOrOptions,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             // no dynamic call, modifies $_ scope variable:
             MutableString result = Gets(toHash, toStr, toInt, scope, self, separatorOrLimit, limitOrOptions, options);
@@ -970,7 +1102,7 @@ namespace IronRuby.StandardLibrary.StringIO {
             ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
             RubyContext/*!*/ context, StringIO/*!*/ self,
             [Optional]object separatorOrLimit, [Optional]object limitOrOptions,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             MutableString separator;
             int limit;
@@ -1035,6 +1167,10 @@ namespace IronRuby.StandardLibrary.StringIO {
                         position++;
                     }
                 }
+            } else if (separator.GetByteCount() == 1) {
+                // the usual "\n": one byte to look for, and no copy of the separator to look with
+                position = content.IndexOf(separator.GetByte(0), oldPosition);
+                position = (position != -1) ? position + 1 : length;
             } else {
                 // Positions are byte offsets, so the separator is looked for as bytes too: searching
                 // for it as a string switched a non-ASCII content to characters, giving a character
@@ -1048,6 +1184,13 @@ namespace IronRuby.StandardLibrary.StringIO {
             // of the two: gets(">", 2) answers "th", not "this>".
             if (limit > 0 && position - oldPosition > limit) {
                 position = oldPosition + limit;
+                // MRI relaxes the limit while it would split a character, by 16 bytes at most:
+                // gets(1) on "é" answers "é". A UTF-8 continuation byte at the cut marks the split.
+                if (content.Encoding.StrictEncoding.CodePage == 65001) {
+                    for (int extra = 16; extra > 0 && position < length && (content.GetByte(position) & 0xC0) == 0x80; extra--) {
+                        position++;
+                    }
+                }
             }
 
             return content.GetSlice(oldPosition, position - oldPosition);
@@ -1057,13 +1200,15 @@ namespace IronRuby.StandardLibrary.StringIO {
 
         #region each, each_line, each_byte, each_char (1.9)
 
-        [RubyMethod("each")]
+        // #each_line first: a backtrace names the frame by it, which makes it one frame with the Ruby
+        // #each_line that wraps it (stringio.rb)
         [RubyMethod("each_line")]
+        [RubyMethod("each")]
         public static object EachLine(ConversionStorage<IDictionary<object, object>>/*!*/ toHash,
             ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
             RubyContext/*!*/ context, BlockParam block, StringIO/*!*/ self,
             [Optional]object separatorOrLimit, [Optional]object limitOrOptions,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             MutableString separator;
             int limit;
@@ -1191,7 +1336,7 @@ namespace IronRuby.StandardLibrary.StringIO {
 
         [RubyMethod("set_encoding")]
         public static StringIO/*!*/ SetEncoding(ConversionStorage<MutableString>/*!*/ toStr, StringIO/*!*/ self,
-            object external, object @internal, object options) {
+            object external, object @internal, [Keywords]object options) {
             return SetExternalEncoding(toStr, self, external);
         }
 
@@ -1269,7 +1414,7 @@ namespace IronRuby.StandardLibrary.StringIO {
 
         [RubyMethod("fcntl")]
         public static void FileControl(StringIO/*!*/ self) {
-            throw new NotImplementedError();
+            throw new NotImplementedError("fcntl() function is unimplemented on this machine");
         }
 
         [RubyMethod("fileno")]

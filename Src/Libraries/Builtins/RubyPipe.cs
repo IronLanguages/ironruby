@@ -198,6 +198,24 @@ namespace IronRuby.Builtins {
             get { return true; }
         }
 
+        // IO#timeout: how long a read or a write waits for the other end, per end of the pipe.
+        private int _readTimeout = Timeout.Infinite;
+        private int _writeTimeout = Timeout.Infinite;
+
+        public override bool CanTimeout {
+            get { return true; }
+        }
+
+        public override int ReadTimeout {
+            get { return _readTimeout; }
+            set { _readTimeout = value; }
+        }
+
+        public override int WriteTimeout {
+            get { return _writeTimeout; }
+            set { _writeTimeout = value; }
+        }
+
         public override void Flush() {
             throw new NotImplementedException();
         }
@@ -248,7 +266,14 @@ namespace IronRuby.Builtins {
 
                 // Wait until data is available, the writer closes the pipe, or this end is closed
                 // from another thread.
-                if (WaitHandle.WaitAny(_eventArray) == ReaderClosedEventIndex) {
+                int signaled;
+                using (RubyUtils.BlockingWait.Enter()) {
+                    signaled = WaitHandle.WaitAny(_eventArray, _readTimeout);
+                }
+                if (signaled == WaitHandle.WaitTimeout) {
+                    throw new TimeoutException();
+                }
+                if (signaled == ReaderClosedEventIndex) {
                     throw RubyExceptions.CreateIOError("stream closed in another thread");
                 }
             }
@@ -276,7 +301,13 @@ namespace IronRuby.Builtins {
             while (remaining > 0) {
                 remaining -= WriteWithoutWaiting(buffer, offset + count - remaining, remaining);
                 if (remaining > 0) {
-                    WaitHandle.WaitAny(_writeEventArray);
+                    int signaled;
+                    using (RubyUtils.BlockingWait.Enter()) {
+                        signaled = WaitHandle.WaitAny(_writeEventArray, _writeTimeout);
+                    }
+                    if (signaled == WaitHandle.WaitTimeout) {
+                        throw new TimeoutException();
+                    }
                 }
             }
         }

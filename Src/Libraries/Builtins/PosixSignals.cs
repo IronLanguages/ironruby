@@ -10,7 +10,6 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Threading;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {
 
@@ -23,7 +22,7 @@ namespace IronRuby.Builtins {
     internal static class PosixSignals {
         // Linux signal numbers. They are what Signal.list has always reported and what the
         // platform we run ruby/spec on uses.
-        private static readonly Dictionary<string, int> _numbers = new Dictionary<string, int>(StringComparer.Ordinal) {
+        private static readonly Dictionary<string, int> _posixNumbers = new Dictionary<string, int>(StringComparer.Ordinal) {
             { "HUP", 1 }, { "INT", 2 }, { "QUIT", 3 }, { "ILL", 4 }, { "TRAP", 5 },
             { "ABRT", 6 }, { "IOT", 6 }, { "BUS", 7 }, { "FPE", 8 }, { "KILL", 9 },
             { "USR1", 10 }, { "SEGV", 11 }, { "USR2", 12 }, { "PIPE", 13 }, { "ALRM", 14 },
@@ -32,6 +31,15 @@ namespace IronRuby.Builtins {
             { "XCPU", 24 }, { "XFSZ", 25 }, { "VTALRM", 26 }, { "PROF", 27 }, { "WINCH", 28 },
             { "IO", 29 }, { "POLL", 29 }, { "PWR", 30 }, { "SYS", 31 },
         };
+
+        // MRI on Windows knows only the C runtime's signals, by the C runtime's numbers - ABRT is
+        // 22 there. Listing HUP or USR1 told code that checks Signal.list.key?("HUP") before
+        // trapping it that it could, where MRI says "unsupported signal 'SIGHUP'".
+        private static readonly Dictionary<string, int> _windowsNumbers = new Dictionary<string, int>(StringComparer.Ordinal) {
+            { "INT", 2 }, { "ILL", 4 }, { "ABRT", 22 }, { "FPE", 8 }, { "KILL", 9 }, { "SEGV", 11 }, { "TERM", 15 },
+        };
+
+        private static readonly Dictionary<string, int> _numbers = RubyProcess.IsWindows ? _windowsNumbers : _posixNumbers;
 
         internal static IEnumerable<KeyValuePair<string, int>> Numbers {
             get { return _numbers; }
@@ -53,8 +61,8 @@ namespace IronRuby.Builtins {
         internal static int ToNumber(RubyContext context, object signalId, bool forTrap) {
             if (signalId is int) {
                 int given = (int)signalId;
-                if (forTrap && (given < 0 || ToName(given) == null)) {
-                    throw RubyExceptions.CreateArgumentError("invalid signal number ({0})", given);
+                if (forTrap) {
+                    CheckTrapNumber(given);
                 }
                 return given;
             }
@@ -96,10 +104,32 @@ namespace IronRuby.Builtins {
 
             int number;
             if (!_numbers.TryGetValue(bare, out number)) {
-                throw RubyExceptions.CreateArgumentError("unsupported signal `{0}'",
+                throw RubyExceptions.CreateArgumentError("unsupported signal '{0}'",
                     name.StartsWith("SIG", StringComparison.Ordinal) ? name : "SIG" + name);
             }
             return negated ? -number : number;
+        }
+
+        /// <summary>
+        /// MRI traps any number below NSIG, named in Signal.list or not, as long as the C library
+        /// takes it: on Linux every one up to 64 except 32 and 33, which glibc keeps for its own
+        /// threads; on Windows only SIGABRT_COMPAT (6) and SIGBREAK (21) besides the listed ones.
+        /// The C library's refusal is EINVAL (MRI on Windows sometimes reports a stale errno
+        /// instead, ENOTTY for 1 and 3); a number at or past NSIG is not a signal at all. NSIG is 23
+        /// for the Windows C runtime, 32 on macOS and 65 on Linux.
+        /// </summary>
+        private static void CheckTrapNumber(int number) {
+            int maxSignal = RubyProcess.IsWindows ? 22 : RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? 31 : 64;
+            if (number < 0 || number > maxSignal) {
+                throw RubyExceptions.CreateArgumentError("invalid signal number ({0})", number);
+            }
+            if (ToName(number) != null) {
+                return;
+            }
+            bool taken = RubyProcess.IsWindows ? (number == 6 || number == 21) : (number != 32 && number != 33);
+            if (!taken) {
+                throw RubyExceptions.CreateEINVAL("SIG{0}", number);
+            }
         }
 
         internal static string ToName(int number) {
@@ -117,6 +147,8 @@ namespace IronRuby.Builtins {
         #region kill
 
         private const int SignalPipe = 13;
+        internal const int SignalInterrupt = 2;
+        private const int SignalBreak = 21;
 
         [DllImport("libc", EntryPoint = "signal")]
         private static extern IntPtr SysSignal(int signal, IntPtr handler);
@@ -132,9 +164,15 @@ namespace IronRuby.Builtins {
         [DllImport("libc", SetLastError = true, EntryPoint = "kill")]
         private static extern int SysKill(int pid, int signal);
 
-        private const int ESRCH = 3;
-        private const int EPERM = 1;
-        private const int EINVAL = 22;
+        internal const int EINVAL = 22;
+
+        /// <summary>
+        /// A signal number that is not in Signal.list on Windows, where MRI's kill refuses it with
+        /// EINVAL. Elsewhere kill(2) is the judge.
+        /// </summary>
+        internal static bool IsUnsupportedOnWindows(int signal) {
+            return RubyProcess.IsWindows && signal != 0 && ToName(signal) == null;
+        }
 
         /// <summary>
         /// Signals whose default disposition is to end the process. MRI installs a handler for each of
@@ -155,7 +193,23 @@ namespace IronRuby.Builtins {
                 case 28:  // WINCH
                     return false;
                 default:
-                    return signal > 0;
+                    return signal > 0 && !IgnoredByDefault(signal);
+            }
+        }
+
+        /// <summary>
+        /// Signals that would end the process but that MRI swallows unless a program asks otherwise:
+        /// it installs a do-nothing handler for PIPE and SYS and keeps VTALRM for itself, so a
+        /// program that sends one of them to itself carries on.
+        /// </summary>
+        internal static bool IgnoredByDefault(int signal) {
+            switch (signal) {
+                case SignalPipe:
+                case 26:  // VTALRM
+                case 31:  // SYS
+                    return true;
+                default:
+                    return false;
             }
         }
 
@@ -174,9 +228,40 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>Whether a handler for the signal is registered with the platform.</summary>
+        internal static bool IsRegistered(int signal) {
+            lock (_handlers) {
+                Handler handler;
+                return _handlers.TryGetValue(signal, out handler) && handler.Registration != null;
+            }
+        }
+
         internal static bool HasHandler(int signal) {
             lock (_handlers) {
                 return _handlers.ContainsKey(signal);
+            }
+        }
+
+        /// <summary>
+        /// Whether a #trap left something for the signal to run or to ignore it with - a handler,
+        /// "IGNORE", or SIGINT's "DEFAULT" (Interrupt). Trapping "DEFAULT" back for any other
+        /// signal, or "SYSTEM_DEFAULT", is the same as never having trapped it.
+        /// </summary>
+        internal static bool HasRubyHandler(int signal) {
+            lock (_handlers) {
+                Handler handler;
+                if (!_handlers.TryGetValue(signal, out handler)) {
+                    return false;
+                }
+                return !IsSystemDefault(handler.Command) && !(IsDefault(handler.Command) && handler.Invoke == null);
+            }
+        }
+
+        /// <summary>Whether the signal was handed back to the OS with trap(signal, "SYSTEM_DEFAULT").</summary>
+        internal static bool IsTrappedToSystemDefault(int signal) {
+            lock (_handlers) {
+                Handler handler;
+                return _handlers.TryGetValue(signal, out handler) && IsSystemDefault(handler.Command);
             }
         }
 
@@ -186,6 +271,18 @@ namespace IronRuby.Builtins {
         /// to the prelude, which knows how to turn it into the right class.
         /// </summary>
         internal static int Kill(int pid, int signal) {
+            if (RubyProcess.IsWindows) {
+                // MRI's win32 kill() raise()s a signal a process sends itself (any but 0 and KILL), so
+                // its trap handler runs. The main thread has run it already (RubyProcess.Kill); from any
+                // other thread it is parked for the main one, as a delivered signal would be.
+                if (pid == Environment.ProcessId && signal != 0 && signal != SignalKill) {
+                    if (HasHandler(signal)) {
+                        Enqueue(signal);
+                    }
+                    return 0;
+                }
+                return WindowsSpawn.Kill(pid, signal);
+            }
             if (SysKill(pid, signal) == 0) {
                 return 0;
             }
@@ -245,7 +342,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <summary>
         /// MRI refuses to let a Ruby handler replace the signals its own runtime depends on,
-        /// and the kernel refuses KILL and STOP outright.
+        /// and the kernel refuses KILL and STOP outright - which MRI 4.0 passes on as the
+        /// kernel's EINVAL.
         /// </summary>
         internal static void CheckTrappable(int signal) {
             switch (signal) {
@@ -258,7 +356,7 @@ namespace IronRuby.Builtins {
 
                 case 9:   // KILL
                 case 19:  // STOP
-                    throw RubyExceptions.CreateArgumentError("Signal already used by VM or OS: SIG{0}", ToName(signal));
+                    throw RubyExceptions.CreateEINVAL("SIG{0}", ToName(signal));
             }
         }
 
@@ -271,6 +369,12 @@ namespace IronRuby.Builtins {
         /// it left SIGUSR2 "DEFAULT".
         /// </summary>
         private static object InitialCommand(int signal) {
+            if (signal == 0) {   // EXIT
+                return null;
+            }
+            if (IsAbort(signal)) {
+                return null;
+            }
             switch (signal) {
                 case 1:   // HUP
                 case 2:   // INT
@@ -288,6 +392,14 @@ namespace IronRuby.Builtins {
                 default:
                     return MutableString.CreateAscii("SYSTEM_DEFAULT");
             }
+        }
+
+        // What the last #trap of ABRT or SIGABRT_COMPAT left in the Windows C runtime; see Trap.
+        private static string _abortDisposition;
+
+        // ABRT is 6 on Linux; on Windows it is 22, and 6 is the C runtime's SIGABRT_COMPAT.
+        private static bool IsAbort(int signal) {
+            return signal == 6 || (RubyProcess.IsWindows && signal == 22);
         }
 
         internal static object Trap(int signal, object command, Action<int> invoke) {
@@ -308,11 +420,32 @@ namespace IronRuby.Builtins {
                 Handler handler;
                 object previous = InitialCommand(signal);
                 if (_handlers.TryGetValue(signal, out handler)) {
-                    previous = handler.Command;
+                    // EXIT only ever reports a handler it can call; "DEFAULT", "IGNORE" and the
+                    // like left nothing behind, so MRI says nil.
+                    previous = (signal == 0 && (handler.Command == null || handler.Command is MutableString)) ? null : handler.Command;
+                    // "DEFAULT" puts back whatever MRI starts with, and that is what the next #trap
+                    // reports: "DEFAULT" where MRI has a handler of its own, nil for PIPE and SYS,
+                    // "SYSTEM_DEFAULT" for the rest - ABRT included, though it starts out as nil.
+                    if (signal != 0 && IsDefault(handler.Command)) {
+                        previous = IsAbort(signal) ? MutableString.CreateAscii("SYSTEM_DEFAULT") : InitialCommand(signal);
+                    }
                     if (handler.Registration != null) {
                         handler.Registration.Dispose();
                     }
                     _handlers.Remove(signal);
+                }
+
+                // On Windows ABRT (22) and SIGABRT_COMPAT (6) are one handler in the C runtime, each with
+                // a Ruby command of its own. MRI reports a signal's own Proc, and otherwise what the
+                // last #trap of either one left in the C runtime: its own handler ("DEFAULT"), SIG_IGN
+                // ("IGNORE") or SIG_DFL ("SYSTEM_DEFAULT") - and nil before either was trapped.
+                if (RubyProcess.IsWindows && IsAbort(signal)) {
+                    if (previous == null || previous is MutableString) {
+                        previous = (_abortDisposition != null) ? MutableString.CreateAscii(_abortDisposition) : null;
+                    }
+                    _abortDisposition = (command != null && !(command is MutableString)) ? "DEFAULT"
+                        : IsIgnore(command) ? "IGNORE"
+                        : "SYSTEM_DEFAULT";
                 }
 
                 // SYSTEM_DEFAULT hands SIGPIPE back to the OS, which ends the process on a write to
@@ -335,6 +468,7 @@ namespace IronRuby.Builtins {
                     installed.Registration = TryRegister(signal);
                 }
                 _handlers[signal] = installed;
+                SetCrtDisposition(signal);
                 return previous;
             }
         }
@@ -402,7 +536,7 @@ namespace IronRuby.Builtins {
             }
         }
 
-        private const int SignalInterrupt = 2;
+        private const int SignalKill = 9;
 
         /// <summary>
         /// MRI answers the canonical spelling of a symbolic handler, not the one it was given:
@@ -452,8 +586,11 @@ namespace IronRuby.Builtins {
         }
 
         private static PosixSignalRegistration TryRegister(int signal) {
+            // .NET on Windows takes only its own PosixSignal values, and calls Ctrl-Break SIGQUIT;
+            // the C runtime calls it SIGBREAK (21), which is the number MRI traps it by.
+            PosixSignal posixSignal = (RubyProcess.IsWindows && signal == SignalBreak) ? PosixSignal.SIGQUIT : (PosixSignal)signal;
             try {
-                return PosixSignalRegistration.Create((PosixSignal)signal, context => {
+                return PosixSignalRegistration.Create(posixSignal, context => {
                     // Whatever the signal would normally do to the process, a Ruby handler replaces it.
                     context.Cancel = true;
                     Enqueue(signal);
@@ -462,6 +599,111 @@ namespace IronRuby.Builtins {
                 // Unsupported signal number, or a platform without POSIX signals: the handler is
                 // still recorded so that #trap reports it back, it just never fires.
                 return null;
+            }
+        }
+
+        #endregion
+
+        #region Windows C runtime signals
+
+        // The Windows C runtime's signal(), from the universal CRT that .NET itself and MinGW-UCRT
+        // code load. A library linked against msvcrt.dll or a static CRT has a table of its own.
+        [DllImport("ucrtbase.dll", EntryPoint = "signal", CallingConvention = CallingConvention.Cdecl)]
+        private static extern IntPtr CrtSignal(int signal, IntPtr handler);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate void CrtSignalHandler(int signal);
+
+        // Kept in a static field for the life of the process: the C runtime holds only the
+        // function pointer, and a collected delegate would leave it pointing at freed thunk code.
+        private static readonly CrtSignalHandler _crtHandler = OnCrtSignal;
+        private static IntPtr _crtHandlerPointer;
+
+        private static readonly IntPtr CrtDefault = IntPtr.Zero;      // SIG_DFL
+        private static readonly IntPtr CrtIgnore = new IntPtr(1);     // SIG_IGN
+
+        /// <summary>
+        /// The C runtime signals that only native code can raise in-process and that #trap takes:
+        /// TERM (15), ABRT (22) and SIGABRT_COMPAT (6). .NET has no notion of them on Windows - its
+        /// PosixSignalRegistration knows only the console events - so a trap of one used to be
+        /// recorded and never run when a P/Invoked library called raise(SIGTERM). MRI's trap calls
+        /// signal() for them, and so do we.
+        ///
+        /// ILL, FPE and SEGV are not here: #trap refuses them ("reserved signal"), and the faults
+        /// managed code takes stay .NET's own exceptions. INT and BREAK (21) are left to .NET's
+        /// console registration: the C runtime's signal() for them hooks the console control
+        /// handler too, and two handlers would compete for Ctrl-C.
+        /// </summary>
+        private static bool IsCrtSignal(int signal) {
+            return RubyProcess.IsWindows && (signal == 15 || IsAbort(signal));
+        }
+
+        /// <summary>
+        /// Hands the C runtime what the Ruby side now says about the signal: our handler where a
+        /// trap installed something to run, SIG_IGN for "IGNORE", and SIG_DFL otherwise, as MRI's
+        /// trap does. ABRT and SIGABRT_COMPAT are one slot in the C runtime; what #trap left there
+        /// is the shared disposition #trap reports for them. Called with _handlers held.
+        /// </summary>
+        private static void SetCrtDisposition(int signal) {
+            if (!IsCrtSignal(signal)) {
+                return;
+            }
+
+            IntPtr disposition;
+            if (IsAbort(signal)) {
+                disposition = _abortDisposition == "DEFAULT" ? CrtHandlerPointer
+                    : _abortDisposition == "IGNORE" ? CrtIgnore
+                    : CrtDefault;
+            } else {
+                Handler handler;
+                if (!_handlers.TryGetValue(signal, out handler)) {
+                    disposition = CrtDefault;
+                } else if (handler.Invoke != null) {
+                    disposition = CrtHandlerPointer;
+                } else {
+                    disposition = IsIgnore(handler.Command) ? CrtIgnore : CrtDefault;
+                }
+            }
+
+            try {
+                CrtSignal(signal, disposition);
+            } catch (DllNotFoundException) {
+            } catch (EntryPointNotFoundException) {
+            }
+        }
+
+        private static IntPtr CrtHandlerPointer {
+            get {
+                if (_crtHandlerPointer == IntPtr.Zero) {
+                    _crtHandlerPointer = Marshal.GetFunctionPointerForDelegate(_crtHandler);
+                }
+                return _crtHandlerPointer;
+            }
+        }
+
+        /// <summary>
+        /// The C runtime calls this on the thread that called raise(), from inside its signal
+        /// dispatch, having reset the signal to SIG_DFL first. All it does is put our handler back
+        /// and park the signal for the main thread, as a signal .NET delivers is parked (Enqueue);
+        /// the Ruby block runs at the main thread's next safe point. Nothing may escape into the C
+        /// runtime's frames.
+        /// </summary>
+        private static void OnCrtSignal(int signal) {
+            try {
+                bool run;
+                lock (_handlers) {
+                    // Whatever #trap has said since is what goes back, so a handler replaced in the
+                    // meantime is not resurrected.
+                    SetCrtDisposition(signal);
+                    Handler handler;
+                    run = _handlers.TryGetValue(signal, out handler) && handler.Invoke != null;
+                }
+                // On the shared ABRT slot the signal can be the one of the pair whose command is
+                // nil or "DEFAULT"; MRI's handler does nothing for it, and neither do we.
+                if (run) {
+                    Enqueue(signal);
+                }
+            } catch (Exception) {
             }
         }
 

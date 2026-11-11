@@ -1,0 +1,169 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Largo <andi@idogawa.com>
+Date: Tue, 10 Nov 2026 09:00:00 +0100
+Subject: Interpreter: let an exception through a frame it would only rethrow
+
+Interpreter.Run caught every exception that left an interpreted frame, ran the
+frame's finally blocks and threw the exception again. Each throw is a CLR
+exception dispatch of its own, which costs microseconds on .NET 8 and grows
+with the frames it searches, so an exception that passed n interpreted frames
+was dispatched n + 1 times: raising through 20 interpreted Ruby methods took
+~470 us, against ~60 us through the same methods compiled.
+
+Run now catches only in a filter that says it must: a handler of the frame
+takes the exception, or a finally block of the frame contains a jump (which can
+end the exception, so it has to run inside the catch as before), or a handler
+of the frame encloses a finally block to run (it can catch what the block
+throws, which also ends the exception), or the stack is nearly exhausted (a
+catch gives the stack of the frames the exception came out of back before it
+rethrows, see 0105). Otherwise the exception goes on through, and the frame's
+finally blocks run from a finally of Run's own as it does - exactly the
+instructions the catch ran. The filter's decision is dropped when the frame
+completes normally: a handler below the frame can still catch an exception that
+a finally block threw while the original one was being dispatched, and the
+frame then goes on as if nothing had passed through it. The filter is also
+where the interpreted frames are saved on the exception, while all of them are
+still on the stack; HandleException still does it for an exception it catches.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs b/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs
+--- a/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs
+@@ -236,6 +236,14 @@ namespace Microsoft.Scripting.Interpreter {
+ 
+         #region Continuations
+ 
++        // A finally block to run before the frame is left (see Interpreter.MustCatch).
++        internal bool HasContinuations => _continuationIndex > 0;
++
++        internal int ContinuationCount => _continuationIndex;
++
++        // the label of the index-th pending finally block, outermost first
++        internal int GetContinuation(int index) => _continuations[index];
++
+         public void RemoveContinuation() {
+             _continuationIndex--;
+         }
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/Interpreter.cs b/src/core/Microsoft.Dynamic/Interpreter/Interpreter.cs
+--- a/src/core/Microsoft.Dynamic/Interpreter/Interpreter.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/Interpreter.cs
+@@ -86,6 +86,7 @@ namespace Microsoft.Scripting.Interpreter {
+         public void Run(InterpretedFrame frame) {
+             while (true) {
+                 ExceptionDispatchInfo rethrow;
++                bool runFinallyBlocks = false;
+                 try {
+                     var instructions = Instructions.Instructions;
+                     int index = frame.InstructionIndex;
+@@ -93,8 +94,11 @@ namespace Microsoft.Scripting.Interpreter {
+                         index += instructions[index].Run(frame);
+                         frame.InstructionIndex = index;
+                     }
++                    // An exception that went through MustCatch may have been caught below this frame after
++                    // all (by a handler around a finally block that threw): it no longer passes through here.
++                    runFinallyBlocks = false;
+                     return;
+-                } catch (Exception exception) {
++                } catch (Exception exception) when (MustCatch(frame, exception, ref runFinallyBlocks)) {
+                     switch (HandleException(frame, exception)) {
+                         case ExceptionHandlingResult.Continue: continue;
+                         case ExceptionHandlingResult.Return: return;
+@@ -106,11 +110,59 @@ namespace Microsoft.Scripting.Interpreter {
+                     // in proportion to its depth to get out, and ended the process. Leaving the catch first
+                     // gives that stack back; the dispatch info keeps the exception's trace.
+                     rethrow = ExceptionDispatchInfo.Capture(exception);
++                } finally {
++                    if (runFinallyBlocks) {
++                        // the exception goes on through this frame (see MustCatch): its finally blocks run as it does
++                        runFinallyBlocks = false;
++                        frame.InstructionIndex += frame.Goto(ReturnAndRethrowLabelIndex, NoValue);
++                        Run(frame);
++                        Debug.Assert(frame.InstructionIndex == RethrowOnReturn);
++                    }
+                 }
+                 rethrow.Throw();
+             }
+         }
+ 
++        // A goto inside a finally block, which can leave the block and so end an exception that runs it.
++        internal bool HasJumpsInFinally { get; init; }
++
++        /// <summary>
++        /// Whether Run has to catch the exception: a handler of this frame takes it, or a finally block of the frame may
++        /// end it by jumping out. Otherwise the exception goes on through the frame without being caught and thrown again -
++        /// each of which is a CLR exception dispatch of its own, so an exception that passed n interpreted frames was
++        /// dispatched n + 1 times - and the frame's finally blocks, if any, run from Run's own finally as it goes. Also
++        /// where the frame first sees the exception, so the interpreted frames are saved on it here, while every one of
++        /// them is still on the stack. On a nearly exhausted stack the exception is caught as before: a finally block
++        /// runs on top of the frames the exception came out of, a catch gives their stack back before it rethrows.
++        /// </summary>
++        private bool MustCatch(InterpretedFrame frame, Exception exception, ref bool runFinallyBlocks) {
++            bool mustCatch = GetBestHandler(frame.InstructionIndex, exception.GetType()) is not null ||
++                // with no finally block to run, catching would only rethrow
++                frame.HasContinuations && (HasJumpsInFinally || IsFinallyInHandler(frame) || !RuntimeHelpers.TryEnsureSufficientExecutionStack());
++
++            // decided before anything else runs here: a filter that throws counts as false, and the finally blocks run then too
++            runFinallyBlocks = !mustCatch && frame.HasContinuations;
++            frame.SaveTraceToException(exception);
++            return mustCatch;
++        }
++
++        // Whether a handler of this frame encloses one of the finally blocks the exception would run: it can catch what that
++        // block throws, and end the exception that way, which only the catch can do.
++        private bool IsFinallyInHandler(InterpretedFrame frame) {
++            if (_handlers.Length == 0) {
++                return false;
++            }
++            for (int i = 0; i < frame.ContinuationCount; i++) {
++                int finallyStart = _labels[frame.GetContinuation(i)].Index;
++                foreach (var handler in _handlers) {
++                    if (handler.IsInside(finallyStart)) {
++                        return true;
++                    }
++                }
++            }
++            return false;
++        }
++
+         private ExceptionHandlingResult HandleException(InterpretedFrame frame, Exception exception) {
+             frame.SaveTraceToException(exception);
+             frame.InstructionIndex += GotoHandler(frame, exception, out ExceptionHandler handler);
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs b/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs
+--- a/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs
+@@ -148,6 +148,10 @@ namespace Microsoft.Scripting.Interpreter {
+         private readonly LocalVariables _locals = new();
+ 
+         private readonly List<ExceptionHandler> _handlers = new();
++
++        // A goto compiled inside a finally block, which may leave the block and so end the exception
++        // that is running it (see Interpreter.Run).
++        private bool _hasJumpsInFinally;
+         
+         private readonly List<DebugInfo> _debugInfos = new();
+         private readonly HybridReferenceDictionary<LabelTarget, LabelInfo> _treeLabels = new();
+@@ -231,7 +235,9 @@ namespace Microsoft.Scripting.Interpreter {
+             var handlers = _handlers.ToArray();
+             var debugInfos = _debugInfos.ToArray();
+ 
+-            return new Interpreter(lambdaName, _locals, GetBranchMapping(), Instructions.ToArray(), handlers, debugInfos, _compilationThreshold);
++            return new Interpreter(lambdaName, _locals, GetBranchMapping(), Instructions.ToArray(), handlers, debugInfos, _compilationThreshold) {
++                HasJumpsInFinally = _hasJumpsInFinally
++            };
+         }
+ 
+         private void CompileConstantExpression(Expression expr) {
+@@ -941,6 +947,12 @@ namespace Microsoft.Scripting.Interpreter {
+             var node = (GotoExpression)expr;
+             var labelInfo = ReferenceLabel(node.Target);
+ 
++            for (var block = _labelBlock; block is not null && !_hasJumpsInFinally; block = block.Parent) {
++                if (block.Kind == LabelScopeKind.Finally) {
++                    _hasJumpsInFinally = true;
++                }
++            }
++
+             if (node.Value is not null) {
+                 Compile(node.Value);
+             }

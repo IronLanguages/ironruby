@@ -27,6 +27,29 @@ namespace IronRuby.Builtins {
             // browser-wasm: there is no libc to P/Invoke (the managed fallbacks are used)
             !OperatingSystem.IsBrowser();
 
+        /// <summary>
+        /// flock(2) is the same call with the same operation bits on every Unix, so it is
+        /// offered on macOS too, where the rest of this class (statx, Linux errno numbers)
+        /// is not.  RubyGems takes a lock on every binstub it writes, so without this
+        /// `gem install` of anything with an executable failed on a Mac.
+        /// </summary>
+        internal static readonly bool IsFlockAvailable = System.IO.Path.DirectorySeparatorChar == '/';
+
+        /// <summary>
+        /// errno for "would block" on this platform: EAGAIN is 11 on Linux and 35 on macOS and
+        /// the other BSDs, whose errno numbering macOS inherited.  IsFlockAvailable lets every
+        /// Unix in, so a BSD has to get 35 too, or a contended LOCK_NB raises instead of
+        /// returning false and a blocking lock never retries.
+        /// </summary>
+        internal static readonly int EWouldBlock = IsBsdErrno() ? 35 : EWOULDBLOCK;
+
+        private static bool IsBsdErrno() {
+            return RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ||
+                RuntimeInformation.IsOSPlatform(OSPlatform.FreeBSD) ||
+                RuntimeInformation.IsOSPlatform(OSPlatform.Create("NETBSD")) ||
+                RuntimeInformation.IsOSPlatform(OSPlatform.Create("OPENBSD"));
+        }
+
         #region errno numbers
 
         internal const int EPERM = 1;
@@ -247,11 +270,17 @@ namespace IronRuby.Builtins {
         [DllImport("libc", EntryPoint = "mkdir", SetLastError = true)]
         private static extern int sys_mkdir(byte[] path, int mode);
 
+        [DllImport("libc", EntryPoint = "rename", SetLastError = true)]
+        private static extern int sys_rename(byte[] oldPath, byte[] newPath);
+
         [DllImport("libc", EntryPoint = "chmod", SetLastError = true)]
         private static extern int sys_chmod(byte[] path, int mode);
 
         [DllImport("libc", EntryPoint = "fchmod", SetLastError = true)]
         private static extern int sys_fchmod(int fd, int mode);
+
+        [DllImport("libc", EntryPoint = "lchmod", SetLastError = true)]
+        private static extern int sys_lchmod(byte[] path, int mode);
 
         [DllImport("libc", EntryPoint = "chown", SetLastError = true)]
         private static extern int sys_chown(byte[] path, int owner, int group);
@@ -308,9 +337,6 @@ namespace IronRuby.Builtins {
         [DllImport("libc", EntryPoint = "access", SetLastError = true)]
         private static extern int sys_access(byte[] path, int mode);
 
-        [DllImport("libc", EntryPoint = "euidaccess", SetLastError = true)]
-        private static extern int sys_euidaccess(byte[] path, int mode);
-
         internal static byte[] ToPath(string path) {
             var bytes = Encoding.UTF8.GetBytes(path ?? "");
             var result = new byte[bytes.Length + 1];
@@ -339,12 +365,31 @@ namespace IronRuby.Builtins {
             return Run(() => sys_mkfifo(ToPath(path), mode), out errno);
         }
 
+        internal static int Rename(string oldPath, string newPath, out int errno) {
+            return Run(() => sys_rename(ToPath(oldPath), ToPath(newPath)), out errno);
+        }
+
         internal static int MkDir(string path, int mode, out int errno) {
             return Run(() => sys_mkdir(ToPath(path), mode), out errno);
         }
 
         internal static int Chmod(string path, int mode, out int errno) {
             return Run(() => sys_chmod(ToPath(path), mode), out errno);
+        }
+
+        /// <summary>
+        /// lchmod(3), on any Unix: macOS changes a symbolic link's own mode; glibc 2.32+ changes
+        /// the mode of anything else and fails with EOPNOTSUPP on a link, which Linux gives no
+        /// mode of its own - MRI reports both. An older glibc has only a stub that fails with
+        /// ENOSYS, as does a libc without the function.
+        /// </summary>
+        internal static int LChmod(string path, int mode, out int errno) {
+            try {
+                return Run(() => sys_lchmod(ToPath(path), mode), out errno);
+            } catch (EntryPointNotFoundException) {
+                errno = IronRuby.Runtime.RubyErrno.GetNumber("ENOSYS");
+                return -1;
+            }
         }
 
         internal static int FChmod(int fd, int mode, out int errno) {
@@ -366,8 +411,8 @@ namespace IronRuby.Builtins {
         #region open(2) flags
 
         internal const int O_RDONLY = 0;
-        internal const int O_DIRECTORY = 0x10000;
-        internal const int O_CLOEXEC = 0x80000;
+        internal static readonly int O_DIRECTORY = IOModeNative.Directory;
+        internal static readonly int O_CLOEXEC = IOModeNative.CloseOnExec;
 
         #endregion
 
@@ -527,19 +572,6 @@ namespace IronRuby.Builtins {
             return Run(() => sys_access(ToPath(path), mode), out errno) == 0;
         }
 
-        /// <summary>euidaccess(3) -- uses the effective uid/gid, like Ruby's readable?/writable?/executable?.</summary>
-        internal static bool AccessEffective(string path, int mode) {
-            if (!IsAvailable) {
-                return false;
-            }
-            int errno;
-            try {
-                return Run(() => sys_euidaccess(ToPath(path), mode), out errno) == 0;
-            } catch (EntryPointNotFoundException) {
-                return AccessReal(path, mode);
-            }
-        }
-
         internal static string ReadLink(string path, out int errno) {
             errno = 0;
             if (!IsAvailable) {
@@ -586,33 +618,17 @@ namespace IronRuby.Builtins {
 
         #region errors
 
-        internal static string ErrorMessage(int errno) {
-            switch (errno) {
-                case EPERM: return "Operation not permitted";
-                case ENOENT: return "No such file or directory";
-                case EBADF: return "Bad file descriptor";
-                case EACCES: return "Permission denied";
-                case EEXIST: return "File exists";
-                case EXDEV: return "Invalid cross-device link";
-                case ENOTDIR: return "Not a directory";
-                case EISDIR: return "Is a directory";
-                case EINVAL: return "Invalid argument";
-                case ENAMETOOLONG: return "File name too long";
-                case ENOTEMPTY: return "Directory not empty";
-                case ELOOP: return "Too many levels of symbolic links";
-                case EOPNOTSUPP: return "Operation not supported";
-                default: return "Unknown error " + errno;
-            }
-        }
-
         /// <summary>
-        /// Turns an errno into the matching Ruby exception. Only the errnos
-        /// that have a CLR-backed Errno class get their own type; the rest come
-        /// back as a plain SystemCallError, which is still a correct (if less
-        /// specific) answer.
+        /// Turns an errno into the matching Ruby exception. The errnos that have a CLR-backed
+        /// Errno class get it; the rest get the prelude's Errno class given a context, and
+        /// a plain SystemCallError carrying the errno without one. The numbers are Linux's: given
+        /// a context, a platform without Posix (macOS, for lchmod) goes by its own numbering.
         /// </summary>
-        internal static Exception Error(int errno, string path) {
+        internal static Exception Error(int errno, string path, IronRuby.Runtime.RubyContext context = null) {
             string suffix = path != null ? " - " + path : "";
+            if (context != null && !IsAvailable) {
+                return IronRuby.Runtime.RubyExceptions.CreateErrno(context, errno, path);
+            }
             switch (errno) {
                 case ENOENT: return IronRuby.Runtime.RubyExceptions.CreateENOENT("{0}", path ?? "");
                 case EEXIST: return IronRuby.Runtime.RubyExceptions.CreateEEXIST("{0}", path ?? "");
@@ -628,7 +644,10 @@ namespace IronRuby.Builtins {
                 case ENOTEMPTY: return new Errno.DirectoryNotEmptyError(path);
                 case ENAMETOOLONG: return new Errno.NameTooLongError(path);
                 default:
-                    return IronRuby.Runtime.RubyExceptions.CreateSystemCallError("{0}", ErrorMessage(errno) + suffix);
+                    if (context != null) {
+                        return IronRuby.Runtime.RubyExceptions.CreateErrno(context, errno, path);
+                    }
+                    return new ExternalException(IronRuby.Runtime.RubyErrno.GetMessage(errno) + suffix, errno);
             }
         }
 

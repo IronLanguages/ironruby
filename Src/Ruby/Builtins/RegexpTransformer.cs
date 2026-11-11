@@ -15,12 +15,9 @@
 
 using System;
 using System.Diagnostics;
-using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 using System.Text;
 using System.Text.RegularExpressions;
 using IronRuby.Compiler;
-using IronRuby.Runtime;
 using System.Collections.Generic;
 
 namespace IronRuby.Builtins {
@@ -64,6 +61,13 @@ namespace IronRuby.Builtins {
         // Tracked only to translate '.' for an astral subject; null in a copied group, whose
         // text lands wherever the copy is emitted and so cannot know.
         private bool? _dotAll;
+
+        // Whether (?x) is in effect: whitespace and # comments are not part of the pattern.  .NET's
+        // IgnorePatternWhitespace drops them too, but this parser numbers groups and copies group
+        // bodies for \g<n> itself, so a "(" inside a comment counted as a group - ActiveRecord's
+        // SQLite order matcher has "# ... function(one or no argument)" in it - and \g<2> then
+        // called the wrong group.
+        private bool _extended;
 
         /// <summary>
         /// A capturing group as a subexpression call or a loop copy needs it: its Ruby body and
@@ -255,6 +259,7 @@ namespace IronRuby.Builtins {
             }
             _characterClassMode = mode;
             _callDepth = callDepth;
+            _extended = parent._extended;
             // a copy is never the top level of the pattern (\K)
             _groupDepth = 1;
         }
@@ -433,35 +438,6 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// Whether the pattern opens a named group anywhere. Has to be known up front: Ruby
-        /// rejects (a)(?&lt;a&gt;a)\1 as well as (?&lt;a&gt;a)\1, so the decision cannot wait
-        /// until the named group is reached.
-        /// </summary>
-        private static bool HasNamedGroup(string/*!*/ pattern) {
-            bool inCharacterClass = false;
-            for (int i = 0; i < pattern.Length; i++) {
-                char c = pattern[i];
-                if (c == '\\') {
-                    i++;
-                } else if (inCharacterClass) {
-                    inCharacterClass = c != ']';
-                } else if (c == '[') {
-                    inCharacterClass = true;
-                } else if (c == '(' && i + 2 < pattern.Length && pattern[i + 1] == '?') {
-                    char d = pattern[i + 2];
-                    if (d == '\'') {
-                        return true;
-                    }
-                    // (?<= and (?<! are lookbehind, not a named group
-                    if (d == '<' && i + 3 < pattern.Length && pattern[i + 3] != '=' && pattern[i + 3] != '!') {
-                        return true;
-                    }
-                }
-            }
-            return false;
-        }
-
-        /// <summary>
         /// A group name that carries a level specifier - anything with a '+' or a '-' in it - can
         /// be declared but not referenced; Ruby raises when one is used in \k&lt;&gt; or in a
         /// conditional. .NET rejects such names outright, so this only has to produce the error.
@@ -632,6 +608,7 @@ namespace IronRuby.Builtins {
                 if (prescan) {
                     var collector = new RegexpTransformer(_rubyPattern);
                     collector._state = _state;
+                    collector._extended = (_clrOptions & RegexOptions.IgnorePatternWhitespace) != 0;
                     _state.Collecting = true;
                     collector.TransformBody();
                     _state.Collecting = false;
@@ -647,6 +624,7 @@ namespace IronRuby.Builtins {
                 _backrefCount = 0;
                 _characterClassMode = CharacterClassMode.Default;
                 _dotAll = (_clrOptions & RegexOptions.Singleline) != 0;
+                _extended = (_clrOptions & RegexOptions.IgnorePatternWhitespace) != 0;
                 _groupNameOccurrences.Clear();
                 try {
                     string result = TransformBody();
@@ -702,6 +680,16 @@ namespace IronRuby.Builtins {
                         lastWasQuantifier = false;
                         lastEntity = null;
                         ParseEscape();
+                        break;
+
+                    case '#':
+                        if (!_extended) {
+                            goto default;
+                        }
+                        // A comment runs to the end of the line; nothing of it reaches .NET.
+                        while ((c = Peek()) != -1 && c != '\n') {
+                            Skip();
+                        }
                         break;
 
                     case '?':
@@ -982,17 +970,18 @@ namespace IronRuby.Builtins {
                 for (int i = 0; i < units; i++) {
                     more = open + stillEmpty + copy + more + close;
                 }
+                // Lazily the loop of units is a counted one: .NET 10 goes on taking empty units
+                // of (?:...)*? until its backtracking stack overflows - (()|a)*? and the like -
+                // where (?:...){0,N}? stops as Onigmo does.
+                string loop = lazy ? "){0," + (Int32.MaxValue - 1) + "}?" : ")*";
                 if (min == 0) {
                     _sb.Insert(entityIndex, "(?:" + start);
-                    _sb.Append(more).Append(")*");
+                    _sb.Append(more).Append(loop);
                 } else {
                     if (min > 1) {
                         _sb.Append('{').Append(min).Append('}');
                     }
-                    _sb.Append("(?:").Append(start).Append(copy).Append(more).Append(")*");
-                }
-                if (lazy) {
-                    _sb.Append('?');
+                    _sb.Append("(?:").Append(start).Append(copy).Append(more).Append(loop);
                 }
                 return true;
             }
@@ -1157,6 +1146,10 @@ namespace IronRuby.Builtins {
                         if (c == ')') {
                             break;
                         }
+                        if (c == '\\') {
+                            // an escaped ) does not end the comment
+                            Read();
+                        }
                     }
                     return;
                 }
@@ -1276,6 +1269,7 @@ namespace IronRuby.Builtins {
             }
             var savedMode = _characterClassMode;
             var savedDotAll = _dotAll;
+            var savedExtended = _extended;
             int bodyStart = _index;
             GroupDefinition definition = null;
             bool hasLevelGroup = false;
@@ -1304,6 +1298,7 @@ namespace IronRuby.Builtins {
             _groupDepth--;
             _characterClassMode = savedMode;
             _dotAll = savedDotAll;
+            _extended = savedExtended;
             if (groupNumber >= 0) {
                 CloseGroup("#" + groupNumber);
                 if (groupName != null) {
@@ -1340,6 +1335,7 @@ namespace IronRuby.Builtins {
             var flags = new StringBuilder();
             var mode = _characterClassMode;
             var dotAll = _dotAll;
+            var extended = _extended;
             bool isScoped = false;
             bool negative = false;
 
@@ -1353,6 +1349,9 @@ namespace IronRuby.Builtins {
                 } else if (c == 'i' || c == 'x' || c == '-') {
                     negative |= c == '-';
                     flags.Append((char)c);
+                    if (c == 'x') {
+                        extended = !negative;
+                    }
                 } else if (c == 'a') {
                     mode = CharacterClassMode.Ascii;
                 } else if (c == 'd') {
@@ -1381,6 +1380,7 @@ namespace IronRuby.Builtins {
             if (!isScoped) {
                 _characterClassMode = mode;
                 _dotAll = dotAll;
+                _extended = extended;
                 if (options.Length != 0) {
                     _sb.Append("(?").Append(options).Append(')');
                 }
@@ -1390,13 +1390,16 @@ namespace IronRuby.Builtins {
             _sb.Append("(?").Append(options).Append(':');
             var savedMode = _characterClassMode;
             var savedDotAll = _dotAll;
+            var savedExtended = _extended;
             _characterClassMode = mode;
             _dotAll = dotAll;
+            _extended = extended;
             _groupDepth++;
             Parse(true);
             _groupDepth--;
             _characterClassMode = savedMode;
             _dotAll = savedDotAll;
+            _extended = savedExtended;
             _sb.Append(')');
         }
 

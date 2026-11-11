@@ -18,6 +18,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using IronRuby.Runtime;
 
 namespace IronRuby.Builtins {
 
@@ -471,6 +472,10 @@ namespace IronRuby.Builtins {
                 }
             }
 
+            if (_iterationLevel > 0) {
+                throw RubyExceptions.CreateRuntimeError("can't add a new key into hash during iteration");
+            }
+
             if (_count == _entries.Length) {
                 // MakeRoom reallocates or re-chains, so the bucket has to be found again.
                 MakeRoom();
@@ -578,6 +583,54 @@ namespace IronRuby.Builtins {
             return false;
         }
 
+        /// <summary>
+        /// Replaces the entries with <paramref name="source"/>'s, in its order. Under the same
+        /// comparer the hash codes source has stored are this hash's as well, so its live entries
+        /// are copied as they are and the buckets re-chained from them: no key is asked for #hash
+        /// or #eql? again, as one <c>this[key] = value</c> per entry has to. Returns false, and
+        /// changes nothing, when the comparers differ or source is this hash.
+        /// </summary>
+        public bool TryCopyEntriesFrom(Hash/*!*/ source) {
+            if (ReferenceEquals(source, this) || !ReferenceEquals(source._comparer, _comparer)) {
+                return false;
+            }
+
+            Clear();
+            int liveCount = source._liveCount;
+            if (liveCount == 0) {
+                return true;
+            }
+            if (_iterationLevel > 0) {
+                // what the first this[key] = value would raise
+                throw RubyExceptions.CreateRuntimeError("can't add a new key into hash during iteration");
+            }
+
+            int size = GetPrime(liveCount);
+            var entries = new Entry[size];
+            Entry[] sourceEntries = source._entries;
+            if (liveCount == source._count - source._start) {
+                Array.Copy(sourceEntries, source._start, entries, 0, liveCount);
+            } else {
+                int dst = 0;
+                for (int src = source._start; src < source._count; src++) {
+                    if (sourceEntries[src].Next != TombstoneNext) {
+                        entries[dst++] = sourceEntries[src];
+                    }
+                }
+            }
+
+            _entries = entries;
+            _buckets = new int[size];
+            _fastModMultiplier = UInt64.MaxValue / (uint)size + 1;
+            _count = liveCount;
+            _liveCount = liveCount;
+            _start = 0;
+            LinkBuckets();
+            _version++;
+            _stamp++;
+            return true;
+        }
+
         public void Clear() {
             if (_count > 0) {
                 if (_buckets != null) {
@@ -659,6 +712,35 @@ namespace IronRuby.Builtins {
             get { return _stamp; }
         }
 
+        /// <summary>
+        /// The first live entry at or after position <paramref name="index"/>, in insertion order;
+        /// <paramref name="index"/> is moved past it, so a loop that starts at 0 visits every entry
+        /// once. An iteration can walk the hash this way, with no copy of its entries, because
+        /// nothing a Ruby block may do to a hash while it is iterated moves an entry: adding a key -
+        /// the only thing that grows or compacts the entry array - raises while
+        /// <see cref="IsIterating"/> (as do #rehash, #replace and #compare_by_identity), a delete
+        /// leaves a tombstone where the entry was, and an overwrite writes into the entry in place.
+        /// A deleted entry the walk has not reached yet is skipped, and an overwritten one is seen
+        /// with its new value, which is what MRI does.
+        /// </summary>
+        public bool TryGetNextEntry(ref int index, out object key, out object value) {
+            Entry[] entries = _entries;
+            int count = Math.Min(_count, entries != null ? entries.Length : 0);
+            int i = Math.Max(index, _start);
+            while (i < count) {
+                ref Entry e = ref entries[i++];
+                if (e.Next != TombstoneNext) {
+                    index = i;
+                    key = e.Key;
+                    value = e.Value;
+                    return true;
+                }
+            }
+            index = i;
+            key = value = null;
+            return false;
+        }
+
         /// <summary>Keys and values in insertion order, in one pass over the entries.</summary>
         public void CopyKeysAndValues(object[]/*!*/ keys, object[]/*!*/ values) {
             Entry[] entries = _entries;
@@ -671,6 +753,44 @@ namespace IronRuby.Builtins {
                     values[index++] = e.Value;
                 }
             }
+        }
+
+        /// <summary>
+        /// Hash#keys: the keys in insertion order as a new Array, the nil key (which is stored as
+        /// the null sentinel) mapped back to nil. One pass over the entries, straight into the
+        /// array's storage.
+        /// </summary>
+        public RubyArray/*!*/ GetKeyArray() {
+            int liveCount = _liveCount;
+            object[] content = new object[Math.Max(liveCount, Utils.MinListSize)];
+            Entry[] entries = _entries;
+            int count = _count;
+            int index = 0;
+            for (int i = _start; i < count; i++) {
+                ref Entry e = ref entries[i];
+                if (e.Next != TombstoneNext) {
+                    content[index++] = Microsoft.Scripting.Runtime.CustomStringDictionary.ObjToNull(e.Key);
+                }
+            }
+            Debug.Assert(index == liveCount);
+            return new RubyArray(content, 0, liveCount);
+        }
+
+        /// <summary>Hash#values: the values in insertion order as a new Array, in one pass.</summary>
+        public RubyArray/*!*/ GetValueArray() {
+            int liveCount = _liveCount;
+            object[] content = new object[Math.Max(liveCount, Utils.MinListSize)];
+            Entry[] entries = _entries;
+            int count = _count;
+            int index = 0;
+            for (int i = _start; i < count; i++) {
+                ref Entry e = ref entries[i];
+                if (e.Next != TombstoneNext) {
+                    content[index++] = e.Value;
+                }
+            }
+            Debug.Assert(index == liveCount);
+            return new RubyArray(content, 0, liveCount);
         }
 
         public void CopyTo(KeyValuePair<object, object>[]/*!*/ array, int index) {

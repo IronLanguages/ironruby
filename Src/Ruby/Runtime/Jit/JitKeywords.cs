@@ -22,12 +22,15 @@
  * the prologue would have bound them without raising. Any call the prologue would complain
  * about (a missing or unknown keyword, a Hash passed positionally, keywords landing in the
  * last positional) fails that check and runs the generic body, which raises the error MRI
- * raises. A default that is not a plain literal (it could have side effects, or depend on
- * another parameter), and **rest, are not recognized: such a method is never wrapped.
+ * raises. A default that is a nil/true/false/Integer/Float literal or a Symbol is a constant
+ * the entry fills in. Any other default (`b: a + 1', `list: []') is left to the typed body: the
+ * entry hands it RubyOps.DefaultArgument for an omitted one, and the body evaluates the default
+ * itself, in declaration order, before its own statements (JitCompiler.EmitKeywordDefaults) - unless
+ * the default assigns a local, which could be a keyword bound after it. **rest is not recognized:
+ * such a method is never wrapped.
  *
  * ***************************************************************************/
 
-using System;
 using System.Collections.Generic;
 using IronRuby.Builtins;
 using IronRuby.Compiler.Ast;
@@ -52,8 +55,22 @@ namespace IronRuby.Runtime.Jit {
         internal int[]/*!*/ Positions;
         internal object[]/*!*/ Defaults;
         internal bool[]/*!*/ Required;
+        // Per keyword: the default the typed body evaluates (its Defaults entry is then
+        // RubyOps.DefaultArgument), or null. Null when no keyword has one.
+        internal RExpr[] DefaultExprs;
+
+        /// <summary>A keyword whose default the typed body evaluates: its typed parameter is the boxed value or RubyOps.DefaultArgument.</summary>
+        internal bool HasDefaultExpr(int index) {
+            return DefaultExprs != null && DefaultExprs[index] != null;
+        }
 
         internal int Count { get { return LocalNames.Length; } }
+
+        // The optional positional parameters before the keyword hash (Parameters.KeywordsAfterOptionals):
+        // `def m(a, b = 1, k: 2)' has one. Each has a literal default (OptionalDefaults); a call that
+        // leaves one out may have put its keyword hash there, which the entry moves into place first.
+        internal int OptionalPositionals;
+        internal object[] OptionalDefaults;
 
         /// <summary>
         /// The keyword signature of a method whose parameters are mandatory positionals plus
@@ -61,8 +78,24 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         internal static JitKeywords TryRecognize(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context) {
             var ps = ast.Parameters;
-            if (ps.Optional.Length != 1 || ps.Unsplat != null || ps.Block != null) { return null; }
-            var kwVar = ps.Optional[0].Left as LocalVariable;
+            if (ps.Unsplat != null || ps.Block != null) { return null; }
+            if (ps.Optional.Length != 1 && !(ps.KeywordsAfterOptionals && ps.Optional.Length > 1)) { return null; }
+            int optionalPositionals = ps.Optional.Length - 1;
+            object[] optionalDefaults = null;
+            if (optionalPositionals > 0) {
+                // only defaults the entry can fill in up front: nil, true, false, a Fixnum or a Float
+                optionalDefaults = new object[optionalPositionals];
+                for (int k = 0; k < optionalPositionals; k++) {
+                    var opt = ps.Optional[k];
+                    var literal = opt.Right as Literal;
+                    object v = (literal != null) ? literal.Value : null;
+                    if (!(opt.Left is LocalVariable) || literal == null || !(v == null || v is bool || v is int || v is double)) {
+                        return null;
+                    }
+                    optionalDefaults[k] = v;
+                }
+            }
+            var kwVar = ps.Optional[optionalPositionals].Left as LocalVariable;
             if (kwVar == null || kwVar.Name != "?kw?") { return null; }
 
             var body = ast.Body;
@@ -109,6 +142,8 @@ namespace IronRuby.Runtime.Jit {
             if (names.Length == 0 || names.Length > MaxKeywords) { return null; }
 
             var result = new JitKeywords();
+            result.OptionalPositionals = optionalPositionals;
+            result.OptionalDefaults = optionalDefaults;
             result.RequiredCount = match.RequiredCountOrPosition;
             result.MatchNames = new RubySymbol[names.Length];
             for (int j = 0; j < names.Length; j++) {
@@ -121,6 +156,8 @@ namespace IronRuby.Runtime.Jit {
             var positions = new List<int>();
             var defaults = new List<object>();
             var required = new List<bool>();
+            var defaultExprs = new List<RExpr>();
+            bool anyDefaultExpr = false;
             while (i < n) {
                 var bind = statements[i] as SimpleAssignmentExpression;
                 if (bind == null || bind.Operation != null) { break; }
@@ -131,13 +168,21 @@ namespace IronRuby.Runtime.Jit {
                 if (read.RequiredCountOrPosition != locals.Count) { return null; }
 
                 object defaultValue = null;
+                RExpr defaultExpr = null;
                 if (read.DefaultValue != null) {
                     // A literal is the same value every time and evaluating it does nothing.
                     var literal = read.DefaultValue as Literal;
-                    if (literal == null) { return null; }
-                    object v = literal.Value;
-                    if (!(v == null || v is int || v is double || v is bool)) { return null; }
-                    defaultValue = v;
+                    var symbol = read.DefaultValue as SymbolLiteral;
+                    object v = (literal != null) ? literal.Value : null;
+                    if (literal != null && (v == null || v is int || v is double || v is bool)) {
+                        defaultValue = v;
+                    } else if (symbol != null && symbol.Value is string) {
+                        defaultValue = context.CreateSymbol((string)symbol.Value, symbol.Encoding);
+                    } else {
+                        defaultValue = RubyOps.DefaultArgument;
+                        defaultExpr = read.DefaultValue;
+                        anyDefaultExpr = true;
+                    }
                 }
 
                 locals.Add(local.Name);
@@ -145,6 +190,7 @@ namespace IronRuby.Runtime.Jit {
                 positions.Add(read.RequiredCountOrPosition);
                 defaults.Add(defaultValue);
                 required.Add(read.DefaultValue == null);
+                defaultExprs.Add(defaultExpr);
                 i++;
             }
             if (locals.Count != names.Length) { return null; }
@@ -160,7 +206,27 @@ namespace IronRuby.Runtime.Jit {
             result.Positions = positions.ToArray();
             result.Defaults = defaults.ToArray();
             result.Required = required.ToArray();
+            result.DefaultExprs = anyDefaultExpr ? defaultExprs.ToArray() : null;
             return result;
+        }
+
+        /// <summary>
+        /// What the generic body does first (Parameters.TransformOptionalsInitialization): a call that
+        /// passed no keyword hash where it belongs but left an optional positional out may have put it
+        /// in the last optional positional it did pass. <paramref name="args"/> holds the delegate's
+        /// positional parameters and then the keyword hash, at <paramref name="keywordIndex"/>.
+        /// </summary>
+        internal static void ShiftKeywords(object[]/*!*/ args, int firstOptional, int keywordIndex) {
+            if (args[keywordIndex] != RubyOps.DefaultArgument) { return; }
+            for (int i = keywordIndex - 1; i >= firstOptional; i--) {
+                if (args[i] != RubyOps.DefaultArgument) {
+                    if (RubyOps.IsKeywordArgumentsHash(args[i])) {
+                        args[keywordIndex] = args[i];
+                        args[i] = RubyOps.DefaultArgument;
+                    }
+                    return;
+                }
+            }
         }
 
         private static bool IsVar(RExpr node, LocalVariable/*!*/ kwVar) {

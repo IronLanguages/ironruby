@@ -21,10 +21,9 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Generation;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 using IronRuby.Runtime.Calls;
+using IronRuby.Runtime.Osr;
 
 namespace IronRuby.Builtins {
     using EachSite = Func<CallSite, object, Proc, object>;
@@ -32,6 +31,85 @@ namespace IronRuby.Builtins {
 
     [RubyModule("Enumerable")]
     public static class Enumerable {
+        #region Array fast paths for the prelude's methods
+
+        /// <summary>
+        /// True for an Array whose #each is the built-in Array#each, which yields each element
+        /// once, in order, re-reading the length as it goes. The prelude's Enumerable methods then
+        /// get the same answer from a loop over the list as from calling #each with a
+        /// |*values| block, so they hand the work to the C# methods below.
+        /// </summary>
+        [RubyMethod("__plain_list__?", RubyMethodAttributes.PrivateInstance)]
+        public static bool IsPlainList(RubyContext/*!*/ context, object self) {
+            if (!(self is RubyArray)) {
+                return false;
+            }
+            RubyClass arrayClass = context.GetClass(typeof(RubyArray));
+            if (!IListOps.IsBuiltinMethod(arrayClass, "each")) {
+                return false;
+            }
+            RubyClass cls = context.GetImmediateClassOf(self);
+            if (ReferenceEquals(cls, arrayClass)) {
+                return true;
+            }
+            var own = cls.ResolveMethod("each", VisibilityContext.AllVisible);
+            var builtin = arrayClass.ResolveMethod("each", VisibilityContext.AllVisible);
+            return own.Found && builtin.Found && ReferenceEquals(own.Info, builtin.Info);
+        }
+
+        // Enumerable#group_by over a plain list (see IsPlainList): the prelude's loop with the
+        // result Hash filled in directly, as MRI's group_by_i does.
+        [RubyMethod("__list_group_by__", RubyMethodAttributes.PrivateInstance)]
+        public static object ListGroupBy(RubyContext/*!*/ context, [NotNull]BlockParam/*!*/ block, [NotNull]IList/*!*/ self) {
+            var result = new Hash(context);
+            for (int i = 0; i < self.Count; i++) {
+                object item = self[i];
+                object key;
+                if (block.Yield(item, out key)) {
+                    return key;
+                }
+                object group;
+                if (result.TryGetValue(CustomStringDictionary.NullToObj(key), out group)) {
+                    ((RubyArray)group).Add(item);
+                } else {
+                    RubyUtils.SetHashElement(context, result, key, new RubyArray { item });
+                }
+            }
+            return result;
+        }
+
+        // Enumerable#tally (with no Hash to add to) over a plain list: the counts are kept in the
+        // result Hash as MRI's tally_up keeps them, without a dynamic Integer#+ per element.
+        [RubyMethod("__list_tally__", RubyMethodAttributes.PrivateInstance)]
+        public static Hash/*!*/ ListTally(RubyContext/*!*/ context, [NotNull]IList/*!*/ self) {
+            var result = new Hash(context);
+            for (int i = 0; i < self.Count; i++) {
+                object item = self[i];
+                object storedKey = CustomStringDictionary.NullToObj(item);
+                object count;
+                if (result.TryGetValue(storedKey, out count)) {
+                    // a count cannot outgrow the list, so it stays a Fixnum
+                    result[storedKey] = ScriptingRuntimeHelpers.Int32ToObject((int)count + 1);
+                } else {
+                    // MRI's tally_up stores the element itself: a String key is not copied and
+                    // frozen the way Hash#[]= would
+                    result[storedKey] = ScriptingRuntimeHelpers.Int32ToObject(1);
+                }
+            }
+            return result;
+        }
+
+        // The prelude's #tally stores a count with this rather than with Hash#[]=, which would
+        // store a copy of a String key, frozen: MRI's tally_up stores the element itself.
+        [RubyMethod("__tally_store__", RubyMethodAttributes.PrivateInstance)]
+        public static object TallyStore(object self, [NotNull]Hash/*!*/ hash, object key, object count) {
+            hash.RequireNotFrozen();
+            hash[CustomStringDictionary.NullToObj(key)] = count;
+            return count;
+        }
+
+        #endregion
+
         internal static object Each(CallSiteStorage<EachSite>/*!*/ each, object self, Proc/*!*/ block) {
             var site = each.GetCallSite("each", new RubyCallSignature(0, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasBlock));
             return site.Target(site, self, block);
@@ -115,7 +193,18 @@ namespace IronRuby.Builtins {
             // array and yield each element once rather than going through #each and a block of ours.
             var array = self as RubyArray;
             if (array != null) {
+                // -X:OSR: once the block is hot, the rest of a plain Array's search runs in a typed copy of
+                // the loop this and the block make together (BlockLoopSite)
+                var loop = (predicate != null && array.Count >= BlockLoopSite.MinRun && array.GetType() == typeof(RubyArray))
+                    ? BlockLoopSite.For(predicate, stop ? BlockLoopKind.FindTruthy : BlockLoopKind.FindFalsy) : null;
+                long countdown = (loop != null) ? loop.Countdown : Int64.MaxValue;
                 for (int i = 0; i < array.Count; i++) {
+                    if (--countdown <= 0 && array.Count - i >= BlockLoopSite.MinRun) {
+                        bool found;
+                        i = loop.Run(predicate, array, i, ref countdown, out found);
+                        if (found) { return ScriptingRuntimeHelpers.BooleanToObject(positiveResult); }
+                        if (i >= array.Count) { break; }
+                    }
                     object item = array[i];
                     if (predicate != null) {
                         object blockResult;
@@ -125,9 +214,11 @@ namespace IronRuby.Builtins {
                         item = blockResult;
                     }
                     if (Protocols.IsTrue(item) == stop) {
+                        if (loop != null) { loop.Leave(countdown); }
                         return ScriptingRuntimeHelpers.BooleanToObject(positiveResult);
                     }
                 }
+                if (loop != null) { loop.Leave(countdown); }
                 return ScriptingRuntimeHelpers.BooleanToObject(!positiveResult);
             }
 
@@ -159,10 +250,19 @@ namespace IronRuby.Builtins {
 
         #region collect, map
 
-        [RubyMethod("collect")]
         [RubyMethod("map")]
-        public static Enumerator/*!*/ GetMapEnumerator(CallSiteStorage<EachSite>/*!*/ each, BlockParam collector, object self) {
-            return new Enumerator(self, "map");
+        [RubyMethod("collect")]
+        public static Enumerator/*!*/ GetMapEnumerator(CallSiteStorage<EachSite>/*!*/ each, [CalledName]string/*!*/ name, BlockParam collector, object self) {
+            return new Enumerator(self, name);
+        }
+
+        // a method of its own to have a frame of its own (see IListOps.Map)
+        [RubyMethod("collect")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Map")]
+        public static object Collect(CallSiteStorage<Func<CallSite, RubyScope, object, Proc, object>>/*!*/ each, RubyScope/*!*/ scope,
+            [NotNull]BlockParam/*!*/ collector, object self) {
+            return Map(each, scope, collector, self);
         }
 
         /// <summary>
@@ -176,7 +276,6 @@ namespace IronRuby.Builtins {
         /// end
         /// </code>
         /// </summary>
-        [RubyMethod("collect")]
         [RubyMethod("map")]
         public static object Map(CallSiteStorage<Func<CallSite, RubyScope, object, Proc, object>>/*!*/ each, RubyScope/*!*/ scope,
             [NotNull]BlockParam/*!*/ collector, object self) {
@@ -211,11 +310,20 @@ namespace IronRuby.Builtins {
         [RubyMethod("detect")]
         [RubyMethod("find")]
         public static Enumerator/*!*/ GetFindEnumerator(CallSiteStorage<EachSite>/*!*/ each, CallSiteStorage<Func<CallSite, object, object>>/*!*/ callStorage,
-            BlockParam predicate, object self, [Optional]object ifNone) {
-            return new Enumerator((_, block) => Find(each, callStorage, block, self, ifNone));
+            [CalledName]string/*!*/ name, BlockParam predicate, object self, [Optional]object ifNone) {
+            // the Enumerator calls the method again, as MRI's does: it shows as #<Enumerator: obj:find>
+            return (ifNone != Missing.Value) ? new Enumerator(self, name, ifNone) : new Enumerator(self, name);
         }
 
+        // a method of its own to have a frame of its own (see IListOps.Map)
         [RubyMethod("detect")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Find")]
+        public static object Detect(CallSiteStorage<EachSite>/*!*/ each, CallSiteStorage<Func<CallSite, object, object>>/*!*/ callStorage,
+            [NotNull]BlockParam/*!*/ predicate, object self, [Optional]object ifNone) {
+            return Find(each, callStorage, predicate, self, ifNone);
+        }
+
         [RubyMethod("find")]
         public static object Find(CallSiteStorage<EachSite>/*!*/ each, CallSiteStorage<Func<CallSite, object, object>>/*!*/ callStorage,
             [NotNull]BlockParam/*!*/ predicate, object self, [Optional]object ifNone) {
@@ -249,7 +357,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("find_index")]
         public static Enumerator/*!*/ GetFindIndexEnumerator(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, object self) {
-            return new Enumerator((_, block) => FindIndex(each, block, self));
+            return new Enumerator(self, "find_index");
         }
 
         [RubyMethod("find_index")]
@@ -343,6 +451,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("entries")]
         [RubyMethod("to_a")]
+        [ReceivesKeywords]
         public static RubyArray/*!*/ ToArray(CallSiteStorage<EachSiteN>/*!*/ each, object self, params object[] args) {
             RubyArray data = new RubyArray();
 
@@ -358,19 +467,29 @@ namespace IronRuby.Builtins {
 
         #region find_all, select, reject
 
-        [RubyMethod("find_all")]
+        // a method per name to have a frame of its own (see IListOps.Map)
         [RubyMethod("select")]
         public static object Select(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, object self) {
-            return (predicate != null) ? FilterImpl(each, predicate, self, true) : FilterEnum(each, predicate, self, true);
+            return (predicate != null) ? FilterImpl(each, predicate, self, true) : new Enumerator(self, "select");
+        }
+
+        [RubyMethod("filter")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Select")]
+        public static object Filter(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, object self) {
+            return (predicate != null) ? FilterImpl(each, predicate, self, true) : new Enumerator(self, "filter");
+        }
+
+        [RubyMethod("find_all")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("Select")]
+        public static object FindAll(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, object self) {
+            return (predicate != null) ? FilterImpl(each, predicate, self, true) : new Enumerator(self, "find_all");
         }
 
         [RubyMethod("reject")]
         public static object Reject(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, object self) {
-            return (predicate != null) ? FilterImpl(each, predicate, self, false) : FilterEnum(each, predicate, self, false);
-        }
-
-        private static Enumerator/*!*/ FilterEnum(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, object self, bool acceptingValue) {
-            return new Enumerator(self, acceptingValue ? "select" : "reject");
+            return (predicate != null) ? FilterImpl(each, predicate, self, false) : new Enumerator(self, "reject");
         }
 
         private static object FilterImpl(CallSiteStorage<EachSite>/*!*/ each, BlockParam/*!*/ predicate, object self, bool acceptingValue) {
@@ -498,6 +617,11 @@ namespace IronRuby.Builtins {
                 operatorName, new RubyCallSignature(1, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf)
             );
 
+            var list = self as RubyArray;
+            if (list != null && IsPlainList(each.Context, self)) {
+                return InjectList(list, operation, scope, operatorName, site, initial);
+            }
+
             object result = initial;
             Each(each, self, Proc.Create(each.Context, 0, delegate(BlockParam/*!*/ selfBlock, object _, object[] __, RubyArray/*!*/ args) {
                 Debug.Assert(__.Length == 0);
@@ -521,6 +645,42 @@ namespace IronRuby.Builtins {
             }));
 
             return result != Missing.Value ? result : null;
+        }
+
+        /// <summary>
+        /// #inject over a plain list (see IsPlainList): the elements are taken from the list,
+        /// with no #each call, Proc or argument array for each one. inject(:+) over Fixnums adds
+        /// them here while Integer#+ is the built-in, as MRI's ary_inject_op does, and goes back to
+        /// calling #+ at the first element that is not a Fixnum.
+        /// </summary>
+        private static object InjectList(RubyArray/*!*/ list, BlockParam operation, RubyScope scope, string operatorName,
+            CallSite<Func<CallSite, RubyScope, object, object, object>> site, object initial) {
+
+            object result = initial;
+            int i = 0;
+            if (result == Missing.Value) {
+                if (list.Count == 0) {
+                    return null;
+                }
+                result = list[0];
+                i = 1;
+            }
+
+            if (site != null && operatorName == "+" && IListOps.IsBuiltinMethod(scope.RubyContext.IntegerClass, "+")) {
+                for (; i < list.Count && result is int && list[i] is int; i++) {
+                    result = ClrInteger.Add((int)result, (int)list[i]);
+                }
+            }
+
+            for (; i < list.Count; i++) {
+                object value = list[i];
+                if (site != null) {
+                    result = site.Target(site, scope, result, value);
+                } else if (operation.Yield(result, value, out result)) {
+                    return result;
+                }
+            }
+            return result;
         }
 
         #endregion
@@ -672,10 +832,6 @@ namespace IronRuby.Builtins {
                 return Protocols.Compare(comparisonStorage, left, right);
             }
         }
-
-        #endregion
-
-        #region TODO: min_by, max_by, minmax_by
 
         #endregion
 
@@ -1128,31 +1284,5 @@ namespace IronRuby.Builtins {
         }
 
         #endregion
-
-        #region enum_cons, enum_slice, enum_with_index
-
-        [RubyMethod("enum_cons")]
-        public static Enumerator/*!*/ GetConsEnumerator(object self, [DefaultProtocol]int sliceSize) {
-            return new Enumerator(self, "each_cons", sliceSize);
-        }
-
-        [RubyMethod("enum_slice")]
-        public static Enumerator/*!*/ GetSliceEnumerator(object self, [DefaultProtocol]int sliceSize) {
-            return new Enumerator(self, "each_slice", sliceSize);
-        }
-
-        [RubyMethod("enum_with_index")]
-        public static Enumerator/*!*/ GetEnumeratorWithIndex(object self) {
-            return new Enumerator(self, "each_with_index", null);
-        }
-
-        #endregion
-
-        // TODO: 
-        // chunk
-        // collect_concat
-        // reverse_each
-        // flat_map
-        // join
     }
 }

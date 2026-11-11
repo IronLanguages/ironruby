@@ -7,26 +7,28 @@ its own Gemfile, run the way `run_benchmarks.rb` runs it:
     WARMUP_ITRS=1 MIN_BENCH_ITRS=3 MIN_BENCH_TIME=0 \
       <ruby> -I harness benchmarks/<name>/benchmark.rb
 
-Times below are the median of the three measured iterations, IronRuby Release
-on .NET 8 against CRuby 4.0.6 on the same box.  They are indicative rather than
-precise: another agent was running benchmarks on the same machine throughout,
-and three iterations is not enough warmup for a JIT that is still speeding up at
-the last one (rack goes 1197 -> 771 -> 564 ms across the three).
+Times below (rerun 2026-10-29, after the C-extension work) are the harness's
+"average of last 3" with WARMUP_ITRS=1, IronRuby Release on .NET 8 against
+CRuby 4.0.6 on the same box, via `Util/rubybench/pure-gems-run.sh` - except
+rubocop, which runs one iteration on both (see the note below).  They are
+indicative rather than precise: three iterations is not enough warmup for a JIT
+that is still speeding up at the last one (in the first round rack went
+1197 -> 771 -> 564 ms across its three).
 
 | benchmark    | status | IronRuby | CRuby   | IR/CRuby | what it does, or why not |
 |--------------|--------|----------|---------|----------|--------------------------|
-| rack         | OK     | 771 ms   | 123 ms  | 6.3x     | 10k requests through a 7-middleware Rack stack |
-| activerecord | OK     | 3616 ms  | 759 ms  | 4.8x     | ActiveRecord 8.1 + sqlite3, 100 posts x 20 comments, eager loaded |
-| mail         | OK     | 1556 ms  | 406 ms  | 3.8x     | parse and re-emit a multipart message 50x |
-| erubi-rails  | OK     | 15689 ms | 5062 ms | 3.1x     | render a Discourse topic template 10k times |
-| grape        | OK     | 19334 ms | 1773 ms | 10.9x    | Grape API, 100k requests |
-| rubocop      | OK     | 26219 ms | 1139 ms | 23x      | autocorrect a fixture through RuboCop::Runner (one iteration, see below) |
-| railsbench   | OK     | 124815 ms| 6271 ms | 19.9x    | Rails 8.1 + sqlite3, 2000 requests, every one asserted 200 |
-| sequel       | FAIL   | -        | 94 ms*  | -        | its Gemfile asks for `sqlite3 ~> 1.4`; IronRuby provides sqlite3 2.9.6 and the 1.x gem is C source.  Sequel itself works here - the same script on IronRuby's sqlite3 gives byte-identical output to CRuby.  *one iteration.  The shim is 2.x's API, not 1.x's, so claiming 1.4 would be false - see below |
-| ruby-lsp     | N/A    | -        | -       | -        | ruby-lsp depends on rbs, a C extension with no pure-Ruby fallback |
-| fluentd      | N/A    | -        | -       | -        | fluentd depends on strptime, and the Gemfile on yajl-ruby; both are C extensions |
-| lobsters     | N/A    | -        | -       | -        | needs bcrypt and markly (C extensions), and pins rubocop 0.81 which needs jaro_winkler (C) |
-| shipit       | N/A    | -        | -       | -        | shipit-engine -> paquito -> msgpack, and puma; both C extensions |
+| rack         | OK     | 735 ms   | 95 ms   | 7.7x     | 10k requests through a 7-middleware Rack stack |
+| activerecord | OK     | 2055 ms  | 375 ms  | 5.5x     | ActiveRecord 8.1 + sqlite3, 100 posts x 20 comments, eager loaded |
+| mail         | OK     | 1337 ms  | 233 ms  | 5.7x     | parse and re-emit a multipart message 50x |
+| erubi-rails  | OK     | 13849 ms | 2202 ms | 6.3x     | render a Discourse topic template 10k times |
+| grape        | OK     | 14500 ms | 1494 ms | 9.7x     | Grape API, 100k requests |
+| rubocop      | OK     | 17436 ms | 226 ms  | 77x      | autocorrect a fixture through RuboCop::Runner (one iteration on both, see below) |
+| railsbench   | OK     | 65540 ms | 2853 ms | 23x      | Rails 8.1 + sqlite3, 2000 requests, every one asserted 200 |
+| lobsters     | OK     | 26203 ms | 1299 ms | 20x      | the Lobsters Rails app, 114 routes per iteration, every one asserted 200 |
+| shipit       | OK     | 11021 ms | 2221 ms | 5.0x     | Shopify's shipit-engine Rails app, every request asserted 200 |
+| fluentd      | OK     | 1135 ms  | 604 ms  | 1.9x     | parse 250k LTSV lines through fluentd's parser plugin |
+| ruby-lsp     | OK     | 11169 ms | 233 ms  | 48x      | index a fixture with ruby-lsp (rbs + prism); ~10 s of it is sorbet-runtime sig checking |
+| sequel       | N/A    | -        | 94 ms   | -        | its Gemfile asks for `sqlite3 ~> 1.4`; IronRuby provides sqlite3 2.9.6 (the 1.x gem is C), and says so at Bundler.setup. Sequel itself works on 2.x |
 
 Correctness was checked against CRuby rather than assumed, because a route that
 500s is a benchmark that still produces a number:
@@ -113,13 +115,9 @@ Found, not fixed:
   `<a data-confirm=... rel="nofollow">`.  Hash.cs has said "TODO: ordered
   dictionary" since 2010; fixing it means replacing the backing store, which is
   too large and too shared a change for this round.
-* **rake 0.8.7 shadows the rake gem outside a bundle.**  `Src/StdLib/ruby/1.9.1`
-  still carries Ruby 1.9's rake, and -X:StdLib puts it on `$LOAD_PATH`, so
-  `require "rake"` answers 0.8.7 rather than activating the installed gem.
-  Inside a bundle Bundler's load paths win and rake 13 is used, which is why no
-  benchmark tripped over it.  The 1.9.1 tree is a deliberate fallback for the
-  libraries Ruby 4.0 gemified, so this is a policy question rather than a bug to
-  patch here.
+* **rake 0.8.7 shadowed the rake gem outside a bundle** (resolved): the Ruby 1.9
+  library tree that carried it, `Src/StdLib/ruby/1.9.1`, is no longer shipped or
+  on the load path, so `require "rake"` activates the installed rake 13.
 * **A YAML timestamp loses its offset.**  `t: 2001-12-14 21:59:43.10 -5` loads
   as `2001-12-15 03:59:43.1 +0100` (the box's zone) instead of CRuby's
   `2001-12-14 21:59:43.1 -0500`.  Pre-existing, in the engine's timestamp

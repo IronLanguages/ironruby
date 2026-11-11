@@ -16,20 +16,11 @@
 using System;
 using System.Text;
 using Microsoft.Scripting;
-using Microsoft.Scripting.Utils;
-using IronRuby.Builtins;
 using IronRuby.Runtime;
 using System.Runtime.CompilerServices;
 
 namespace IronRuby.Tests {
     public partial class Tests {
-        private bool PreciseSinglePassTraces {
-            get { 
-                // We have precise traces in debug mode and if we interpret the methods. We assume that the tests are not executing any metho
-                return Runtime.Setup.DebugMode || !_driver.NoAdaptiveCompilation && _driver.CompilationThreshold > 0; 
-            }
-        }
-
         public void Backtrace1() {
             AssertOutput(delegate() {
                 Engine.CreateScriptSourceFromString(@"
@@ -51,16 +42,11 @@ end
 
 goo
 ", "Backtrace1.rb", SourceCodeKind.File).Execute();
-            }, PreciseSinglePassTraces ? @"
+            }, @"
 Backtrace1.rb:11:in 'Object#bar'
 Backtrace1.rb:7:in 'Object#foo'
 Backtrace1.rb:3:in 'Object#goo'
-Backtrace1.rb:18
-" : @"
-Backtrace1.rb:10:in 'Object#bar'
-Backtrace1.rb:6:in 'Object#foo'
-Backtrace1.rb:2:in 'Object#goo'
-Backtrace1.rb:0
+Backtrace1.rb:18:in '<main>'
 ");
         }
 
@@ -89,18 +75,12 @@ rescue
   puts $@[0..4]
 end
 ");
-            }, PreciseSinglePassTraces ? @"
-Backtrace2.rb:15:in 'baz'
-Backtrace2.rb:11:in 'bar'
-Backtrace2.rb:7:in 'foo'
-Backtrace2.rb:3:in 'goo'
-Backtrace2.rb:19
-" : @"
-Backtrace2.rb:14:in 'baz'
-Backtrace2.rb:10:in 'bar'
-Backtrace2.rb:6:in 'foo'
-Backtrace2.rb:2:in 'goo'
-Backtrace2.rb:0
+            }, @"
+Backtrace2.rb:15:in 'Object#baz'
+Backtrace2.rb:11:in 'Object#bar'
+Backtrace2.rb:7:in 'Object#foo'
+Backtrace2.rb:3:in 'Object#goo'
+Backtrace2.rb:19:in '<main>'
 ");
         }
 
@@ -133,18 +113,12 @@ rescue
   puts $@[0..4]
 end
 ");
-            }, PreciseSinglePassTraces ? @"
-Backtrace3.rb:19:in 'baz'
-Backtrace3.rb:13:in 'bar'
-Backtrace3.rb:9:in 'foo'
-Backtrace3.rb:3:in 'goo'
-Backtrace3.rb:23
-" : @"
-Backtrace3.rb:18:in 'baz'
-Backtrace3.rb:12:in 'bar'
-Backtrace3.rb:8:in 'foo'
-Backtrace3.rb:2:in 'goo'
-Backtrace3.rb:0
+            }, @"
+Backtrace3.rb:19:in 'Object#baz'
+Backtrace3.rb:13:in 'Object#bar'
+Backtrace3.rb:9:in 'Object#foo'
+Backtrace3.rb:3:in 'Object#goo'
+Backtrace3.rb:23:in '<main>'
 ");
         }
 
@@ -175,60 +149,13 @@ end
 
 foo
 ");
-            }, PreciseSinglePassTraces ? @"
-Backtrace4.rb:7:in 'baz'
-Backtrace4.rb:11:in 'block in foo'
+            }, @"
+Backtrace4.rb:7:in 'Object#baz'
+Backtrace4.rb:11:in 'block in Object#foo'
 *:*:in 'Bar'
-Backtrace4.rb:11:in 'foo'
-Backtrace4.rb:14
-" : @"
-Backtrace4.rb:6:in 'baz'
-Backtrace4.rb:11:in 'block in foo'
-*:*:in 'Bar'
-Backtrace4.rb:10:in 'foo'
-Backtrace4.rb:0
+Backtrace4.rb:11:in 'Object#foo'
+Backtrace4.rb:14:in '<main>'
 ", OutputFlags.Match);
-        }
-
-        /// <summary>
-        /// Checks if the interpreted frames are aligned with CLR frames.
-        /// TODO: Need some way how to decode Python names and hide PythonOps.
-        /// </summary>
-        public void Backtrace5() {
-            if (!_driver.RunPython) return;
-            var py = Runtime.GetEngine("python");
-
-            var scope = Runtime.CreateScope();
-            py.Execute(@"
-def py_foo():
-  py_bar()
-
-def py_bar():
-  rb_foo()
-", scope);
-
-            Engine.Execute(@"
-def rb_foo
-  rb_bar
-end
-
-def rb_bar
-  trace = caller.to_s
-  ['rb_1', 'rb_2', 'rb_foo', 'py_foo', 'py_bar'].each do |name| 
-    raise 'error' unless trace.include?(name) 
-  end
-end
-
-def rb_1
-  py_foo.call
-end
-
-def rb_2
-  rb_1
-end
-
-rb_2
-", scope);
         }
 
         public void Backtrace6() {
@@ -258,23 +185,534 @@ def f3
 end
 
 f1 rescue puts $@[0..5]
-", PreciseSinglePassTraces ? @"
-Backtrace6.rb:23:in 'f3'
-Backtrace6.rb:13:in 'block in f2'
+", @"
+Backtrace6.rb:23:in 'Object#f3'
+Backtrace6.rb:13:in 'block in Object#f2'
 Backtrace6.rb:10:in 'Integer#times'
-Backtrace6.rb:10:in 'f2'
-Backtrace6.rb:3:in 'f1'
-Backtrace6.rb:26
-" : @"
-Backtrace6.rb:22:in 'f3'
-Backtrace6.rb:10:in 'block in f2'
-Backtrace6.rb:6:in 'Integer#times'
-Backtrace6.rb:6:in 'f2'
-Backtrace6.rb:2:in 'f1'
-Backtrace6.rb:0
+Backtrace6.rb:10:in 'Object#f2'
+Backtrace6.rb:3:in 'Object#f1'
+Backtrace6.rb:26:in '<main>'
 ");
         }
         
+        /// <summary>
+        /// A frame of ExceptionDispatchInfo.Throw is bookkeeping, not a Ruby frame: a rethrow through it keeps the frames the
+        /// exception came through. The DLR's interpreter (IronLanguages/dlr #371) rethrows an exception a frame has no handler
+        /// for that way, which put ":0:in 'Throw'" on top of every backtrace of an exception leaving an interpreted frame.
+        /// </summary>
+        public void Backtrace8() {
+            AssertOutput(delegate() {
+                CompilerTest(@"
+def f
+  System::Runtime::ExceptionServices::ExceptionDispatchInfo.throw(System::InvalidOperationException.new('x'))
+end
+begin
+  f
+rescue System::InvalidOperationException => e
+  puts e.backtrace[0].sub(/:\d+:/, ':N:').sub('Object#', '')
+  puts e.backtrace.grep(/Throw/).size
+end
+");
+            }, @"
+Backtrace8.rb:N:in 'f'
+0
+");
+        }
+
+        /// <summary>
+        /// The interpreter calls a method with this many parameters through reflection (DLR patch 0103): what the method
+        /// raised kept its frames, the caller's and those below the rescuing one, and the reflection frames do not show.
+        /// Built against a DLR without that patch, the trace starts at caller_of_many (issue 132); the build now refuses one.
+        /// </summary>
+        public void Backtrace9() {
+            AssertOutput(delegate() {
+                CompilerTest(@"
+def many(a, b, c, d, e, f, g, h, i, j, k)
+  raise ArgumentError, 'x'
+end
+
+def caller_of_many
+  many(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
+end
+
+begin
+  caller_of_many
+rescue => e
+  puts e.backtrace.first(3).map { |f| f[/in '(.*)'/, 1] || f[/\w+\.rb/] }
+end
+");
+            }, @"
+Object#many
+Object#caller_of_many
+<main>
+");
+        }
+
+        /// <summary>
+        /// Code run through the hosting API (ScriptEngine.Execute, ScriptSource.Execute, CompilerTest) gets the labels CRuby 4.0
+        /// and ir print (issue 158): a top-level method is "Object#many" although a hosted scope defines it in main's singleton
+        /// class, and the top level is "<main>" - it was "#", which read "block in #" and left the top-level frame unlabelled.
+        /// </summary>
+        public void Backtrace_HostedLabels1() {
+            const string code = @"
+def many
+  raise ArgumentError, 'x'
+end
+
+class Foo
+  def bar = many
+  def self.baz = new.bar
+end
+
+begin
+  [1].each { Foo.baz }
+rescue => e
+  puts e.backtrace.first(6).map { |f| f[/in '(.*)'/, 1] || '-' }
+end
+[1].each { puts caller(0, 1)[0][/in '(.*)'/, 1] }
+puts caller(0, 1)[0][/in '(.*)'/, 1]
+";
+            const string expected = @"
+Object#many
+Foo#bar
+Foo.baz
+block in <main>
+Array#each
+<main>
+block in <main>
+<main>
+";
+            AssertOutput(() => Engine.Execute(code), expected);
+            AssertOutput(() => Engine.CreateScriptSourceFromString(code, "hosted.rb", SourceCodeKind.File).Execute(), expected);
+            AssertOutput(() => CompilerTest(code), expected);
+        }
+
+        private const string HostedBacktraceCode = @"
+def many
+  raise ArgumentError, 'x'
+end
+
+class Foo
+  def bar = many
+  def self.baz = new.bar
+end
+
+begin
+  [1].each { Foo.baz }
+rescue => e
+  puts e.backtrace
+end
+";
+
+        /// <summary>
+        /// Code without a path (ScriptEngine.Execute(string)) had no line information at all (issue 163): a method's frame was
+        /// reported at the line of its `def' and a frame of the top level - Array#each's too - at line 0. It now has the lines
+        /// a file has, under the name "(eval)" its frames already had. Nothing of the host is reported below "<main>".
+        /// </summary>
+        public void Backtrace_HostedPathlessLines1() {
+            AssertOutput(() => Engine.Execute(HostedBacktraceCode), @"
+(eval):3:in 'Object#many'
+(eval):7:in 'Foo#bar'
+(eval):8:in 'Foo.baz'
+(eval):12:in 'block in <main>'
+(eval):12:in 'Array#each'
+(eval):12:in '<main>'
+");
+            // Run in a scope of the host's (ScriptCode.Run(Scope), as CompilerTest does), the `def' redefines Object#many
+            // too, so Foo#bar calls this one (Backtrace_HostedTopLevelMethods1): the file is no longer the "(eval)" of the
+            // Object#many Engine.Execute defined above.
+            AssertOutput(() => CompilerTest(HostedBacktraceCode), @"
+Backtrace_HostedPathlessLines1.rb:3:in 'Object#many'
+Backtrace_HostedPathlessLines1.rb:7:in 'Foo#bar'
+Backtrace_HostedPathlessLines1.rb:8:in 'Foo.baz'
+Backtrace_HostedPathlessLines1.rb:12:in 'block in <main>'
+Backtrace_HostedPathlessLines1.rb:12:in 'Array#each'
+Backtrace_HostedPathlessLines1.rb:12:in '<main>'
+");
+            AssertOutput(() => Engine.Execute(@"
+def m = __method__
+p method(:m).source_location
+p caller(0)
+"), @"
+[""(eval)"", 2]
+[""(eval):4:in '<main>'""]
+");
+        }
+
+        /// <summary>
+        /// A top-level `def' of code run in a host's scope (ScriptCode.Run(Scope) - CompilerTest -, ScriptEngine.Execute(code,
+        /// scope), ScriptSource.Execute(scope)) defined the method only in main's singleton class, the scope's. An instance
+        /// of another class could not call it (issue 163): Foo#bar raised NameError, so the backtrace had no 'Object#many'
+        /// frame at all when the code first ran in such a scope, and later it found an Object#many that some earlier
+        /// scope-less run had defined, with that run's file. It is now a private method of Object as well, as in CRuby.
+        /// The scope keeps its own: the host reads it from there, and the top level of another scope does not call it.
+        /// </summary>
+        public void Backtrace_HostedTopLevelMethods1() {
+            // first in a fresh runtime: nothing else defines Object#many
+            AssertOutput(() => CompilerTest(HostedBacktraceCode), @"
+Backtrace_HostedTopLevelMethods1.rb:3:in 'Object#many'
+Backtrace_HostedTopLevelMethods1.rb:7:in 'Foo#bar'
+Backtrace_HostedTopLevelMethods1.rb:8:in 'Foo.baz'
+Backtrace_HostedTopLevelMethods1.rb:12:in 'block in <main>'
+Backtrace_HostedTopLevelMethods1.rb:12:in 'Array#each'
+Backtrace_HostedTopLevelMethods1.rb:12:in '<main>'
+");
+            // a later run in another scope, with another path, reports its own definition
+            AssertOutput(() => Engine.Execute(HostedBacktraceCode), @"
+(eval):3:in 'Object#many'
+(eval):7:in 'Foo#bar'
+(eval):8:in 'Foo.baz'
+(eval):12:in 'block in <main>'
+(eval):12:in 'Array#each'
+(eval):12:in '<main>'
+");
+            var scope = Engine.CreateScope();
+            AssertOutput(() => Engine.CreateScriptSourceFromString(HostedBacktraceCode, "hosted.rb", SourceCodeKind.File).Execute(scope), @"
+hosted.rb:3:in 'Object#many'
+hosted.rb:7:in 'Foo#bar'
+hosted.rb:8:in 'Foo.baz'
+hosted.rb:12:in 'block in <main>'
+hosted.rb:12:in 'Array#each'
+hosted.rb:12:in '<main>'
+");
+            // still the scope's method as well
+            Assert(scope.GetVariable("many") != null);
+
+            // private on Object, as CRuby's; a nested `def' defines a public one there, as it does in CRuby; a singleton method
+            // of main stays one
+            AssertOutput(() => CompilerTest(@"
+def outer
+  def inner = 1
+end
+def self.single = 2
+outer
+p Object.private_method_defined?(:many), Object.public_method_defined?(:many)
+p Object.private_method_defined?(:inner), Object.method_defined?(:single), Object.private_method_defined?(:single)
+p 1.send(:inner)
+self.instance_eval { def evald = 3 }
+p Object.private_method_defined?(:evald)
+"), @"
+true
+false
+false
+false
+false
+1
+false
+");
+
+            // each scope's top level calls its own; an instance of another class calls the last one defined, as in CRuby
+            var scope1 = Engine.CreateScope();
+            var scope2 = Engine.CreateScope();
+            Engine.Execute("def op(a, b) = a + b; class Calc; def run = op(1, 2); end", scope1);
+            Engine.Execute("def op(a, b) = a - b", scope2);
+            Assert(Engine.Execute<int>("op(1, 2)", scope1) == 3);
+            Assert(Engine.Execute<int>("op(1, 2)", scope2) == -1);
+            Assert(Engine.Execute<int>("Calc.new.run", scope1) == -1);
+            Assert(scope1.GetVariable<Func<int, int, int>>("op")(1, 2) == 3);
+            Assert(scope2.GetVariable<Func<int, int, int>>("op")(1, 2) == -1);
+        }
+
+        /// <summary>
+        /// In code run in a host's scope every method main's singleton class held was labelled "Object#x", so a singleton
+        /// method of main (`def self.x', a `def' in main.instance_eval) was too, where CRuby prints "x" (issue 177). The
+        /// scope's copy of a top-level `def' now runs as Object's method, and the rest of main's singleton class is labelled
+        /// as any other object's. Running as Object's method, its `super' also goes on from Object, as in CRuby, rather
+        /// than to Object's own copy first.
+        /// </summary>
+        public void Backtrace_HostedSingletonLabels1() {
+            const string code = @"
+def self.x = raise('x')
+self.instance_eval { def y = raise('y') }
+def z = raise('z')
+alias z2 z
+def w = caller(0, 1)[0][/'(.*)'/, 1]
+class Hosted177L
+  def go = [w, (z rescue $!.backtrace[0][/'(.*)'/, 1])]
+end
+[:x, :y, :z, :z2].each { |m| begin; send(m); rescue => e; puts e.backtrace[0][/'(.*)'/, 1]; end }
+p w
+p Hosted177L.new.go
+module Kernel; def k177 = caller(0).map { |l| l[/'(.*)'/, 1] }.take_while { |l| l != '<main>' }; end
+def k177 = super
+p k177
+";
+            const string expected = @"
+x
+y
+Object#z
+Object#z
+""Object#w""
+[""Object#w"", ""Object#z""]
+[""Kernel#k177"", ""Object#k177""]
+";
+            AssertOutput(() => CompilerTest(code), expected);
+            AssertOutput(() => Engine.Execute(code, Engine.CreateScope()), expected);
+            // not bound to a scope, as `ir' runs it: it was right before
+            AssertOutput(() => Engine.Execute(code), expected);
+        }
+
+        /// <summary>
+        /// The CLR frames of the host that runs Ruby code (ScriptSource.Execute's caller and its callers: CompilerTest,
+        /// RunTestCase, Main) were reported below "<main>" (issue 163). CRuby has nothing below the main script's frame.
+        /// A CLR method that Ruby code calls and that calls back into Ruby is still reported (Backtrace4).
+        /// </summary>
+        public void Backtrace_HostedNoHostFrames1() {
+            AssertOutput(() => Engine.CreateScriptSourceFromString(HostedBacktraceCode, "hosted.rb", SourceCodeKind.File).Execute(), @"
+hosted.rb:3:in 'Object#many'
+hosted.rb:7:in 'Foo#bar'
+hosted.rb:8:in 'Foo.baz'
+hosted.rb:12:in 'block in <main>'
+hosted.rb:12:in 'Array#each'
+hosted.rb:12:in '<main>'
+");
+            AssertOutput(() => CompilerTest(@"
+p caller
+p caller(0)
+[1].each { p caller(0) }
+begin
+  raise 'x'
+rescue => e
+  p e.backtrace
+end
+"), @"
+[]
+[""Backtrace_HostedNoHostFrames1.rb:3:in '<main>'""]
+[""Backtrace_HostedNoHostFrames1.rb:4:in 'block in <main>'"", ""Backtrace_HostedNoHostFrames1.rb:4:in 'Array#each'"", ""Backtrace_HostedNoHostFrames1.rb:4:in '<main>'""]
+[""Backtrace_HostedNoHostFrames1.rb:6:in '<main>'""]
+");
+
+            // a method the host calls has no frame below its own
+            var scope = Engine.CreateScope();
+            Engine.Execute("def frames(start) = caller(start)", scope);
+            var frames = scope.GetVariable<Func<int, object>>("frames");
+            var all = (IronRuby.Builtins.RubyArray)frames(0);
+            Assert(all.Count == 1);
+            Assert(all[0].ToString() == "(eval):1:in 'Object#frames'");
+            Assert(((IronRuby.Builtins.RubyArray)frames(1)).Count == 0);
+        }
+
+        /// <summary>
+        /// A compiled method or block (the tests compile every method before its first run; ir.sh, once it has run ~300
+        /// times) has no line information of its own: every frame of one was reported at the line its method or block
+        /// starts on. It keeps its line in a frame of PrecompiledFrames (see CompiledFrameExpression) - also once an
+        /// exception has left it, and for a recursive call that has returned - and for caller (Thread#backtrace,
+        /// caller_locations and backtrace_locations, which the prelude defines, read the same lines).
+        /// </summary>
+        public void Backtrace_CompiledLines1() {
+            TestOutput(@"
+def inner(x)
+  y = x
+  raise IOError, 'x' if y > 2
+end
+
+def middle(x)
+  [x].each do |v|
+    inner(v)
+  end
+end
+
+def walk(n)
+  return 0 if n == 0
+  r = walk(n - 1)
+  raise 'after' if n == 2
+  r
+end
+
+def here
+  caller(0, 2).map { |f| f[/:(\d+)/, 1].to_i }
+end
+
+4.times do |i|
+  begin
+    middle(i)
+  rescue IOError => e
+    p e.backtrace.first(4).map { |f| f[/:(\d+)/, 1].to_i }
+  end
+end
+begin
+  walk(3)
+rescue => e
+  p e.backtrace.first(3).map { |f| f[/:(\d+)/, 1].to_i }
+end
+p here
+", @"
+[4, 9, 8, 8]
+[16, 15, 32]
+[21, 36]
+");
+        }
+
+        /// <summary>
+        /// The frames a rescued exception unwound keep their lines for its backtrace only: a recursive call that raised
+        /// and was rescued left a frame of the same method above the live one, and an exception the live one raised
+        /// after that was reported at the line of the call that had raised (10 here, not 8).
+        /// </summary>
+        public void Backtrace_CompiledLines2() {
+            TestOutput(@"
+def foo(n)
+  if n > 0
+    begin
+      foo(n-1)
+    rescue
+    end
+    raise 'outer'
+  else
+    raise 'inner'
+  end
+end
+begin
+  foo(1)
+rescue => e
+  p e.backtrace.first(2).map { |f| f[/:(\d+)/, 1].to_i }
+end
+", @"
+[8, 14]
+");
+        }
+
+        /// <summary>
+        /// The main thread finds its compiled frames without a thread-static read (PrecompiledFrames.Current, #168): a
+        /// thread started from a compiled frame of the main thread keeps its own, and neither thread's lines show up in
+        /// the other's backtrace.
+        /// </summary>
+        public void Backtrace_CompiledLines3() {
+            TestOutput(@"
+def inner(x)
+  y = x
+  raise IOError, 'x' if y > 2
+end
+
+def outer
+  t = Thread.new do
+    begin
+      inner(3)
+    rescue IOError => e
+      e.backtrace.first(2).map { |f| f[/:(\d+)/, 1].to_i }
+    end
+  end
+  r = t.value
+  begin
+    inner(5)
+  rescue IOError => e
+    r + e.backtrace.first(2).map { |f| f[/:(\d+)/, 1].to_i }
+  end
+end
+
+2.times { p outer }
+", @"
+[4, 10, 4, 17]
+[4, 10, 4, 17]
+");
+        }
+
+        /// <summary>
+        /// A lambda System.Linq.Expressions compiled without a name is no frame of Ruby code: a fiber's backtrace from
+        /// code ir.sh had compiled (once hot) had a bogus "0:in 'lambda_methodNN'" under the fiber's block.
+        /// </summary>
+        public void Backtrace_UnnamedLambdaFrame1() {
+            var trace = System.Linq.Expressions.Expression.Lambda<Func<System.Diagnostics.StackTrace>>(
+                System.Linq.Expressions.Expression.New(typeof(System.Diagnostics.StackTrace))
+            ).Compile()();
+            var method = trace.GetFrame(0).GetMethod();
+            Assert(method != null && method.Name.StartsWith("lambda_method", StringComparison.Ordinal));
+            Assert(!RubyStackTraceBuilder.IsVisibleClrFrame(method));
+        }
+
+        /// <summary>
+        /// Under the C locale (US-ASCII, Docker's default) a non-ASCII path is its UTF-8 bytes in a BINARY string. The
+        /// frames of a file in such a directory were US-ASCII strings of characters it has none for, and require_relative,
+        /// caller_locations(0)[0].path and the error report raised "invalid byte sequence in US-ASCII"; load of the
+        /// BINARY path Dir.children returns, and File.expand_path of a UTF-8 name in such a directory, read each byte as a
+        /// character of its own.
+        /// </summary>
+        public void Backtrace_AsciiLocalePaths1() {
+            if (OperatingSystem.IsWindows()) {
+                return;
+            }
+
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+Dir.mktmpdir do |t|
+  d = File.join(t, ""café"")
+  Dir.mkdir(d)
+  File.write(File.join(d, 'lib.rb'), ""LIB = caller_locations(0)[0].path\n"")
+  File.write(File.join(d, 'm.rb'), ""require_relative 'lib'\nM = caller(0)[0]\n"")
+  old = Encoding.default_external
+  Encoding.default_external = Encoding::US_ASCII
+  begin
+    dc = Dir.children(t).first
+    p dc.encoding
+    load File.join(t.b, dc, 'm.rb')
+    p [LIB, M].map(&:encoding), [LIB, M].all?(&:valid_encoding?)
+    p LIB.b.end_with?(""café/lib.rb"".b), M.b.include?(""café/m.rb:2"".b)
+    p File.expand_path('x', File.dirname(LIB)).end_with?(""café/x"")
+  ensure
+    Encoding.default_external = old
+  end
+end
+", @"
+#<Encoding:BINARY (ASCII-8BIT)>
+[#<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:BINARY (ASCII-8BIT)>]
+true
+true
+true
+true
+");
+        }
+
+        /// <summary>
+        /// An exception a library method throws whose class has an initialize written in Ruby - SystemCallError's, in the
+        /// prelude - is replaced by a new one when it is rescued; the backtrace went with the thrown one, and Dir.mkdir's
+        /// Errno::ENOENT had none - a re-raise of it (FileUtils.mkdir_p) got one from the `raise' instead. A LoadError of
+        /// require_relative starts at its caller's line under 'Kernel#require_relative', with no frame of the
+        /// Kernel#require it calls.
+        /// </summary>
+        public void Backtrace_LibraryErrors1() {
+            TestOutput(@"
+require 'ruby4'
+def mk
+  Dir.mkdir('/nonexistent_dir_zz/x')
+end
+def mk_again
+  mk
+rescue SystemCallError
+  raise
+end
+def req
+  require_relative 'nonexistent_file_zz'
+end
+[-> { mk }, -> { mk_again }, -> { req }].each do |l|
+  begin
+    l.call
+  rescue SystemCallError, LoadError => e
+    p e.backtrace.first(3).map { |f| f.sub(/\A.*?\.rb:/, '') }
+  end
+end
+", @"
+[""4:in 'Dir.mkdir'"", ""4:in 'Object#mk'"", ""14:in 'block in <main>'""]
+[""4:in 'Dir.mkdir'"", ""4:in 'Object#mk'"", ""7:in 'Object#mk_again'""]
+[""12:in 'Kernel#require_relative'"", ""12:in 'Object#req'"", ""14:in 'block in <main>'""]
+");
+        }
+
+        /// <summary>
+        /// A method of the prelude skips its own frame with caller(n + 1) (Kernel#caller_locations); called from another
+        /// one (Thread#backtrace), whose frame stands in for the frames it calls, the caller's frame was skipped instead:
+        /// Thread.current.backtrace started at the caller's caller.
+        /// </summary>
+        public void Backtrace_PreludeCallerSkip1() {
+            TestOutput(@"
+require 'ruby4'
+Object.new.instance_exec do
+  p Thread.current.backtrace[0..1].map { |f| f.sub(/\A.*?\.rb:/, '') }
+end
+", @"
+[""4:in 'Thread#backtrace'"", ""4:in 'block in <main>'""]
+");
+        }
+
         public void Backtrace7() {
             // TODO: start name by \0 -> bug in reflection?
             StringBuilder sb = new StringBuilder();
@@ -303,6 +741,406 @@ bar
                 Assert(frameInfo.StartsWith(srcName.Substring(0, maxLength)));
             } else {
                 Assert(frameInfo.StartsWith(srcName + ":"));
+            }
+        }
+
+        /// <summary>
+        /// MRI defines `collect' and `map' (and `each_pair' and `each', `format' and `sprintf', ...) as one C
+        /// function under several names, and a backtrace names the frame by the name called. Here one CLR
+        /// method was registered under them all, and the frame said "Array#map" under `collect' too; a module
+        /// function called on the module is "Kernel.format", not "Kernel#format". The methods are still one
+        /// to UnboundMethod#==.
+        /// </summary>
+        public void Backtrace_CalledNameLabels1() {
+            TestOutput(@"
+def label(i)
+  yield
+rescue => e
+  e.backtrace[i][/'(.*)'/, 1]
+end
+class E; include Enumerable; def each; yield 1; end; end
+puts label(1) { [1].collect { raise 'x' } }, label(1) { [1].map { raise 'x' } }
+puts label(1) { [1].collect! { raise 'x' } }, label(1) { [1].map! { raise 'x' } }
+puts label(1) { [1].filter { raise 'x' } }, label(1) { [1].select { raise 'x' } }
+puts label(1) { [1].index { raise 'x' } }, label(1) { [1].find_index { raise 'x' } }
+puts label(1) { {a: 1}.each_pair { raise 'x' } }, label(1) { {a: 1}.each { raise 'x' } }
+puts label(1) { {a: 1}.filter { raise 'x' } }, label(1) { {a: 1}.select { raise 'x' } }
+puts label(1) { {a: 1}.filter! { raise 'x' } }, label(1) { {a: 1}.select! { raise 'x' } }
+puts label(1) { 'ab'.chars { raise 'x' } }, label(1) { 'ab'.each_char { raise 'x' } }
+puts label(1) { 'ab'.bytes { raise 'x' } }, label(1) { 'ab'.each_byte { raise 'x' } }
+puts label(1) { 'ab'.codepoints { raise 'x' } }, label(1) { 'ab'.each_codepoint { raise 'x' } }
+puts label(2) { E.new.collect { raise 'x' } }, label(2) { E.new.map { raise 'x' } }
+puts label(2) { E.new.detect { raise 'x' } }, label(2) { E.new.find { raise 'x' } }
+puts label(2) { E.new.filter { raise 'x' } }, label(2) { E.new.find_all { raise 'x' } }, label(2) { E.new.select { raise 'x' } }
+puts label(0) { format('%d', 'x') }, label(0) { sprintf('%d', 'x') }
+puts label(0) { Kernel.format('%d', 'x') }, label(0) { Kernel.sprintf('%d', 'x') }
+puts label(0) { format }, label(0) { Kernel.sprintf }
+p Array.instance_method(:collect) == Array.instance_method(:map), Hash.instance_method(:filter) == Hash.instance_method(:select)
+p Kernel.instance_method(:format) == Kernel.instance_method(:sprintf), Kernel.method(:format) == Kernel.method(:sprintf)
+p Enumerable.instance_method(:detect) == Enumerable.instance_method(:find), String.instance_method(:chars) == String.instance_method(:each_char)
+a = [1]
+p a.method(:collect).hash == a.method(:map).hash, a.method(:collect).arity, Kernel.method(:sprintf).arity
+", @"
+Array#collect
+Array#map
+Array#collect!
+Array#map!
+Array#filter
+Array#select
+Array#index
+Array#find_index
+Hash#each_pair
+Hash#each
+Hash#filter
+Hash#select
+Hash#filter!
+Hash#select!
+String#chars
+String#each_char
+String#bytes
+String#each_byte
+String#codepoints
+String#each_codepoint
+Enumerable#collect
+Enumerable#map
+Enumerable#detect
+Enumerable#find
+Enumerable#filter
+Enumerable#find_all
+Enumerable#select
+Kernel#format
+Kernel#sprintf
+Kernel.format
+Kernel.sprintf
+Kernel#format
+Kernel.sprintf
+true
+true
+true
+true
+true
+false
+true
+0
+-1
+");
+        }
+
+        /// <summary>
+        /// An Enumerator a builtin answers without a block names the method by the name it was called by, as MRI's
+        /// does: `[1].collect' is #&lt;Enumerator: [1]:collect&gt;, not :map. An alias names the method it aliases.
+        /// Enumerable#find and #detect said #&lt;Enumerator: ...&gt;.
+        /// </summary>
+        public void Enumerator_CalledName1() {
+            TestOutput(@"
+require 'ruby4'
+class E; include Enumerable; def each; yield 1; end; def inspect; 'e'; end; end
+class A2 < Array; alias foo collect; alias bar filter; def collect!; super; end; end
+S = Struct.new(:a)
+[
+  [1].collect, [1].map, [1].collect!, [1].map!, [1].filter, [1].select, [1].index, [1].find_index,
+  {}.each_pair, {}.each, {}.filter, {}.select, {}.filter!, {}.select!,
+  E.new.collect, E.new.map, E.new.detect, E.new.find, E.new.find(:none), E.new.filter, E.new.find_all, E.new.select,
+  E.new.find_index, S.new(1).filter, S.new(1).select, A2.new([1]).foo, A2.new([1]).bar, A2.new([1]).collect!,
+  [1].method(:collect).call, [1].send(:filter),
+].each { |e| puts e.inspect }
+p E.new.find.each { |x| x == 1 }, E.new.find(-> { 0 }).each { |x| x == 2 }, E.new.find_index.each { |x| x == 1 }
+p [1, 2].index.each { |x| x == 2 }, [3].filter.each { |x| x > 1 }, {a: 1}.each_pair.to_a, S.new(1).filter.to_a
+p [1, 2].map!.with_index { |x, i| x * i }, [3, 4].collect.with_index(1).to_a, (1..3).detect.size
+", @"
+#<Enumerator: [1]:collect>
+#<Enumerator: [1]:map>
+#<Enumerator: [1]:collect!>
+#<Enumerator: [1]:map!>
+#<Enumerator: [1]:filter>
+#<Enumerator: [1]:select>
+#<Enumerator: [1]:index>
+#<Enumerator: [1]:find_index>
+#<Enumerator: {}:each_pair>
+#<Enumerator: {}:each>
+#<Enumerator: {}:filter>
+#<Enumerator: {}:select>
+#<Enumerator: {}:filter!>
+#<Enumerator: {}:select!>
+#<Enumerator: e:collect>
+#<Enumerator: e:map>
+#<Enumerator: e:detect>
+#<Enumerator: e:find>
+#<Enumerator: e:find(:none)>
+#<Enumerator: e:filter>
+#<Enumerator: e:find_all>
+#<Enumerator: e:select>
+#<Enumerator: e:find_index>
+#<Enumerator: #<struct S a=1>:filter>
+#<Enumerator: #<struct S a=1>:select>
+#<Enumerator: [1]:collect>
+#<Enumerator: [1]:filter>
+#<Enumerator: [1]:collect!>
+#<Enumerator: [1]:collect>
+#<Enumerator: [1]:filter>
+1
+0
+0
+1
+[3]
+[[:a, 1]]
+[1]
+[0, 2]
+[[3, 1], [4, 2]]
+nil
+");
+        }
+
+        /// <summary>
+        /// MRI gives a C function a frame when it is called as a method (rb_funcall, rb_block_call) and none when C calls it
+        /// directly. Of library methods calling one another only the outermost was reported, which lost the ones a library
+        /// method calls as Ruby methods: Array#map under Kernel#public_send, Hash#each under Enumerable#map. Methods of the
+        /// Ruby half of the core library showed their helpers (Math.__dom__, Enumerable#__extreme_by__) and the methods
+        /// they are written with (Array#select! under Array#keep_if, Enumerable#sum under Array#sum); an alias there was
+        /// labelled by the method it aliases (Array#filter! as Array#select!, Enumerable#reduce as #inject); a module
+        /// function called on its module was labelled as the instance method (Math#sqrt, Kernel#Integer for Kernel.Integer).
+        /// </summary>
+        public void Backtrace_LibraryFrames1() {
+            TestOutput(@"
+require 'ruby4'
+# the frames of methods with an owner: the blocks and the host's frames are not what this is about
+def bt; yield; rescue => e; e.backtrace.map { |l| l[/'(.*)'/, 1] }.grep(/\A[A-Z][\w:]*[#.]/).grep_v(/\AObject#/).join(' < '); end
+2.times { puts bt { [1].public_send(:map) { raise 'x' } } }
+puts bt { {a: 1}.map { raise 'x' } }, bt { [1].each_with_index { raise 'x' } }, bt { [1].each.with_index { raise 'x' } }
+puts bt { [1, 2].min_by { raise 'x' } }, bt { [1, 2].sum { raise 'x' } }, bt { [1, 2].uniq { raise 'x' } }
+puts bt { Math.sqrt(-1) }, bt { Math.sqrt('x') }, bt { Math.log(-1) }
+puts bt { Kernel.Integer('zz') }, bt { Integer('zz') }, bt { Kernel.Float('zz') }, bt { Float('zz') }
+puts bt { [1].filter! { raise 'x' } }, bt { [1].keep_if { raise 'x' } }, bt { [1].select! { raise 'x' } }
+puts bt { {a: 1, b: 2}.reduce { raise 'x' } }, bt { {a: 1, b: 2}.inject { raise 'x' } }
+puts bt { [1].collect_concat { raise 'x' } }, bt { [1].flat_map { raise 'x' } }, bt { [].each.next }
+puts bt { 'ab'.each_line { raise 'x' } }, bt { 'ab'.upto('ac') { raise 'x' } }
+p Array.instance_method(:filter!) == Array.instance_method(:select!), Enumerable.instance_method(:reduce) == Enumerable.instance_method(:inject)
+p Enumerable.instance_method(:collect_concat) == Enumerable.instance_method(:flat_map), IO.instance_method(:each) == IO.instance_method(:each_line)
+p Array.instance_method(:keep_if) == Array.instance_method(:select!), Kernel.method(:Integer).call('12'), Kernel.Float('1.5')
+p [1, 2, 3].filter!(&:odd?), [1].filter!.inspect, [1, 2, 3].keep_if(&:even?), [1, 2].reduce(:+), [[1], [2]].collect_concat.to_a
+", @"
+Array#map < Kernel#public_send < Integer#times
+Array#map < Kernel#public_send < Integer#times
+Hash#each < Enumerable#map
+Array#each < Enumerable#each_with_index
+Array#each < Enumerator#with_index
+Array#each < Enumerable#min_by
+Array#sum
+Array#uniq
+Math.sqrt
+Math.sqrt
+Math.log
+Kernel.Integer
+Kernel#Integer
+Kernel.Float
+Kernel#Float
+Array#filter!
+Array#keep_if
+Array#select!
+Hash#each < Enumerable#reduce
+Hash#each < Enumerable#inject
+Array#each < Enumerable#collect_concat
+Array#each < Enumerable#flat_map
+Enumerator#next
+String#each_line
+String#upto
+true
+true
+true
+true
+false
+12
+1.5
+[1, 3]
+""#<Enumerator: [1]:filter!>""
+[2]
+3
+[[1], [2]]
+");
+        }
+
+        /// <summary>
+        /// An Errno a library method raised had no backtrace when rescued: the rescue replaces the exception with one the
+        /// class's own #initialize made (SystemCallError's is Ruby), and copied the backtrace over before it had been taken.
+        /// Kernel#Float's warning about a number out of range is located in &lt;internal:kernel&gt;, as MRI's (written in Ruby).
+        /// </summary>
+        public void Backtrace_RescuedErrno1() {
+            TestOutput(@"
+require 'ruby4'
+# the backtrace reaches the block that called the method, above the method that rescued it
+def bt; yield; rescue => e; [e.class, e.backtrace.any? { |l| l.include?('block in') }]; end
+p bt { File.read('/nonexistent/x') }, bt { Dir.rmdir('/nonexistent/x') }, bt { File.unlink('/nonexistent/x') }
+def f; File.stat('/nonexistent/x'); end
+p bt { f }
+begin; f; rescue => e; p e.backtrace.grep(/[#']f'/).size; end
+def Warning.warn(message, category: nil) = print(message)
+$VERBOSE = true
+Float('1e400'); Float('1e400', exception: false)
+$VERBOSE = false
+", @"
+[Errno::ENOENT, true]
+[Errno::ENOENT, true]
+[Errno::ENOENT, true]
+[Errno::ENOENT, true]
+1
+<internal:kernel>:196: warning: Float 1e400 out of range
+<internal:kernel>:198: warning: Float 1e400 out of range
+");
+        }
+
+        /// <summary>
+        /// StringIO's iterators without a block were Enumerators over a generator (#&lt;Enumerator:
+        /// #&lt;Enumerator::Generator:...&gt;:each&gt;) rather than of the method, as MRI's; under a block that
+        /// raised, StringIO#each_line had two frames - the Ruby wrapper's in stringio.rb and the built-in's, named
+        /// StringIO#each - where MRI's C extension has one, and IO#each_line was IO#each and IO#each_line.
+        /// </summary>
+        public void StringIO_IteratorNames1() {
+            TestOutput(@"
+require 'ruby4'
+require 'stringio'
+[StringIO.new(""a\nb"").each, StringIO.new('a').each_line, StringIO.new('ab').each_char, StringIO.new('ab').each_byte,
+ StringIO.new('ab').each_codepoint].each { |e| puts e.inspect.sub(/0x\h+/, 'X') }
+p StringIO.new(""a\nb"").each.to_a, StringIO.new(""a\nb"").each_line(chomp: true).to_a, StringIO.new('ab').each_char.size
+p StringIO.instance_method(:each_line).source_location
+# the frame after the method's is the block that called it, not a second one of the method
+def label(i); yield; rescue => e; e.backtrace[i][/'(.*)'/, 1].sub(/ in .*/, ''); end
+puts label(1) { StringIO.new('a').each_line { raise 'x' } }, label(2) { StringIO.new('a').each_line { raise 'x' } }
+puts label(1) { StringIO.new('a').each_byte { raise 'x' } }, label(2) { StringIO.new('a').each_byte { raise 'x' } }
+r, w = IO.pipe
+w.puts 'a', 'b'
+w.close
+puts label(1) { r.each_line { raise 'x' } }, label(2) { r.each_line { raise 'x' } }
+", @"
+#<Enumerator: #<StringIO:X>:each>
+#<Enumerator: #<StringIO:X>:each_line>
+#<Enumerator: #<StringIO:X>:each_char>
+#<Enumerator: #<StringIO:X>:each_byte>
+#<Enumerator: #<StringIO:X>:each_codepoint>
+[""a\n"", ""b""]
+[""a"", ""b""]
+nil
+nil
+StringIO#each_line
+block
+StringIO#each_byte
+block
+IO#each_line
+block
+");
+        }
+
+        /// <summary>
+        /// The backtrace of an exception raised in a compiled method's ensure clause: on .NET 9 and later the exception's own trace
+        /// has the method twice (the clause runs as a funclet of it), and so did the backtrace. A method that calls itself from
+        /// its ensure clause, or from its body, keeps every frame. Interpreted, sync-compiled and compiled; expected output is
+        /// CRuby 4.0's.
+        /// </summary>
+        public void Backtrace_RaiseInEnsure1() {
+            const string script = @"class A < StandardError; end
+class B < StandardError; end
+def bt(e)
+  f = e.backtrace.map { |l| l[/:\d+:in '[^']*'/] }
+  f[0..f.index { |l| l.include?(""<main>"") }].join("","")
+end
+def m; raise A; ensure; raise B; end
+def z; raise A; ensure; Integer(""x""); end
+def rec(n) = n == 0 ? m : rec(n - 1)
+def blk; [1].each { begin; raise A; ensure; raise B; end }; end
+def er2 = er(2)
+def er(n)
+  raise A if n == 0
+ensure
+  er(n - 1) if n > 0
+end
+r = 3.times.map do
+  [:m, :z, :blk, :er2].map { |s| begin; send(s); rescue => e; bt(e); end } <<
+    (begin; rec(2); rescue => e; bt(e); end) <<
+    (begin; begin; raise A; ensure; raise B; end; rescue => e; bt(e); end)
+end
+r.uniq.inspect";
+            const string expected = @"[["":7:in 'Object#m',:18:in 'block (2 levels) in <main>'"", "":8:in 'Kernel#Integer',:8:in 'Object#z',:18:in 'block (2 levels) in <main>'"", "":10:in 'block in Object#blk',:10:in 'Array#each',:10:in 'Object#blk',:18:in 'block (2 levels) in <main>'"", "":13:in 'Object#er',:15:in 'Object#er',:15:in 'Object#er',:11:in 'Object#er2',:18:in 'block (2 levels) in <main>'"", "":7:in 'Object#m',:9:in 'Object#rec',:9:in 'Object#rec',:9:in 'Object#rec',:19:in 'block in <main>'"", "":20:in 'block in <main>'""]]";
+
+            foreach (int threshold in new[] { Int32.MaxValue, 1 }) {
+                var engine = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = threshold; });
+                AreEqual(engine.CreateScriptSourceFromString(script, "t2.rb", SourceCodeKind.File).Execute().ToString(), expected);
+            }
+            AreEqual(Engine.CreateScriptSourceFromString(script, "t2.rb", SourceCodeKind.File).Execute().ToString(), expected);
+        }
+
+        /// <summary>
+        /// A frame running a loop the interpreter has compiled (a method called once, its loop hot) reported line 16707566, the
+        /// cleared sequence point the loop starts with, in caller, caller_locations and the backtrace of an exception raised in
+        /// the loop - and one rescued inside the loop lost the outermost frame. CompilationThreshold 1 compiles the loop at its
+        /// second iteration and the methods at their second call. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Backtrace_CompiledLoopLine1() {
+            const string script = @"require 'ruby4'; def thrower = raise(ArgumentError, ""t"")
+def lines(a) = a.map { |l| l[/:(\d+):in '([^']*)'/] }.join("","")
+def hot
+  r = []
+  i = 0
+  while i < 300
+    i += 1
+    r << lines(caller(0, 2)) if i == 299
+    r << caller_locations(0, 1)[0].lineno if i == 299
+    begin
+      thrower if i == 298
+    rescue => e
+      r << lines(e.backtrace[0, 3])
+    end
+  end
+  r
+end
+def nested
+  a = 0
+  while a < 2
+    a += 1
+    b = 0
+    while b < 300
+      b += 1
+      return lines(caller(0, 2)) if a == 2 && b == 299
+    end
+  end
+end
+def uncaught
+  i = 0
+  while i < 300
+    i += 1
+    thrower if i == 299
+  end
+end
+def call_uncaught = (begin; uncaught; rescue => e; lines(e.backtrace[0, 4]); end)
+[hot, nested, call_uncaught].inspect";
+            const string expected = @"[["":1:in 'Object#thrower',:11:in 'Object#hot',:37:in '<main>'"", "":8:in 'Object#hot',:37:in '<main>'"", 9], "":25:in 'Object#nested',:37:in '<main>'"", "":1:in 'Object#thrower',:33:in 'Object#uncaught',:36:in 'Object#call_uncaught',:37:in '<main>'""]";
+
+            foreach (int threshold in new[] { Int32.MaxValue, 1 }) {
+                var engine = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = threshold; });
+                AreEqual(engine.CreateScriptSourceFromString(script, "t3.rb", SourceCodeKind.File).Execute().ToString(), expected);
+            }
+            AreEqual(Engine.CreateScriptSourceFromString(script, "t3.rb", SourceCodeKind.File).Execute().ToString(), expected);
+        }
+
+        /// <summary>
+        /// The line record of a frame running a loop the interpreter compiled lets go of the frame once the loop is left: it
+        /// kept the frame's locals alive after the method returned (found in review).
+        /// </summary>
+        public void Backtrace_CompiledLoopLineFrameReleased1() {
+            const string script = @"class Big; end
+def build
+  big = Big.new
+  $w = ObjectSpace::WeakMap.new
+  $w[1] = big
+  i = 0
+  while i < 5000; i += 1; end
+  nil
+end
+build
+10.times { GC.start }
+($w.key?(1) && !$w[1].nil?).inspect";
+
+            foreach (int threshold in new[] { Int32.MaxValue, 1 }) {
+                var engine = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = threshold; });
+                AreEqual(engine.CreateScriptSourceFromString(script, "release1.rb", SourceCodeKind.File).Execute().ToString(), "false");
             }
         }
     }

@@ -245,24 +245,6 @@ namespace IronRuby.Builtins {
             return self.FrozenOriginalString;
         }
 
-        [RubyMethod("select")]
-        public static object Select([NotNull]BlockParam/*!*/ block, MatchData/*!*/ self) {
-            RubyArray result = new RubyArray();
-            for (int i = 0; i < self.GroupCount; i++) {
-                MutableString value = self.GetGroupValue(i);
-
-                object blockResult;
-                if (block.Yield(value, out blockResult)) {
-                    return blockResult;
-                }
-
-                if (RubyOps.IsTrue(blockResult)) {
-                    result.Add(value);
-                }
-            }
-            return result;
-        }
-
         [RubyMethod("values_at")]
         public static RubyArray/*!*/ ValuesAt(ConversionStorage<int>/*!*/ conversionStorage, 
             MatchData/*!*/ self, [DefaultProtocol]params int[]/*!*/ indices) {

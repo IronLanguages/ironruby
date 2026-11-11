@@ -14,9 +14,9 @@
  * ***************************************************************************/
 
 using System;
+using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
-using Microsoft.Scripting.Generation;
 using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {
@@ -58,6 +58,93 @@ namespace IronRuby.Builtins {
             throw RubyExceptions.MakeComparisonError(comparisonStorage.Context, lhs, rhs);
         }
 
+        #region clamp
+
+        // MRI's cmp_clamp. It was Ruby in ruby4.rb, and a hot `x.clamp(0, 15)` paid for a method
+        // scope, a splat array and a case on its size on every call.
+
+        // MRI declares clamp with rb_scan_args "11", which makes its arity -1, not -2. This
+        // overload is what gives the group that arity; it only takes the argument counts the
+        // others do not, and raises MRI's error for them.
+        [RubyMethod("clamp")]
+        public static object Clamp(object self, params object[]/*!*/ args) {
+            throw RubyExceptions.CreateArgumentError("wrong number of arguments (given {0}, expected 1..2)", args.Length);
+        }
+
+        [RubyMethod("clamp")]
+        public static object Clamp(ComparisonStorage/*!*/ comparisonStorage, object self, object min, object max) {
+            if (min != null && max != null && CompareOrRaise(comparisonStorage, min, max) > 0) {
+                throw RubyExceptions.CreateArgumentError("min argument must be less than or equal to max argument");
+            }
+
+            if (min != null) {
+                int c = CompareOrRaise(comparisonStorage, self, min);
+                if (c == 0) {
+                    return self;
+                }
+                if (c < 0) {
+                    return min;
+                }
+            }
+
+            if (max != null && CompareOrRaise(comparisonStorage, self, max) > 0) {
+                return max;
+            }
+            return self;
+        }
+
+        [RubyMethod("clamp")]
+        public static object Clamp(ComparisonStorage/*!*/ comparisonStorage, object self, [NotNull]Range/*!*/ range) {
+            return ClampToRange(comparisonStorage, self, range.Begin, range.End, range.ExcludeEnd);
+        }
+
+        // rb_range_values: anything with #begin, #end and #exclude_end? passes for a Range.
+        [RubyMethod("clamp")]
+        public static object Clamp(ComparisonStorage/*!*/ comparisonStorage, RespondToStorage/*!*/ respondToStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ beginStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ endStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ excludeEndStorage,
+            object self, object range) {
+
+            if (range == null || range is bool ||
+                !Protocols.RespondTo(respondToStorage, range, "begin") ||
+                !Protocols.RespondTo(respondToStorage, range, "end") ||
+                !Protocols.RespondTo(respondToStorage, range, "exclude_end?")) {
+
+                string name = range == null ? "nil" : range is bool ? ((bool)range ? "true" : "false") :
+                    comparisonStorage.Context.GetClassOf(range).GetNonNullName(comparisonStorage.Context);
+                throw RubyExceptions.CreateTypeError("wrong argument type {0} (expected Range)", name);
+            }
+
+            var beginSite = beginStorage.GetCallSite("begin", 0);
+            var endSite = endStorage.GetCallSite("end", 0);
+            var excludeEndSite = excludeEndStorage.GetCallSite("exclude_end?", 0);
+            object min = beginSite.Target(beginSite, range);
+            object max = endSite.Target(endSite, range);
+            return ClampToRange(comparisonStorage, self, min, max, RubyOps.IsTrue(excludeEndSite.Target(excludeEndSite, range)));
+        }
+
+        private static object ClampToRange(ComparisonStorage/*!*/ comparisonStorage, object self, object min, object max, bool excludeEnd) {
+            if (excludeEnd && max != null) {
+                throw RubyExceptions.CreateArgumentError("cannot clamp with an exclusive range");
+            }
+            return Clamp(comparisonStorage, self, min, max);
+        }
+
+        /// <summary>
+        /// MRI's cmpint: a nil result is a comparison error naming both operands.
+        /// </summary>
+        private static int CompareOrRaise(ComparisonStorage/*!*/ comparisonStorage, object lhs, object rhs) {
+            var compare = comparisonStorage.CompareSite;
+            object compareResult = compare.Target(compare, lhs, rhs);
+            if (compareResult == null) {
+                throw RubyExceptions.MakeComparisonError(comparisonStorage.Context, lhs, rhs);
+            }
+            return Protocols.ConvertCompareResult(comparisonStorage, compareResult);
+        }
+
+        #endregion
+
         [RubyMethod("between?")]
         public static bool Between(ComparisonStorage/*!*/ comparisonStorage, object self, object min, object max) {
             return !Less(comparisonStorage, self, min) && !Greater(comparisonStorage, self, max);
@@ -69,15 +156,43 @@ namespace IronRuby.Builtins {
                 return true;
             }
 
-            // Ruby 2.3 stopped rescuing StandardError here: whatever <=> raises goes through,
-            // a nil result is false and a non-numeric result raises (via the comparison below).
-            var compare = comparisonStorage.CompareSite;
-            object compareResult = compare.Target(compare, self, other);
-            if (compareResult == null) {
+            // MRI's rb_exec_recursive_paired: a <=> that compares the same two objects again inside
+            // itself (members that refer back to their container) gets false there, not a stack overflow.
+            var pair = new KeyValuePair<object, object>(self, other);
+            var comparing = _comparing ??= new HashSet<KeyValuePair<object, object>>(ReferencePairComparer.Instance);
+            if (!comparing.Add(pair)) {
                 return false;
             }
 
-            return Protocols.ConvertCompareResult(comparisonStorage, compareResult) == 0;
+            try {
+                // Ruby 2.3 stopped rescuing StandardError here: whatever <=> raises goes through,
+                // a nil result is false and any other is compared with 0 (rb_cmpint).
+                var compare = comparisonStorage.CompareSite;
+                object compareResult = compare.Target(compare, self, other);
+                if (compareResult == null) {
+                    return false;
+                }
+
+                return Protocols.ConvertCompareResult(comparisonStorage, compareResult) == 0;
+            } finally {
+                comparing.Remove(pair);
+            }
+        }
+
+        // the pairs Comparable#== is comparing on this thread
+        [ThreadStatic]
+        private static HashSet<KeyValuePair<object, object>> _comparing;
+
+        private sealed class ReferencePairComparer : IEqualityComparer<KeyValuePair<object, object>> {
+            internal static readonly ReferencePairComparer Instance = new ReferencePairComparer();
+
+            public bool Equals(KeyValuePair<object, object> x, KeyValuePair<object, object> y) {
+                return ReferenceEquals(x.Key, y.Key) && ReferenceEquals(x.Value, y.Value);
+            }
+
+            public int GetHashCode(KeyValuePair<object, object> pair) {
+                return RuntimeHelpers.GetHashCode(pair.Key) * 31 + RuntimeHelpers.GetHashCode(pair.Value);
+            }
         }
     }
 }
