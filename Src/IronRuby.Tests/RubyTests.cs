@@ -1118,6 +1118,7 @@ namespace IronRuby.Tests {
                 MethodArity_LibraryArguments1,
                 MethodArity_PreludeMethods1,
                 MethodDef_SymbolInBody1,
+                KeywordsOmitted1,
                 ToIntegerConversion1,
                 Kernel_IntegerFloat1,
                 Kernel_FloatOptions1,

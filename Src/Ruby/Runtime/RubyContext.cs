@@ -622,6 +622,16 @@ namespace IronRuby.Runtime {
         }
         private readonly EqualityComparer/*!*/ _equalityComparer;
 
+        /// <summary>
+        /// The keyword arguments of a call that passed none, as a method with keyword parameters but no
+        /// **rest binds them (RubyOps.GetOmittedKeywordArguments): one empty, frozen keyword hash that
+        /// every such call shares. Its prologue only reads it, and nothing else ever sees it.
+        /// </summary>
+        internal Hash/*!*/ OmittedKeywordArguments {
+            get { return _omittedKeywordArguments; }
+        }
+        private readonly Hash/*!*/ _omittedKeywordArguments;
+
         public override Version LanguageVersion {
             get { return new Version(IronRuby.CurrentVersion.Major, IronRuby.CurrentVersion.Minor, IronRuby.CurrentVersion.Micro); }
         }
@@ -702,6 +712,9 @@ namespace IronRuby.Runtime {
             _metaBinderFactory = new RubyMetaBinderFactory(this);
             _runtimeErrorSink = new RuntimeErrorSink(this);
             _equalityComparer = new EqualityComparer(this);
+            _omittedKeywordArguments = new Hash(_equalityComparer, 0);
+            _omittedKeywordArguments.IsKeywordArguments = true;
+            _omittedKeywordArguments.Freeze();
             _globalVariables = new Dictionary<string, GlobalVariable>();
             _moduleCache = new Dictionary<Type, RubyModule>();
             _namespaceCache = new Dictionary<NamespaceTracker, RubyModule>();

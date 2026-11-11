@@ -2624,8 +2624,13 @@ namespace IronRuby.Prism {
             var kwVar = CurrentScope.AddVariable("?kw?", span);
             // The default stands for "the caller passed no keywords", so it is marked as keyword
             // arguments itself - that is what tells it apart from a Hash passed positionally - and
-            // as a hash this call alone holds, which **rest takes over rather than copies.
-            optional.Add(new SimpleAssignmentExpression(kwVar, HashConstructor.OmittedKeywords(span), null, span));
+            // as a hash this call alone holds, which **rest takes over rather than copies. A method
+            // without **rest only ever reads it (the checks and bindings below; `super' passes the
+            // keywords on by name), so it gets the runtime's shared empty one instead of a new hash
+            // per call that omits its keywords.
+            bool readOnly = isMethod && !(node.KeywordRest is Pm.KeywordRestParameterNode);
+            optional.Add(new SimpleAssignmentExpression(kwVar,
+                readOnly ? HashConstructor.SharedOmittedKeywords(span) : HashConstructor.OmittedKeywords(span), null, span));
 
             var prologue = new Statements();
             // blocks and lambdas pass nil for parameters the caller omitted, so the

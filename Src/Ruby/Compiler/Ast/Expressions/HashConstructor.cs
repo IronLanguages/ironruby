@@ -42,6 +42,10 @@ namespace IronRuby.Compiler.Ast {
         // The empty default of a method's or block's hidden keyword parameter (see OmittedKeywords).
         private readonly bool _isOmittedKeywords;
 
+        // ... which the runtime's one shared, frozen empty keyword hash can stand for: a method's whose
+        // prologue only reads it (see SharedOmittedKeywords).
+        private readonly bool _isSharedOmittedKeywords;
+
         public HashConstructor(Maplet/*!*/[]/*!*/ maplets, SourceSpan location)
             : this(maplets, false, location) {
         }
@@ -53,9 +57,10 @@ namespace IronRuby.Compiler.Ast {
             _isKeywordArguments = isKeywordArguments;
         }
 
-        private HashConstructor(SourceSpan location)
+        private HashConstructor(bool shared, SourceSpan location)
             : this(new Maplet[0], true, location) {
             _isOmittedKeywords = true;
+            _isSharedOmittedKeywords = shared;
         }
 
         /// <summary>
@@ -65,7 +70,16 @@ namespace IronRuby.Compiler.Ast {
         /// (RubyOps.MakeOmittedKeywordArguments, RubyOps.MakeKeywordRest).
         /// </summary>
         internal static HashConstructor/*!*/ OmittedKeywords(SourceSpan location) {
-            return new HashConstructor(location);
+            return new HashConstructor(false, location);
+        }
+
+        /// <summary>
+        /// The same default for a method whose prologue only reads the hash - one without **rest, which
+        /// takes the hash over, and without anything else that passes it on: the runtime's one empty,
+        /// frozen keyword hash (RubyOps.GetOmittedKeywordArguments) rather than a new one per call.
+        /// </summary>
+        internal static HashConstructor/*!*/ SharedOmittedKeywords(SourceSpan location) {
+            return new HashConstructor(true, location);
         }
 
         internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
@@ -100,8 +114,8 @@ namespace IronRuby.Compiler.Ast {
             switch (_maplets.Length) {
                 // the default of the hidden keyword parameter: no keywords passed
                 case 0:
-                    return _isOmittedKeywords
-                        ? Methods.MakeOmittedKeywordArguments.OpCall(gen.CurrentScopeVariable)
+                    return _isSharedOmittedKeywords ? Methods.GetOmittedKeywordArguments.OpCall(gen.CurrentScopeVariable)
+                        : _isOmittedKeywords ? Methods.MakeOmittedKeywordArguments.OpCall(gen.CurrentScopeVariable)
                         : Methods.MakeKeywordArgumentsHash0.OpCall(gen.CurrentScopeVariable);
                 case 1: return Methods.MakeKeywordArgumentsHash1.OpCall(args);
                 case 2: return Methods.MakeKeywordArgumentsHash2.OpCall(args);
