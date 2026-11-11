@@ -309,7 +309,7 @@ p [Integer(""0x1A""), Integer("" 12 "", 8), Integer(""z"", 36), Integer(12, 0), 
 p [Integer(ti), Integer(ts), Integer(ts, 16), Integer(tii), Integer(tis), Integer(tir), Integer(tpi)]
 p [Integer(""x"", exception: false), Integer(nil, exception: false), Integer((0.0 / 0), exception: false), Integer(tbi, exception: false), Integer(Object.new, 16, exception: false)]
 puts t { Integer(nil) }, t { Integer(true) }, t { Integer(:a) }, t { Integer((1.0 / 0)) }, t { Integer(tbi) }, t { Integer(tbs) }
-puts t { Integer(12, 8) }, t { Integer(nil, 8) }, t { Integer(""1__0"") }, t { Integer(""10"", 37) }
+puts t { Integer(12, 8) }, t { Integer(nil, 8) }, t { Integer(""1__0"") }, t { Integer(""10"", 37) }, t { Integer("""", 1, exception: false) }
 puts t { Integer(""1"", exception: nil) }, t { Integer(""1"", foo: 1) }, t { Integer(""12"".encode(""UTF-16LE""), exception: false) }
 tf = Object.new; def tf.to_f = 2.5
 tbf = Object.new; def tbf.to_f = ""x""
@@ -333,6 +333,7 @@ ArgumentError: base specified for non string value
 ArgumentError: base specified for non string value
 ArgumentError: invalid value for Integer(): ""1__0""
 ArgumentError: invalid radix 37
+ArgumentError: invalid radix 1
 ArgumentError: expected true or false as exception: nil
 ArgumentError: unknown keyword: :foo
 Encoding::CompatibilityError: ASCII incompatible encoding: UTF-16LE

@@ -330,6 +330,30 @@ namespace IronRuby.Runtime {
     }
 
     /// <summary>
+    /// A library method's way past the keyword Hash for a call that passes literal keywords (`Integer(s, exception: false)'):
+    /// the call's positional arguments and keyword values, in the call's order, without the Hash and the overload resolution
+    /// of the ordinary call. Answers <see cref="IronRuby.Runtime.Jit.JitKeywordCall.NoDirect"/> for whatever it does not answer
+    /// itself - in particular anything that would raise - and the call is then made the ordinary way, which raises as it
+    /// always did, from where it always did.
+    /// </summary>
+    public delegate object LibraryKeywordEntry(object self, object p0, object p1, object k0, object k1, object k2);
+
+    /// <summary>
+    /// Marks a library method overload that has a <see cref="LibraryKeywordEntry"/>: <see cref="Factory"/> names a public
+    /// static method of the same class, LibraryKeywordEntry Factory(RubyContext context, int positionalCount, string[] keywords),
+    /// which makes the entry for a call with that many positional arguments and those keywords, or answers null for a call it
+    /// does not take. The JIT's keyword call sites (JitKeywordCall) use it once the method name resolves to this method.
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]
+    public sealed class LibraryKeywordEntryAttribute : Attribute {
+        public string/*!*/ Factory { get; }
+
+        public LibraryKeywordEntryAttribute(string/*!*/ factory) {
+            Factory = factory;
+        }
+    }
+
+    /// <summary>
     /// Marks a library method (an overload) that sees the keyword arguments of its call as keyword arguments: a trailing
     /// Hash the call passed as keywords reaches it still marked (Hash.IsKeywordArguments), so that it can tell `f(a: 1)'
     /// from `f({a: 1})' or pass them on as keywords - Kernel#send, Proc#call, Struct#initialize (MRI's rb_keyword_given_p
