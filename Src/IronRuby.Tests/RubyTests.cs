@@ -1285,6 +1285,7 @@ namespace IronRuby.Tests {
                 String_DumpNonUnicode1,
                 IO_PutsRecursiveToAry1,
                 Hash_MutateInBlock1,
+                Hash_FetchErrorEllipsis1,
             };
         }
     }

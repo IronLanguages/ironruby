@@ -11045,7 +11045,9 @@ class Hash
       elsif block
         block.call(k)
       else
-        raise KeyError.new("key not found: #{k.inspect}", receiver: self, key: k)
+        desc = k.inspect
+        desc = "#{desc[0, 62]}..." if desc.length > 65 # rb_hash_fetch's rb_str_ellipsize
+        raise KeyError.new("key not found: #{desc}", receiver: self, key: k)
       end
     end
   end

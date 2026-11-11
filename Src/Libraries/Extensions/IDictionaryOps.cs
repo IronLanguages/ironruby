@@ -537,13 +537,19 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// MRI's rb_key_err_raise: KeyError.new("key not found: #{key.inspect}"), then the receiver
+        /// MRI's rb_key_err_raise: KeyError.new("key not found: #{key.inspect}") (the inspect shortened), then the receiver
         /// and the key - which KeyError#receiver and #key answer - set on it directly. KeyError is
         /// one of the exception classes defined in Ruby (see the KeyError reopening in
         /// Src/StdLib/ironruby/ruby4.rb); until it is, this is an IndexError.
         /// </summary>
         internal static Exception/*!*/ CreateKeyError(RubyContext/*!*/ context, BinaryOpStorage/*!*/ newStorage, object receiver, object key) {
-            MutableString message = MutableString.CreateMutable(RubyEncoding.UTF8).Append("key not found: ").Append(context.Inspect(key));
+            // MRI cuts the description to 65 characters, the last three of them "..." (rb_str_ellipsize):
+            // a long key does not make a message of its own length.
+            MutableString desc = context.Inspect(key);
+            if (desc.GetCharCount() > 65) {
+                desc = desc.GetSlice(0, 62).Append("...");
+            }
+            MutableString message = MutableString.CreateMutable(RubyEncoding.UTF8).Append("key not found: ").Append(desc);
 
             object keyErrorClass;
             if (context.ObjectClass.TryGetConstant(null, "KeyError", out keyErrorClass)) {

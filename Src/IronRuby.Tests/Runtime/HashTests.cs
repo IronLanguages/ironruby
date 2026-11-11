@@ -491,5 +491,24 @@ nil
 nil
 ");
         }
+
+        /// <summary>
+        /// Hash#fetch and #fetch_values cut the key's inspect in the KeyError message to 65 characters, the last three
+        /// "..." (MRI's rb_str_ellipsize).
+        /// </summary>
+        public void Hash_FetchErrorEllipsis1() {
+            TestOutput(@"
+require 'ruby4'
+begin; {}.fetch('gumby' * 20); rescue KeyError => e; puts e.message; end
+begin; {}.fetch_values('g' * 70); rescue KeyError => e; puts e.message; end
+begin; {}.fetch('g' * 63); rescue KeyError => e; puts e.message; end
+begin; {}.fetch(:a); rescue KeyError => e; puts e.message; end
+", @"
+key not found: ""gumbygumbygumbygumbygumbygumbygumbygumbygumbygumbygumbygumbyg...
+key not found: ""ggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg...
+key not found: ""ggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg""
+key not found: :a
+");
+        }
     }
 }
