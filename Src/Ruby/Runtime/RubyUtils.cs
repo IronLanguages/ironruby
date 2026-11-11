@@ -1965,7 +1965,7 @@ namespace IronRuby.Runtime {
         /// </summary>
         public static void RaiseAsyncException(Thread thread, Exception e, Func<Exception, Exception> finisher) {
             if (finisher != null && thread != Thread.CurrentThread) {
-                _asyncExceptionFinishers.AddOrUpdate(e, finisher);
+                SetAsyncExceptionFinisher(e, finisher);
             }
             RaiseAsyncException(thread, e);
         }
@@ -1975,19 +1975,48 @@ namespace IronRuby.Runtime {
         /// </summary>
         public static void ParkAsyncException(Thread/*!*/ thread, Exception/*!*/ e, Func<Exception, Exception> finisher) {
             if (finisher != null) {
-                _asyncExceptionFinishers.AddOrUpdate(e, finisher);
+                SetAsyncExceptionFinisher(e, finisher);
             }
             ParkAsyncException(thread, e);
         }
 
         /// <summary>The exception to throw for a parked one, on the thread it was parked for.</summary>
         public static Exception/*!*/ FinishAsyncException(Exception/*!*/ e) {
-            Func<Exception, Exception> finisher;
-            if (_asyncExceptionFinishers.TryGetValue(e, out finisher)) {
-                _asyncExceptionFinishers.Remove(e);
-                return finisher(e) ?? e;
+            Func<Exception, Exception> finisher = TakeAsyncExceptionFinisher(e);
+            return finisher != null ? finisher(e) ?? e : e;
+        }
+
+        // ConditionalWeakTable takes a lock of its own for a change, and the thread that has just
+        // taken a parked exception contends for it with the thread that raises the next one: a
+        // Thread#raise in a loop. The next raise's nudge then found this thread waiting for the
+        // table's lock - WaitSleepJoin - and its Thread.Interrupt broke that wait off: the
+        // ThreadInterruptedException reached Ruby code instead of the exception, or ended a fiber
+        // thread, whose resumer then waited in Fiber#resume for ever. As in UninterruptedLock, such
+        // an interrupt is dropped; the exception it came for stays parked for the next safe point.
+        private static void SetAsyncExceptionFinisher(Exception/*!*/ e, Func<Exception, Exception>/*!*/ finisher) {
+            while (true) {
+                try {
+                    _asyncExceptionFinishers.AddOrUpdate(e, finisher);
+                    return;
+                } catch (ThreadInterruptedException) {
+                    // a nudge; the table is as it was
+                }
             }
-            return e;
+        }
+
+        private static Func<Exception, Exception> TakeAsyncExceptionFinisher(Exception/*!*/ e) {
+            while (true) {
+                try {
+                    Func<Exception, Exception> finisher;
+                    if (!_asyncExceptionFinishers.TryGetValue(e, out finisher)) {
+                        return null;
+                    }
+                    _asyncExceptionFinishers.Remove(e);
+                    return finisher;
+                } catch (ThreadInterruptedException) {
+                    // a nudge; the table is as it was
+                }
+            }
         }
 
         // IronRuby runs every Fiber on its own CLR thread, but Ruby semantics say that all fibers of a
