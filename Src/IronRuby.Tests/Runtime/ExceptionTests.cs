@@ -1529,5 +1529,126 @@ x = begin; t.join; rescue => e; [e.class, e.cause&.message]; end
             AreEqual(interpreting.CreateScriptSourceFromString(script, "cause1.rb", SourceCodeKind.File).Execute().ToString(), expected);
             AreEqual(Engine.CreateScriptSourceFromString(script, "cause2.rb", SourceCodeKind.File).Execute().ToString(), expected);
         }
+
+        /// <summary>
+        /// An ensure clause left by a jump - return, throw, a break from a block it yields to, next, break - ends the exception
+        /// it ran for, and $! is again what it was before the begin (MRI). It stayed set, and became the cause of the next
+        /// exception raised. Interpreted and compiled; expected output is CRuby 4.0's.
+        /// </summary>
+        public void Exception_EnsureJumpCurrentException1() {
+            const string script = @"def ret; begin; raise ""a""; ensure; return 1; end; end
+def thr; catch(:t) { begin; raise ""b""; ensure; throw :t, 2; end }; end
+def yld; begin; raise ""c""; ensure; yield; end; end
+def brk; yld { break 3 }; end
+def nxt; [1].map { begin; raise ""d""; ensure; next 4; end }; end
+def lp; i = 0; while i < 1; i += 1; begin; raise ""e""; ensure; break; end; end; 5; end
+def in_ensure; begin; raise ""f""; ensure; return $!.message; end; end
+def nest; begin; begin; raise ""g""; ensure; return 6; end; ensure; $log << $!.inspect; end; end
+def resc; begin; raise ""h""; rescue; raise ""i""; ensure; return $!.message; end; end
+$log = []
+r = []
+4.times do
+  [:ret, :thr, :brk, :nxt, :lp, :in_ensure, :nest, :resc].each { |m| r << [m, send(m), $!] }
+  r << (begin; raise ""later""; rescue => e; e.cause; end)
+  begin
+    raise ""outer""
+  rescue
+    r << [ret, $!.message]
+  end
+end
+[r.uniq, $log.uniq].inspect";
+            const string expected = @"[[[:ret, 1, nil], [:thr, 2, nil], [:brk, 3, nil], [:nxt, [4], nil], [:lp, 5, nil], [:in_ensure, ""f"", nil], [:nest, 6, nil], [:resc, ""i"", nil], nil, [1, ""outer""]], [""nil""]]";
+
+            var interpreting = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = Int32.MaxValue; });
+            AreEqual(interpreting.CreateScriptSourceFromString(script, "ensure_jump1.rb", SourceCodeKind.File).Execute().ToString(), expected);
+            AreEqual(Engine.CreateScriptSourceFromString(script, "ensure_jump2.rb", SourceCodeKind.File).Execute().ToString(), expected);
+        }
+
+        /// <summary>
+        /// An exception C# throws in a rescue clause (`1/0', a bad class in the list, `nil.foo'), a rescue modifier or an ensure
+        /// clause has the exception being handled as its cause, as one Kernel#raise raises there has; it had none (the clause's
+        /// finally block restored $! before the handler that caught the new exception set the cause). Also through a class
+        /// with a #new of its own. Interpreted and compiled; expected output is CRuby 4.0's.
+        /// </summary>
+        public void Exception_CauseRaisedInClause1() {
+            const string script = @"def zero; begin; raise ""a""; rescue; 1/0; end; end
+def bad_class; begin; raise ""b""; rescue 42; end; end
+def no_method; begin; raise ""c""; rescue => e; e.zork; end; end
+def else_clause; begin; 1; rescue; else; [].fetch(1); end; end
+def ensure_clause; begin; raise ""d""; ensure; Integer(""x""); end; end
+def modifier; (raise ""e"" rescue 1/0); end
+class Wrapped < StandardError; def self.new(*) = super(""wrapped""); end
+def custom_new; begin; raise ""f""; rescue; raise Wrapped; end; end
+def g(m) = (begin; send(m); rescue => e; [e.class, e.cause&.message]; end)
+r = 4.times.map { [:zero, :bad_class, :no_method, :else_clause, :ensure_clause, :modifier, :custom_new].map { |m| g(m) } }
+r.uniq.inspect";
+            const string expected = @"[[[ZeroDivisionError, ""a""], [TypeError, ""b""], [NoMethodError, ""c""], [IndexError, nil], [ArgumentError, ""d""], [ZeroDivisionError, ""e""], [Wrapped, ""f""]]]";
+
+            var interpreting = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = Int32.MaxValue; });
+            AreEqual(interpreting.CreateScriptSourceFromString(script, "cause_clause1.rb", SourceCodeKind.File).Execute().ToString(), expected);
+            AreEqual(Engine.CreateScriptSourceFromString(script, "cause_clause2.rb", SourceCodeKind.File).Execute().ToString(), expected);
+        }
+
+        /// <summary>
+        /// A refinement of `===' active where a rescue clause is written is what the clause calls (MRI's check_match), whether
+        /// the rescue filter takes the exception or not; a clause written before the `using' does not see it.
+        /// </summary>
+        public void Exception_RescueRefinedCaseEquality1() {
+            TestOutput(@"
+class E1 < StandardError; end
+def before_using
+  raise E1
+rescue ArgumentError
+  :wrong
+rescue E1
+  :plain
+end
+module Loud
+  refine Module do
+    def ===(o)
+      $log << ""#{self}===""
+      super
+    end
+  end
+end
+$log = []
+using Loud
+def after_using
+  raise E1
+rescue ArgumentError, *[TypeError]
+  :wrong
+rescue E1 => e
+  e.class
+end
+p before_using, $log
+$log.clear
+p after_using, $log
+$log.clear
+begin
+  raise ""x""
+rescue
+  p $log
+end
+module Yes
+  refine E1.singleton_class do
+    def ===(o) = o.message == ""match me""
+  end
+end
+using Yes
+def m2
+  raise ""match me""
+rescue E1
+  :caught_by_refinement
+end
+p 3.times.map { m2 }
+", @"
+:plain
+[]
+E1
+[""ArgumentError==="", ""TypeError==="", ""E1===""]
+[""StandardError===""]
+[:caught_by_refinement, :caught_by_refinement, :caught_by_refinement]
+");
+        }
     }
 }

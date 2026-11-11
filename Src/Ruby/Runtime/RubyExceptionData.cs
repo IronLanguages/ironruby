@@ -763,6 +763,11 @@ namespace IronRuby.Runtime {
             var newInstanceData = GetInstance(newException);
             
             newInstanceData.Handled = true;
+            // a cause decided for the thrown exception (by a filter it went through: RubyOps.PassEnsure, RescuePassCommit,
+            // SetCauseLeavingEnsure) is the cause of the one Ruby code sees
+            if (instanceData._hasCause && !newInstanceData._hasCause) {
+                newInstanceData.SetCause(instanceData._cause);
+            }
             newInstanceData._backtrace = instanceData._backtrace;
             newInstanceData._capturedTrace = instanceData._capturedTrace;
             newInstanceData._pendingCatchSite = instanceData._pendingCatchSite;
