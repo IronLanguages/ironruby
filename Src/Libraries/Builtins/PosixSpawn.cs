@@ -373,7 +373,14 @@ namespace IronRuby.Builtins {
 
                 IntPtr path = strings.Allocate(file);
                 int pid;
-                error = SysPosixSpawn(out pid, path, fileActions, attributes, argvVector.Vector, envpVector.Vector);
+                if (_noPipe2) {
+                    // not while another thread holds a pipe whose ends are not close-on-exec yet
+                    lock (_pipeLock) {
+                        error = SysPosixSpawn(out pid, path, fileActions, attributes, argvVector.Vector, envpVector.Vector);
+                    }
+                } else {
+                    error = SysPosixSpawn(out pid, path, fileActions, attributes, argvVector.Vector, envpVector.Vector);
+                }
 
                 if (error != 0) {
                     return -error;
@@ -672,9 +679,11 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// pipe(2) with FD_CLOEXEC on both ends, MRI's rb_cloexec_pipe: pipe2(O_CLOEXEC) where
         /// libc has it, which sets the flag atomically, and otherwise pipe(2) followed by
-        /// F_SETFD on each end - which leaves a window in which a child spawned by another
-        /// thread inherits the two descriptors, as MRI's own fallback does. Returns 0, or the
-        /// errno, with no descriptor left open.
+        /// F_SETFD on each end. Between the two a child spawned by another thread would inherit
+        /// both ends - and one holding a write end keeps the reader from ever seeing end of file.
+        /// MRI holds the GVL across both, so only a non-Ruby thread can get in there; with no
+        /// GVL here, the fallback and posix_spawn take <see cref="_pipeLock"/> instead. Returns
+        /// 0, or the errno, with no descriptor left open.
         /// </summary>
         private static int CloseOnExecPipe(int[]/*!*/ fds) {
             if (!_noPipe2) {
@@ -685,20 +694,24 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            if (SysPipe(fds) != 0) {
-                return LastErrno();
-            }
-            for (int i = 0; i < 2; i++) {
-                int flags = LibcVariadic.Fcntl(fds[i], F_GETFD, 0);
-                if (flags < 0 || LibcVariadic.Fcntl(fds[i], F_SETFD, flags | FD_CLOEXEC) < 0) {
-                    int errno = LastErrno();
-                    SysClose(fds[0]);
-                    SysClose(fds[1]);
-                    return errno;
+            lock (_pipeLock) {
+                if (SysPipe(fds) != 0) {
+                    return LastErrno();
                 }
+                for (int i = 0; i < 2; i++) {
+                    int flags = LibcVariadic.Fcntl(fds[i], F_GETFD, 0);
+                    if (flags < 0 || LibcVariadic.Fcntl(fds[i], F_SETFD, flags | FD_CLOEXEC) < 0) {
+                        int errno = LastErrno();
+                        SysClose(fds[0]);
+                        SysClose(fds[1]);
+                        return errno;
+                    }
+                }
+                return 0;
             }
-            return 0;
         }
+
+        private static readonly object _pipeLock = new object();
 
         private static int LastErrno() {
             int errno = Marshal.GetLastWin32Error();
