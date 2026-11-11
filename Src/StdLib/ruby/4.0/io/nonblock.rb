@@ -12,10 +12,11 @@
 # flag still sets it on the descriptor, which is what #syswrite goes by.
 
 class IO
-  # Linux values, the same ones IO#fcntl uses.
+  # F_GETFL and F_SETFL are the same on every Unix; O_NONBLOCK is not (0x800 on Linux, 4 on
+  # macOS and the BSDs), and Linux's bit on a Mac is O_EXCL's, which F_SETFL ignores.
   NONBLOCK_GET__ = 3   # F_GETFL
   NONBLOCK_SET__ = 4   # F_SETFL
-  NONBLOCK_FLAG__ = 0x800 # O_NONBLOCK
+  NONBLOCK_FLAG__ = ::File::NONBLOCK
 
   def __nonblock_native__?
     (::IO.GetNativeDescriptor(self) rescue -1) >= 0

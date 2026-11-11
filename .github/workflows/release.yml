@@ -24,6 +24,7 @@ on:
       - Util/installer/**
       # the startup library every archive carries: its compiler, and the prelude it compiles most of
       - Util/aot/**
+      - Util/process-smoke.rb
       - Src/StdLib/ironruby/ruby4.rb
   workflow_dispatch:
     inputs:
@@ -232,7 +233,21 @@ jobs:
           # registering it threw (the loader catches that, and runs without it)
           if grep -q "^IronRuby.Startup: [A-Za-z.]*Exception" <<<"$trace"; then exit 1; fi
           grep -q "^done" <<<"$trace"
+          # a pipe and a child work at all (the smoke prints what they raise rather than raising it)
+          grep -q "^pipe: piped" <<<"$trace"
+          grep -q "^popen: popen true" <<<"$trace"
           echo "ok: $lib loaded and used"
+
+      # Pipes, child processes and the libc calls under them (Util/process-smoke.rb), from the archive unpacked by the
+      # step above: what one libc lacks (macOS has no pipe2) or passes differently (a variadic argument, on Apple arm64)
+      # only shows on that platform. Windows has a CreateProcess implementation of its own, and no bash.
+      - name: Pipes and processes, from the archive
+        if: runner.os != 'Windows'
+        working-directory: dist
+        timeout-minutes: 5
+        run: |
+          cd "$RUNNER_TEMP"/startup-check/ironruby-*
+          ./ir.sh "$GITHUB_WORKSPACE/ironruby/Util/process-smoke.rb"
 
       # The Windows archive carries Samples/Notepad: drive it from the unpacked tree, on
       # the Release build the archive ships. package-release.sh leaves the tree in dist/.

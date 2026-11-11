@@ -58,6 +58,9 @@ namespace IronRuby.Tests {
                 MutableString_CopyOnWrite5,
                 MutableString_GetHashCode2,
                 MutableString_GetHashCode3,
+                MutableString_ConcatAscii1,
+                MutableString_ConcatAscii2,
+                MutableString_SliceAppend1,
                 MutableString_SipHash1,
                 RubyArray_Ctors,
                 RubyArray_Basic,
@@ -174,6 +177,7 @@ namespace IronRuby.Tests {
                 Inspect2,
                 File1,
                 IO_PopenDuplexBytes1,
+                IO_PipeWithoutPipe2,
                 File_AppendBytes1,
                 File_WriteBytes1,
                 File_ReadLine1,
@@ -1065,6 +1069,8 @@ namespace IronRuby.Tests {
                 Thread_JoinSelf1,
                 Thread_InspectLocation1,
                 Thread_IdReuseStartsFresh1,
+                Thread_FinishedThreadCollected1,
+                Dlr_ThreadLocalOwner1,
                 Ractor_Basics1,
                 Ractor_Isolation1,
                 Ractor_Messages1,
@@ -1101,6 +1107,9 @@ namespace IronRuby.Tests {
                 Thread_KillBehindRaiseInFiberWait1,
                 Thread_KillBehindRaiseInFiberMailbox1,
                 Thread_KillBeforeFiberMailboxWait1,
+                Thread_RaiseLeavesNoWakeupBehind1,
+                Fiber_ThreadRaiseInSwitchBookkeeping1,
+                Fiber_PooledThreadBelongsToItsRuntime1,
                 DeepNesting1,
 
                 Scenario_RubyThreads1,
@@ -1268,6 +1277,8 @@ namespace IronRuby.Tests {
                 String_SplitSpaceRegexp1,
                 Integer_OutOfFloatRange1,
                 BasicObject_EqualIdentity1,
+                Kernel_ConversionKeywordEntry1,
+                Integer_BignumBitsSlice1,
             };
         }
     }

@@ -280,8 +280,38 @@ namespace IronRuby.Builtins {
             if (size == 0) {
                 return ScriptingRuntimeHelpers.Int32ToObject(0);
             }
+            if (offset >= 0 && size > 0 && size <= 62) {
+                // A few bits of a Bignum of reasonable size are read from its two's complement bytes: the shift
+                // and the mask below each made a BigInteger as large as self, most of the cost of the call.
+                int count = self.GetByteCount();
+                if (count <= 256) {
+                    Span<byte> bytes = stackalloc byte[count];
+                    self.TryWriteBytes(bytes, out int written);
+                    return Narrow(ExtractBits(bytes.Slice(0, written), offset, size, self.Sign < 0));
+                }
+            }
             BigInteger shifted = (offset >= 0) ? self >> offset : ShiftLeftOrFail(self, -offset);
             return Protocols.Normalize((size < 0) ? shifted : shifted & (ShiftLeftOrFail(BigInteger.One, size) - 1));
+        }
+
+        // Bits offset .. offset + size - 1 (size at most 62) of the little-endian two's complement bytes, the sign
+        // extending past the last of them.
+        private static long ExtractBits(ReadOnlySpan<byte> bytes, int offset, int size, bool negative) {
+            int first = offset >> 3;
+            int shift = offset & 7;
+            byte fill = negative ? (byte)0xFF : (byte)0;
+            // size + shift is at most 69 bits: eight bytes and one more
+            ulong low = 0;
+            for (int k = 0; k < 8; k++) {
+                int i = first + k;
+                low |= (ulong)(i < bytes.Length ? bytes[i] : fill) << (8 * k);
+            }
+            ulong value = low >> shift;
+            if (shift > 0) {
+                int i = first + 8;
+                value |= (ulong)(i < bytes.Length ? bytes[i] : fill) << (64 - shift);
+            }
+            return (long)(value & ((1UL << size) - 1));
         }
 
         /// <summary>

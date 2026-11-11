@@ -233,6 +233,7 @@ namespace IronRuby.Builtins {
         /// encoding still raises.
         /// </summary>
         [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
+        [LibraryKeywordEntry(nameof(IntegerKeywordEntry))]
         public static object ToInteger(ConversionStorage<int>/*!*/ fixnumCast, UnaryOpStorage/*!*/ toInt, UnaryOpStorage/*!*/ toStr,
             UnaryOpStorage/*!*/ toI, object self, object value, [Optional]object radixOrOptions, [Keywords, Optional]object options) {
 
@@ -323,6 +324,88 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// Integer(value, exception: flag) and Integer(string, base, exception: flag) from a JIT keyword call site
+        /// (LibraryKeywordEntryAttribute): the values Integer() answers without raising - an Integer, a finite Float, a
+        /// String in an ASCII-compatible encoding with a usable base - and, with exception: false, nil for one that does not
+        /// read as an Integer. The keyword Hash and the general overload's dispatch cost more than the conversion did
+        /// (Integer("123", exception: false) took twice Integer("123")). Anything else - another keyword, a value that
+        /// is not a bool, a base that raises, an object to ask for #to_int - is the ordinary call's, which raises where it did.
+        /// </summary>
+        public static LibraryKeywordEntry IntegerKeywordEntry(RubyContext/*!*/ context, int positionalCount, string/*!*/[]/*!*/ keywords) {
+            if ((positionalCount != 1 && positionalCount != 2) || keywords.Length != 1 || keywords[0] != "exception") {
+                return null;
+            }
+            object noDirect = IronRuby.Runtime.Jit.JitKeywordCall.NoDirect;
+            return (self, value, radixArg, exceptionArg, k1, k2) => {
+                if (!(exceptionArg is bool raise)) {
+                    return noDirect;
+                }
+                int radix = 0;
+                if (positionalCount == 2) {
+                    // a base goes with a String; 1 and a positive base past 36 are ArgumentErrors (-1 is left to the ordinary call too)
+                    if (!(radixArg is int r) || r == 1 || r == -1 || r > 36 || !(value is MutableString)) {
+                        return noDirect;
+                    }
+                    radix = r;
+                }
+                switch (value) {
+                    case int _:
+                    case long _:
+                    case BigInteger _:
+                        return value;
+                    case double d:
+                        return (Double.IsNaN(d) || Double.IsInfinity(d)) ? (raise ? noDirect : null) : ClrFloat.ToInt(d);
+                    case MutableString str:
+                        if (!str.Encoding.IsAsciiIdentity) {
+                            return noDirect;
+                        }
+                        return ParseInteger(str, radix, false) ?? (raise ? noDirect : null);
+                    case null:
+                        return raise ? noDirect : null;
+                    default:
+                        return noDirect;
+                }
+            };
+        }
+
+        /// <summary>
+        /// Float(value, exception: flag) from a JIT keyword call site, as <see cref="IntegerKeywordEntry"/> is for Integer():
+        /// a Float, a Fixnum and a String in an ASCII-compatible encoding, and with exception: false nil, true and false and a
+        /// String that does not read as a Float.
+        /// </summary>
+        public static LibraryKeywordEntry FloatKeywordEntry(RubyContext/*!*/ context, int positionalCount, string/*!*/[]/*!*/ keywords) {
+            if (positionalCount != 1 || keywords.Length != 1 || keywords[0] != "exception") {
+                return null;
+            }
+            object noDirect = IronRuby.Runtime.Jit.JitKeywordCall.NoDirect;
+            return (self, value, p1, exceptionArg, k1, k2) => {
+                if (!(exceptionArg is bool raise)) {
+                    return noDirect;
+                }
+                switch (value) {
+                    case double _:
+                        return value;
+                    case int i:
+                        return (double)i;
+                    case MutableString str:
+                        if (!str.Encoding.IsAsciiIdentity) {
+                            return noDirect;
+                        }
+                        if (str.IndexOf('\0') >= 0) {
+                            return raise ? noDirect : null;
+                        }
+                        // the keyword form's line of <internal:kernel>, whatever the flag says, as in MRI
+                        return RubyOps.TryConvertKernelFloat(context, str, out double parsed) ? parsed : (raise ? noDirect : null);
+                    case null:
+                    case bool _:
+                        return raise ? noDirect : null;
+                    default:
+                        return noDirect;
+                }
+            };
+        }
+
+        /// <summary>
         /// Kernel#Float(arg, exception: true), MRI's rb_convert_to_float. A Float is its own answer - the
         /// very object, so a NaN or an Infinity stays itself - an Integer is converted and a String
         /// parsed. nil, true and false are TypeErrors; anything else is asked for #to_f, whose answer is
@@ -334,6 +417,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("Integer", RubyMethodAttributes.PublicSingleton)]
         [MethodImpl(MethodImplOptions.NoInlining)]
         [SameRubyMethod("ToInteger")]
+        [LibraryKeywordEntry(nameof(IntegerKeywordEntry))]
         public static object SingletonToInteger(ConversionStorage<int>/*!*/ fixnumCast, UnaryOpStorage/*!*/ toInt, UnaryOpStorage/*!*/ toStr,
             UnaryOpStorage/*!*/ toI, object self, object value, [Optional]object radixOrOptions, [Keywords, Optional]object options) {
             return ToInteger(fixnumCast, toInt, toStr, toI, self, value, radixOrOptions, options);
@@ -342,14 +426,17 @@ namespace IronRuby.Builtins {
         [RubyMethod("Float", RubyMethodAttributes.PublicSingleton)]
         [MethodImpl(MethodImplOptions.NoInlining)]
         [SameRubyMethod("ToFloat")]
+        [LibraryKeywordEntry(nameof(FloatKeywordEntry))]
         public static object SingletonToFloat(UnaryOpStorage/*!*/ toF, object self, object value, [Keywords, Optional]object options) {
             return ToFloat(toF, self, value, options);
         }
 
         [RubyMethod("Float", RubyMethodAttributes.PrivateInstance)]
+        [LibraryKeywordEntry(nameof(FloatKeywordEntry))]
         public static object ToFloat(UnaryOpStorage/*!*/ toF, object self, object value, [Keywords, Optional]object options) {
             // the options are checked first, even for a Float: Float(1.0, foo: 1) raises
             RubyContext context = toF.Context;
+            bool keywordCall = options != Missing.Value;
             bool raise = (options == Missing.Value) || TakeExceptionOption(context, ref options, Missing.Value, 1);
 
             if (value is double) {
@@ -371,7 +458,7 @@ namespace IronRuby.Builtins {
                     double parsed;
                     return RubyOps.TryConvertKernelFloat(context, str, out parsed) ? (object)parsed : null;
                 }
-                return RubyOps.ConvertKernelFloat(context, str);
+                return RubyOps.ConvertKernelFloat(context, str, keywordCall);
             }
             if (value == null || value is bool) {
                 if (!raise) {
@@ -522,8 +609,9 @@ namespace IronRuby.Builtins {
             var str = value.ConvertToString();
 
             // MRI complains about the string before it complains about the radix, so
-            // Integer("\n", 1) is "invalid value", not "invalid radix".
-            if (!HasIntegerDigits(str)) {
+            // Integer("\n", 1) is "invalid value", not "invalid radix" - but not about an empty one,
+            // whose radix is checked first: Integer("", 1) is "invalid radix", with exception: false too.
+            if (str.Length > 0 && !HasIntegerDigits(str)) {
                 return raise ? throw InvalidIntegerValue(value) : null;
             }
 

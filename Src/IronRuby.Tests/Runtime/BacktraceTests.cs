@@ -975,7 +975,7 @@ p bt { f }
 begin; f; rescue => e; p e.backtrace.grep(/[#']f'/).size; end
 def Warning.warn(message, category: nil) = print(message)
 $VERBOSE = true
-Float('1e400'); Float('1e400', exception: false)
+Float('1e400'); Float('1e400', exception: false); Float('1e400', exception: true)
 $VERBOSE = false
 ", @"
 [Errno::ENOENT, true]
@@ -984,6 +984,7 @@ $VERBOSE = false
 [Errno::ENOENT, true]
 1
 <internal:kernel>:196: warning: Float 1e400 out of range
+<internal:kernel>:198: warning: Float 1e400 out of range
 <internal:kernel>:198: warning: Float 1e400 out of range
 ");
         }
