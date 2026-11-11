@@ -381,10 +381,17 @@ Where it is built:
   name) were read from its own instructions, and the osx-arm64 archive died at startup with
   `undefined method '\xF5[I\xA9...e_name__'` for `private :__ir_message_type_name__`. Linux-arm64
   code has the same fault (checked statically, crossgen2 10.0.15 and 11.0.0); x64 is unaffected.
-  So for an arm64 RID, a top level of 128 KB of IL or more is left to the JIT
-  (`AggressiveOptimization`, which crossgen2 skips; the JIT at run time knows the method's
-  address), and the compiler refuses a library in which crossgen2 still made a method over 1 MB
-  (it reads crossgen2's `--map`). `IR_AOT_LARGE_JIT=0` compiles them all, to see that check fail.
+  So for an arm64 RID the compiler splits a top level that large (over 6,000 expression nodes;
+  only ruby4.rb's is) into chunks of ~1,500 nodes, each a nested lambda of its own that the top
+  level calls in turn (`AotCompiler.SplitTopLevel`; the largest is ~380 KB of arm64 code). A
+  `return` from the top level inside a chunk is noted and taken after the chunk. Unnamed, the
+  chunks are left out of backtraces, so an error raised by ruby4.rb's own top level while it
+  loads would show the line of the top level's call of the chunk; nothing else changes. Should a
+  top level of 128 KB of IL remain, it is left to the JIT (`AggressiveOptimization`, which
+  crossgen2 skips; the JIT at run time knows the method's address), and the compiler refuses a
+  library in which crossgen2 still made a method over 1 MB (it reads crossgen2's `--map`).
+  `IR_AOT_SPLIT=1` splits on any target (to test it on x64), `IR_AOT_SPLIT=0` and
+  `IR_AOT_LARGE_JIT=0` turn the two off, to see the check fail.
 - **Never** for the NativeAOT host, which has no assembly files and cannot load code, or for the
   IL Debug and Release builds, which have no library next to them.
 

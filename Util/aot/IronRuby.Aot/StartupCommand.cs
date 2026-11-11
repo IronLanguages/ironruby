@@ -163,11 +163,19 @@ namespace IronRuby.Aot {
             var compiler = new AotCompiler(context, "IronRuby.Startup", library: true) {
                 OutputDirectory = Path.GetFullPath(outDir), DependencyIds = ids.ToArray(),
                 Root = root, RootFromLibrary = Path.GetRelativePath(host, root),
-                // arm64 ReadyToRun code of a method over 1 MB is wrong (AotCompiler.LargeMethodsJittedOver); arm64 code is
-                // at most ~4.4x its IL, so a top level of 128 KB of IL or more is left to the JIT
+                // arm64 ReadyToRun code of a method over 1 MB is wrong (AotCompiler.LargeMethodsJittedOver): a top level that
+                // large is split (below), and one of 128 KB of IL or more that remains (arm64 code is at most ~4.4x its IL)
+                // is left to the JIT
                 // (IR_AOT_LARGE_JIT=0 compiles them all, to see the check in Crossgen catch it)
                 LargeMethodsJittedOver = r2r && rid.EndsWith("-arm64", StringComparison.Ordinal) &&
-                    Environment.GetEnvironmentVariable("IR_AOT_LARGE_JIT") != "0" ? LargeMethodILBytes : 0
+                    Environment.GetEnvironmentVariable("IR_AOT_LARGE_JIT") != "0" ? LargeMethodILBytes : 0,
+                // and before that, a top level that large is split into methods of their own, which leaves the JIT nothing
+                // to do (IR_AOT_SPLIT=1 splits on any target, to test it; =0 splits none)
+                SplitTopLevelOver = Environment.GetEnvironmentVariable("IR_AOT_SPLIT") switch {
+                    "0" => 0,
+                    "1" => SplitNodes,
+                    _ => r2r && rid.EndsWith("-arm64", StringComparison.Ordinal) ? SplitNodes : 0
+                }
             };
             compiler.Compile(null, files, dll);
             Console.Error.WriteLine($"wrote {dll} ({new FileInfo(dll).Length:N0} bytes, {files.Count} files) in {sw.ElapsedMilliseconds} ms");
@@ -198,6 +206,9 @@ namespace IronRuby.Aot {
         }
 
         internal const int LargeMethodILBytes = 128 * 1024;
+        // AotCompiler.SplitTopLevel splits a top level of more expression nodes than this: ruby4.rb's has ~8,900 (2.1 MB of
+        // arm64 code), the next largest, rubygems.rb's, ~2,700 (200 KB). Its chunks of ~1,500 nodes come to ~350 KB.
+        internal const int SplitNodes = 6000;
         // the reach of arm64's adr: a method whose code is longer addresses its read-only data with adrp+add
         private const long ArmMethodLimit = 1024 * 1024;
 

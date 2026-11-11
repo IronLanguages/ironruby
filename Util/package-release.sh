@@ -183,7 +183,14 @@ if [ -f "$bin/IronRuby.Startup.dll" ]; then
       t=$(now); IR_STARTUP_DLL=none stage_ir -e 1 >/dev/null; echo $(( $(now) - t )) >> "$check/off"
     done
     on=$(sort -n "$check/on" | sed -n 3p) off=$(sort -n "$check/off" | sed -n 3p)
-    startup_note "startup library used; \`ir -e 1\` $on ms with it, $off ms without (median of 5)"
+    # a library that does not make the start faster is only a risk
+    if [ "$on" -lt "$off" ]; then
+      startup_note "startup library used; \`ir -e 1\` $on ms with it, $off ms without (median of 5)"
+    else
+      rm -f "$bin"/IronRuby.Startup*.dll
+      startup_note "no startup library: \`ir -e 1\` took $on ms with it, $off ms without (median of 5)"
+      if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::warning::$NAME ships without the startup library: it did not make the start faster"; fi
+    fi
   fi
   rm -rf "$check"
 fi
