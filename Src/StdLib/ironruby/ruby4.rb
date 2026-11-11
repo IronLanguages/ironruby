@@ -5176,7 +5176,7 @@ class Enumerator
       unless block
         ::Kernel.raise(::ArgumentError, "tried to call lazy new without a block")
       end
-      @__generator__ = lambda { |y, *args| obj.each(*args) { |*values| block.call(y, *values) } }
+      @__generator__ = lambda { |y, *args| obj.each(*args) { |*values| block.call(y, *values) }; nil }
       @__size__ = size
       __set_inspect__(obj, :each)
       self
@@ -5214,8 +5214,10 @@ class Enumerator
       self
     end
 
+    # A lazy operation's #each answers nil (MRI's lazy_add_method), and so does
+    # StopIteration#result at the end of its #next, whatever the source answers.
     def __chain__(size = nil, &generator)
-      Lazy.__raw__(size, &generator)
+      Lazy.__raw__(size) { |y, *args| generator.call(y, *args); nil }
     end
     private :__chain__
 

@@ -168,5 +168,27 @@ nil
 1
 ");
         }
+
+        // A lazy operation's #each answers nil (lazy_add_method), and so StopIteration#result is nil
+        // at the end of its #next; the source's own lazy answers what the source's #each does.
+        public void Enumerator_LazyEachResult1() {
+            TestOutput(@"
+require 'ruby4'
+l = [1, 2].lazy.map { |x| x * 2 }
+p l.next, l.next, (l.next rescue $!.result)
+p [1, 2].lazy.select(&:odd?).each { }
+p [1, 2].lazy.each { }, Enumerator::Lazy.new([1]) { |y, v| y << v }.each { }
+p [1, 2].lazy.filter_map { |x| x }.first(1), [1, 2, 3].lazy.take(2).to_a
+", @"
+2
+4
+nil
+nil
+[1, 2]
+nil
+[1]
+[1, 2]
+");
+        }
     }
 }

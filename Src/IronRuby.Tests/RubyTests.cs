@@ -977,6 +977,7 @@ namespace IronRuby.Tests {
                 Enumerator_Copy1,
                 Enumerator_ExternalCursor1,
                 Enumerator_ExternalFiber1,
+                Enumerator_LazyEachResult1,
                 Io_Messages1,
                 Encoding_Misc1,
                 Encoding_List1,
