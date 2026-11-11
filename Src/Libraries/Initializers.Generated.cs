@@ -10672,7 +10672,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "__fiber_reuse__", 0x61, 
                 0x00000000U, 
-                new Func<System.Object, System.Object, System.Threading.Thread>(IronRuby.Builtins.ThreadOps.ReuseFiberThread)
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Threading.Thread>(IronRuby.Builtins.ThreadOps.ReuseFiberThread)
             );
             
             DefineLibraryMethod(module, "__fiber_state__", 0x61, 

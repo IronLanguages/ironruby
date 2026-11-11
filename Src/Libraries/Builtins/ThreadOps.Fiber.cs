@@ -554,7 +554,7 @@ namespace IronRuby.Builtins {
         /// none is parked (the fiber then gets a new thread).
         /// </summary>
         [RubyMethod("__fiber_reuse__", RubyMethodAttributes.PublicSingleton)]
-        public static Thread ReuseFiberThread(object self, object fiber) {
+        public static Thread ReuseFiberThread(RubyContext/*!*/ context, object self, object fiber) {
             FiberWorker worker;
             while (true) {
                 using (new RubyUtils.UninterruptedLock(_idleFiberWorkers)) {
@@ -575,6 +575,9 @@ namespace IronRuby.Builtins {
             RubyThreadInfo creator = RubyThreadInfo.FromThread(Thread.CurrentThread);
             info.Group = creator.Group;
             info.Ractor = creator.Ractor;
+            // The pool is the process's, and the thread may have been parked by another runtime: it
+            // belongs to this one now, whose end kills it (TerminateAllThreads) and no other's.
+            info.Context = context;
             info.IsIdleFiberWorker = false;
             worker.Jobs.Post(fiber);
             return worker.Thread;

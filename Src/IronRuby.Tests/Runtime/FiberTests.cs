@@ -676,6 +676,50 @@ p [hung, errors]
         }
 
         /// <summary>
+        /// A fiber thread from the pool belongs to the runtime whose fiber it runs. The pool is the
+        /// process's, and a thread one runtime had parked there kept that runtime as its own when
+        /// another one's fiber took it: the end of the second runtime then left the fiber running
+        /// (its ensure ran only when the first one ended), and the end of the first killed it.
+        /// </summary>
+        [Options(NoRuntime = true)]
+        public void Fiber_PooledThreadBelongsToItsRuntime1() {
+            var first = Ruby.CreateEngine();
+            var second = Ruby.CreateEngine();
+            var log = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            bool secondEnded = false;
+            try {
+                // a fiber of the first runtime finishes, and its thread waits in the pool
+                first.Execute("require 'ruby4'; Fiber.new { 1 }.resume; sleep 0.2");
+
+                var scope = second.CreateScope();
+                scope.SetVariable("log", log);
+                second.Execute(@"
+require 'ruby4'
+$t = Thread.new do
+  Fiber.new do
+    begin
+      sleep
+    ensure
+      log.Enqueue('ensure')
+    end
+  end.resume
+end
+deadline = Time.now + 10
+sleep 0.01 until $t.status == 'sleep' || Time.now > deadline
+", scope);
+                second.Runtime.Shutdown();
+                secondEnded = true;
+                log.Enqueue("second runtime ended");
+            } finally {
+                first.Runtime.Shutdown();
+                if (!secondEnded) {
+                    second.Runtime.Shutdown();
+                }
+            }
+            AssertEquals(String.Join(", ", log), "ensure, second runtime ended");
+        }
+
+        /// <summary>
         /// Keywords given to Fiber#resume / #transfer reach the fiber's block as keywords and come
         /// back from Fiber.yield as a plain Hash; Fiber.schedule hands them on to the scheduler.
         /// The FiberError messages for resuming a fiber that is resumed or was left by #transfer,
