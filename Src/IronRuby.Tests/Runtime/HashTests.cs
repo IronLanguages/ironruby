@@ -447,5 +447,49 @@ true
 :a
 ");
         }
+
+        /// <summary>
+        /// delete_if, keep_if, reject!, select! and filter! delete each condemned pair once the block has spoken,
+        /// after a frozen check (MRI's delete_if_i), and update/merge! store a pair the block decided after one: a
+        /// block that froze the hash got its deletions or updates through. The block of update and transform_values!
+        /// runs while the receiver is being iterated, so #rehash or a new key in it is an error.
+        /// </summary>
+        public void Hash_MutateInBlock1() {
+            TestOutput(@"
+require 'ruby4'
+h = {a: 1, b: 2, c: 3}
+p((h.delete_if { |k, _| h.freeze if k == :b; true } rescue $!.class), h)
+h = {a: 1, b: 2, c: 3}
+p((h.keep_if { h.freeze; false } rescue $!.class), h)
+h = {a: 1, b: 2, c: 3}
+p((h.update({a: 10, b: 20}) { |key, _, v2| key == :b && h.freeze; v2 } rescue $!.class), h)
+a = {1 => 1}
+p((a.update({1 => 2}) { a.rehash } rescue $!))
+p((a.update({1 => 2}) { a[3] = 3 } rescue $!))
+x = {a: 1, b: 2, c: 3}
+p((x.transform_values! { |v| x.freeze if v == 2; v.succ } rescue $!.class), x)
+y = {a: 1}
+p((y.transform_values! { y.rehash } rescue $!))
+h = {a: 1, b: 2}
+p h.reject! { |k, _| h.delete(:b) if k == :a; false }, h
+p({a: 1}.reject! { false }, {a: 1}.select! { true })
+", @"
+FrozenError
+{b: 2, c: 3}
+FrozenError
+{a: 1, b: 2, c: 3}
+FrozenError
+{a: 10, b: 2, c: 3}
+#<RuntimeError: rehash during iteration>
+#<RuntimeError: can't add a new key into hash during iteration>
+FrozenError
+{a: 2, b: 2, c: 3}
+#<RuntimeError: rehash during iteration>
+{a: 1}
+{a: 1}
+nil
+nil
+");
+        }
     }
 }

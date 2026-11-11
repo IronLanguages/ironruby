@@ -267,8 +267,8 @@ namespace IronRuby.Builtins {
 
         /// <summary>
         /// Yields each pair, over a snapshot as the block may delete from the hash, and removes those for which
-        /// the block's truth is <paramref name="removeWhen"/>. Answers how many were removed, or -1 when the block
-        /// broke out of the loop with <paramref name="breakResult"/>.
+        /// the block's truth is <paramref name="removeWhen"/>. Answers by how much the hash shrank, or -1 when the
+        /// block broke out of the loop with <paramref name="breakResult"/>.
         /// </summary>
         private static int RemoveWhere(BlockParam/*!*/ block, IDictionary<object, object>/*!*/ self, bool removeWhen, out object breakResult) {
             breakResult = null;
@@ -278,7 +278,10 @@ namespace IronRuby.Builtins {
                 hash.BeginIteration();
             }
 
-            var keysToDelete = new List<object>();
+            // Each condemned pair goes as soon as the block has spoken, after a frozen check, as in MRI's
+            // delete_if_i (rb_hash_modify, then ST_DELETE): a block that freezes the hash makes the next deletion
+            // a FrozenError, with the pairs before it already gone. Removing them all at the end let it through.
+            int countBefore = self.Count;
             try {
                 foreach (var pair in CopyKeyValuePairs(self)) {
                     object result;
@@ -287,7 +290,10 @@ namespace IronRuby.Builtins {
                         return -1;
                     }
                     if (RubyOps.IsTrue(result) == removeWhen) {
-                        keysToDelete.Add(pair.Key);
+                        if (hash != null) {
+                            hash.RequireNotFrozen();
+                        }
+                        self.Remove(pair.Key);
                     }
                 }
             } finally {
@@ -295,11 +301,7 @@ namespace IronRuby.Builtins {
                     hash.EndIteration();
                 }
             }
-
-            foreach (object key in keysToDelete) {
-                self.Remove(key);
-            }
-            return keysToDelete.Count;
+            return Math.Max(countBefore - self.Count, 0);
         }
 
         #endregion
@@ -641,12 +643,25 @@ namespace IronRuby.Builtins {
                         self[CustomStringDictionary.NullToObj(pair.Key)] = pair.Value;
                     }
                 } else {
+                    var selfHash = self as Hash;
                     foreach (var pair in CopyKeyValuePairs(hash)) {
                         object key = pair.Key, newValue = pair.Value, oldValue;
                         if (self.TryGetValue(key, out oldValue)) {
-                            if (block.Yield(CustomStringDictionary.ObjToNull(key), oldValue, pair.Value, out newValue)) {
+                            // MRI updates the entry in place (tbl_update), so the block runs while the
+                            // receiver is being iterated: #rehash in it is an error.
+                            selfHash?.BeginIteration();
+                            bool broke;
+                            try {
+                                broke = block.Yield(CustomStringDictionary.ObjToNull(key), oldValue, pair.Value, out newValue);
+                            } finally {
+                                selfHash?.EndIteration();
+                            }
+                            if (broke) {
                                 return newValue;
                             }
+                            // the block may have frozen the receiver (MRI's update_block_i stores through
+                            // rb_hash_modify's check)
+                            (self as Hash)?.RequireNotFrozen();
                         }
                         self[key] = newValue;
                     }

@@ -1591,7 +1591,9 @@ class Hash
   def transform_values!(&block)
     return to_enum(:transform_values!) { size } unless block
     raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
-    keys.each { |k| self[k] = block.call(self[k]) }
+    # Over the hash itself, as MRI's rb_hash_stlike_foreach_with_replace is: the block runs
+    # while the hash is being iterated, so #rehash in it is an error.
+    each_key { |k| self[k] = block.call(self[k]) }
     self
   end unless method_defined?(:transform_values!)
 

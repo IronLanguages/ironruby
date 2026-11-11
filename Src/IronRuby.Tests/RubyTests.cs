@@ -1284,6 +1284,7 @@ namespace IronRuby.Tests {
                 Array_JoinRecursive1,
                 String_DumpNonUnicode1,
                 IO_PutsRecursiveToAry1,
+                Hash_MutateInBlock1,
             };
         }
     }
