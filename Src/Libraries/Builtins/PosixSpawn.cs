@@ -373,8 +373,12 @@ namespace IronRuby.Builtins {
 
                 IntPtr path = strings.Allocate(file);
                 int pid;
-                if (_noPipe2) {
-                    // not while another thread holds a pipe whose ends are not close-on-exec yet
+                if (_noPipe2 && !HasOpenAction(actions)) {
+                    // Not while another thread holds a pipe whose ends are not close-on-exec yet.
+                    // A spawn that opens a file can wait in posix_spawn (a FIFO waits for its
+                    // other end), and holding the lock for that could deadlock against a thread
+                    // that needs a pipe before it opens the other end; such a spawn goes
+                    // unserialised and keeps the (small) window.
                     lock (_pipeLock) {
                         error = SysPosixSpawn(out pid, path, fileActions, attributes, argvVector.Vector, envpVector.Vector);
                     }
@@ -682,7 +686,8 @@ namespace IronRuby.Builtins {
         /// F_SETFD on each end. Between the two a child spawned by another thread would inherit
         /// both ends - and one holding a write end keeps the reader from ever seeing end of file.
         /// MRI holds the GVL across both, so only a non-Ruby thread can get in there; with no
-        /// GVL here, the fallback and posix_spawn take <see cref="_pipeLock"/> instead. Returns
+        /// GVL here, the fallback and posix_spawn take <see cref="_pipeLock"/> instead (all but
+        /// a spawn that opens a file, which may wait for a FIFO's other end). Returns
         /// 0, or the errno, with no descriptor left open.
         /// </summary>
         private static int CloseOnExecPipe(int[]/*!*/ fds) {
@@ -712,6 +717,17 @@ namespace IronRuby.Builtins {
         }
 
         private static readonly object _pipeLock = new object();
+
+        private static bool HasOpenAction(RubyArray actions) {
+            if (actions != null) {
+                foreach (var item in actions) {
+                    if (ToInt(((RubyArray)item)[0]) == ActionOpen) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
 
         private static int LastErrno() {
             int errno = Marshal.GetLastWin32Error();
