@@ -1599,6 +1599,100 @@ namespace IronRuby.Tests {
         }
 
         /// <summary>
+        /// A long sum of ASCII text is held as bytes, half the memory of its characters (#89), and a
+        /// regexp match makes a CLR string of it once, which becomes its content. Short sums and sums
+        /// that are not ASCII are held as before. The Ruby half is CRuby 4.0's output.
+        /// </summary>
+        public void MutableString_ConcatAscii1() {
+            var a = MutableString.CreateMutable(RubyEncoding.UTF8).Append(new String('a', 2000));
+            var x = MutableString.CreateMutable(RubyEncoding.UTF8).Append("x");
+            var sum = a.Concat(x);
+            Assert(sum.IsBinary && sum.GetByteCount() == 2001 && sum.IsAscii() && sum.Encoding == RubyEncoding.UTF8);
+            Assert(sum.ConvertToString() == new String('a', 2000) + "x" && !sum.IsBinary);
+            Assert(!MutableString.CreateMutable(RubyEncoding.UTF8).Append("abc").Concat(x).IsBinary);
+            Assert(!a.Concat(MutableString.CreateMutable(RubyEncoding.UTF8).Append("\u00e9")).IsBinary);
+
+            TestOutput(@"
+require 'ruby4'
+a = ""a"" * 2000
+t = a + ""x""
+p t.encoding, t.valid_encoding?, t.ascii_only?, t.size, t.bytesize, t =~ /x/, $~.pre_match.size, t.hash == (""a"" * 2000 + ""x"").hash, t.eql?(""a"" * 2000 + ""x"")
+p t[1999, 2], t.index(""x""), t.getbyte(2000), t.sum, t.reverse[0, 2]
+t << ""é""
+p t.size, t.bytesize, t[-2..], t.valid_encoding?, t.ascii_only?
+ae = a + ""é""
+p ae.size, ae.bytesize, ae[-1]
+u = (""a"" * 2000).force_encoding(""US-ASCII"") + ""x""
+p u.encoding, u.size
+v = (""a"" * 2000).b + ""x""
+p v.encoding, v.size, v =~ /x/
+w = ""é"" + a
+p w.encoding, w.size, w.bytesize, w =~ /a/
+x = a.encode(""UTF-16LE"") + ""x"".encode(""UTF-16LE"")
+p x.encoding, x.size, x.bytesize
+y = a + ""x""
+y[0] = ""é""
+p y.size, y.bytesize, y[0, 2], y.encoding
+z = a + ""x""
+z.setbyte(0, 0x62)
+p z[0, 2], z =~ /x/, z[-1]
+f = (a + ""x"").freeze
+p f =~ /x/, f.frozen?, f.size
+s = a + a
+p s.size, s.split(""a"").size, s.tr(""a"", ""b"")[0, 3], s.count(""a"")
+", @"
+#<Encoding:UTF-8>
+true
+true
+2001
+2001
+2000
+2000
+true
+true
+""ax""
+2000
+120
+63048
+""xa""
+2002
+2003
+""xé""
+true
+false
+2001
+2002
+""é""
+#<Encoding:US-ASCII>
+2001
+#<Encoding:BINARY (ASCII-8BIT)>
+2001
+2000
+#<Encoding:UTF-8>
+2001
+2002
+1
+#<Encoding:UTF-16LE>
+2001
+4002
+2001
+2002
+""éa""
+#<Encoding:UTF-8>
+""ba""
+2000
+""x""
+2000
+true
+2001
+4000
+0
+""bbb""
+4000
+");
+        }
+
+        /// <summary>
         /// Ruby's side of the hash (#89): #eql? strings hash the same - ASCII in UTF-8, BINARY and
         /// US-ASCII, empty strings in any encoding, a slice from an offset and an equal fresh string,
         /// and a CLR string and the String of the same characters, which are #eql? as well.

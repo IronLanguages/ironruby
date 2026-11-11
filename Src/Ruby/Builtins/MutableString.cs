@@ -2097,7 +2097,11 @@ namespace IronRuby.Builtins {
             var encoding = RequireCompatibleEncoding(other);
 
             // MRI doesn't create a subclass
-            var result = new MutableString(_content.Concat(other._content), encoding);
+            Content content = null;
+            if ((long)_content.Count + other._content.Count >= AsciiConcatAsBytesMinLength) {
+                content = TryConcatAsciiBytes(other, encoding);
+            }
+            var result = new MutableString(content ?? _content.Concat(other._content), encoding);
 
             // Two halves known to be ASCII make an ASCII whole (MRI's coderange of a concatenation),
             // which keeps "a" + x + "b" from scanning the first sum again for the second:
@@ -2106,6 +2110,54 @@ namespace IronRuby.Builtins {
                 result._flags = (result._flags & ~(AsciiFlags | SurrogatesUnknownFlag)) | IsAsciiFlag | NoSurrogatesFlag;
             }
             return result;
+        }
+
+        /// <summary>
+        /// The length from which a sum of ASCII text is held as bytes (<see cref="TryConcatAsciiBytes"/>).
+        /// </summary>
+        internal const int AsciiConcatAsBytesMinLength = 1024;
+
+        /// <summary>
+        /// A long sum of ASCII text as bytes, half the memory of its characters. The cost of a long
+        /// String#+ is mostly the garbage collections its allocation brings on (a 100 KB sum of
+        /// characters is a 200 KB array, on the large object heap), so it goes with the size of the
+        /// array. A regexp match turns such a string into a CLR string once (BinaryContent.ConvertToString),
+        /// as it did a sum of characters. Null if the sum is not ASCII, or not in an encoding whose
+        /// ASCII characters are their bytes; the bytes of a part held as bytes go over as they are.
+        /// </summary>
+        private BinaryContent TryConcatAsciiBytes(MutableString/*!*/ other, RubyEncoding/*!*/ encoding) {
+            Content left = _content, right = other._content;
+            if ((left is BinaryContent && right is BinaryContent) || (long)left.Count + right.Count > Array.MaxLength ||
+                !encoding.AsciiRoundTrips || !_encoding.AsciiRoundTrips || !other._encoding.AsciiRoundTrips ||
+                !IsAscii() || !other.IsAscii()) {
+                return null;
+            }
+            int leftCount = left.Count, rightCount = right.Count;
+            var bytes = Utils.NewArrayToFill<byte>(leftCount + rightCount);
+            if (!TryCopyAscii(left, bytes.AsSpan(0, leftCount)) || !TryCopyAscii(right, bytes.AsSpan(leftCount))) {
+                return null;
+            }
+            return new BinaryContent(bytes, null);
+        }
+
+        // The ASCII characters of a content, as bytes, into a span of exactly its length. False if they
+        // are not ASCII after all (flags that a write in place has left behind).
+        private static bool TryCopyAscii(Content/*!*/ content, Span<byte> destination) {
+            ReadOnlySpan<char> chars;
+            if (content is BinaryContent binary) {
+                var bytes = binary.GetDataSpan();
+                if (bytes.Length != destination.Length) {
+                    return false;
+                }
+                bytes.CopyTo(destination);
+                return true;
+            } else if (content is StringContent str) {
+                chars = str.Data.AsSpan();
+            } else {
+                chars = ((CharArrayContent)content).GetDataSpan();
+            }
+            return chars.Length == destination.Length &&
+                System.Text.Ascii.FromUtf16(chars, destination, out _) == System.Buffers.OperationStatus.Done;
         }
 
         /// <summary>

@@ -112,6 +112,12 @@ namespace IronRuby.Builtins {
                 return result;
             }
 
+            protected StringContent/*!*/ WrapContent(string/*!*/ str) {
+                var result = new StringContent(str, _owner);
+                _owner.SetContent(result);
+                return result;
+            }
+
             /// <summary>
             /// The length from which a string whose characters are all ASCII hashes them as bytes
             /// (<see cref="HashAsciiBytes"/>) rather than as UTF-16 characters, whatever its encoding. A shorter one costs about the same either way, and
