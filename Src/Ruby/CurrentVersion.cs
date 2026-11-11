@@ -10,7 +10,7 @@ namespace IronRuby {
     public static class CurrentVersion {
         public const int Major = 4;
         public const int Minor = 0;
-        public const int Micro = 4;
+        public const int Micro = 5;
         public const string ReleaseLevel = "final";
         public const int ReleaseSerial = 0;
 
