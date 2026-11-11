@@ -3945,6 +3945,11 @@ namespace IronRuby.Builtins {
                     if (match != null && match.Index == 0) {
                         return true;
                     }
+                    // MRI matches at the start only (rb_reg_start_with_p), so a match further on is no
+                    // match, and $~ is nil after it rather than that match.
+                    if (match != null) {
+                        scope.GetInnerMostClosureScope().CurrentMatch = null;
+                    }
                     continue;
                 }
 
@@ -3963,11 +3968,6 @@ namespace IronRuby.Builtins {
             if (self.GetByteCount() < prefix) {
                 return false;
             }
-                    // MRI matches at the start only (rb_reg_start_with_p), so a match further on is no
-                    // match, and $~ is nil after it rather than that match.
-                    if (match != null) {
-                        scope.GetInnerMostClosureScope().CurrentMatch = null;
-                    }
             for (int i = 0; i < prefix; i++) {
                 if (self.GetByte(i) != subString.GetByte(i)) {
                     return false;
@@ -4976,7 +4976,7 @@ namespace IronRuby.Builtins {
         }
         
         private static MutableString/*!*/ Strip(MutableString/*!*/ str, bool trimLeft, bool trimRight) {
-            RequireStrippable(str, trimLeft);
+            RequireStrippable(str, trimLeft, trimRight);
             int left, right;
             GetTrimRange(str, trimLeft, trimRight, out left, out right);
             return str.GetSlice(left, right - left);
@@ -4985,7 +4985,7 @@ namespace IronRuby.Builtins {
         public static MutableString StripInPlace(MutableString/*!*/ self, bool trimLeft, bool trimRight) {
             // MRI checks frozen-ness before it works out whether there is anything to trim.
             self.RequireNotFrozen();
-            RequireStrippable(self, trimLeft);
+            RequireStrippable(self, trimLeft, trimRight);
 
             int left, right;
             GetTrimRange(self, trimLeft, trimRight, out left, out right);
@@ -5010,16 +5010,35 @@ namespace IronRuby.Builtins {
         /// that as ArgumentError from the left-hand scan and Encoding::CompatibilityError from
         /// the right-hand one - #lstrip and #rstrip really do raise different classes.
         /// </summary>
-        private static void RequireStrippable(MutableString/*!*/ str, bool trimLeft) {
+        // MRI's lstrip_offset reads characters from the left only as far as the whitespace goes, and an
+        // invalid one among them is an ArgumentError; rstrip_offset refuses a dummy encoding and any
+        // string with an invalid byte in it, with Encoding::CompatibilityError. #strip does the left first.
+        private static void RequireStrippable(MutableString/*!*/ str, bool trimLeft, bool trimRight) {
+            if (trimRight && str.Encoding.IsDummy) {
+                throw new EncodingCompatibilityError(
+                    String.Format("incompatible encoding with this operation: {0}", str.Encoding.Name)
+                );
+            }
             if (!str.ContainsInvalidCharacters()) {
                 return;
             }
             if (trimLeft) {
-                throw RubyExceptions.CreateArgumentError("invalid byte sequence in {0}", str.Encoding.Name);
+                var characters = str.GetCharacters();
+                while (characters.MoveNext()) {
+                    if (!characters.Current.IsValid) {
+                        throw RubyExceptions.CreateArgumentError("invalid byte sequence in {0}", str.Encoding.Name);
+                    }
+                    int c = characters.Current.Codepoint;
+                    if (c >= 0x80 || !IsStrippedCharacter((char)c)) {
+                        break;
+                    }
+                }
             }
-            throw new EncodingCompatibilityError(
-                String.Format("invalid byte sequence in {0}", str.Encoding.Name)
-            );
+            if (trimRight) {
+                throw new EncodingCompatibilityError(
+                    String.Format("invalid byte sequence in {0}", str.Encoding.Name)
+                );
+            }
         }
 
         // MRI strips ASCII whitespace and NUL, on both sides; it does not strip the

@@ -587,5 +587,29 @@ puts ""\n\r\t\f\v\b\a\e\""\\#a\x7f"".dup.force_encoding('ISO-2022-JP').inspect
 ""\n\r\t\f\v\b\a\e\x22\x5C\x23\x61\x7F""
 ");
         }
+
+        /// <summary>
+        /// MRI's lstrip reads characters only as far as the leading whitespace goes, and an invalid one there is an
+        /// ArgumentError; rstrip refuses any string with an invalid byte, and a dummy encoding, with
+        /// Encoding::CompatibilityError; strip does the left side first. IronRuby raised ArgumentError for any invalid
+        /// string lstrip or strip met, and stripped a dummy-encoded string from the right.
+        /// </summary>
+        public void String_StripInvalid1() {
+            TestOutput(@"
+def u(s) = s.dup.force_encoding('UTF-8')
+[u(""a\x80""), u("" \x80""), u(""  a \x80 "")].each do |s|
+  p [:lstrip, :rstrip, :strip, :lstrip!, :rstrip!, :strip!].map { |m| (s.dup.send(m) rescue $!.class) }
+end
+j = "" ab "".dup.force_encoding('ISO-2022-JP')
+p((j.rstrip rescue $!), (j.strip rescue $!), j.lstrip.bytes)
+", @"
+[""a\x80"", Encoding::CompatibilityError, Encoding::CompatibilityError, nil, Encoding::CompatibilityError, Encoding::CompatibilityError]
+[ArgumentError, Encoding::CompatibilityError, ArgumentError, ArgumentError, Encoding::CompatibilityError, ArgumentError]
+[""a \x80 "", Encoding::CompatibilityError, Encoding::CompatibilityError, ""a \x80 "", Encoding::CompatibilityError, Encoding::CompatibilityError]
+#<Encoding::CompatibilityError: incompatible encoding with this operation: ISO-2022-JP>
+#<Encoding::CompatibilityError: incompatible encoding with this operation: ISO-2022-JP>
+[97, 98, 32]
+");
+        }
     }
 }
