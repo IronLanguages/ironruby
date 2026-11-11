@@ -7003,5 +7003,23 @@ line 8: warning: given block not used
 line 11: warning: given block not used
 ");
         }
+
+        /// <summary>
+        /// Enumerable#tally given a BasicObject to count into raises MRI's TypeError: the prelude asked it #nil? and
+        /// #is_a?, which a BasicObject does not answer, and raised NoMethodError.
+        /// </summary>
+        public void Enumerable_TallyBasicObject1() {
+            TestOutput(@"
+require 'ruby4'
+p(([1].tally(BasicObject.new) rescue $!), ((1..2).tally(BasicObject.new) rescue $!), ([1].tally(Object.new) rescue $!))
+p [1, 1].tally({1 => 1}), (1..2).tally
+", @"
+#<TypeError: no implicit conversion of BasicObject into Hash>
+#<TypeError: no implicit conversion of BasicObject into Hash>
+#<TypeError: no implicit conversion of Object into Hash>
+{1 => 3}
+{1 => 1, 2 => 1}
+");
+        }
     }
 }

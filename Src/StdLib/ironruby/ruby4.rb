@@ -235,15 +235,17 @@ module Enumerable
   # The optional Hash counts into it instead of into a fresh one, which also
   # means the frozen check happens before the first element is looked at.
   def tally(counts = nil)
-    if counts.nil?
+    # ::NilClass === and ::Hash ===, not #nil? and #is_a?: a BasicObject answers neither,
+    # and has to be the TypeError MRI's rb_to_hash_type makes of it.
+    if ::NilClass === counts
       return __list_tally__ if __plain_list__?
       result = {}
       each { |*values| item = __enum_item__(values); __tally_store__(result, item, (result[item] || 0) + 1) }
       return result
     end
 
-    hash = counts.is_a?(Hash) ? counts : Hash.try_convert(counts)
-    raise TypeError, "no implicit conversion of #{counts.class} into Hash" if hash.nil?
+    hash = ::Hash === counts ? counts : Hash.try_convert(counts)
+    raise TypeError, "no implicit conversion of #{__ir_class_of__(counts)} into Hash" if hash.nil?
     raise FrozenError.new("can't modify frozen Hash: #{hash.inspect}", receiver: hash) if hash.frozen?
     each do |*values|
       item = __enum_item__(values)
