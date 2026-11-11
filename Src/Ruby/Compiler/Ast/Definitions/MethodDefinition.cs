@@ -323,9 +323,22 @@ namespace IronRuby.Compiler.Ast {
                 }
             }
 
+            // A light frame keeps its locals in CLR variables if it can: `def one(x); yield x; end' would otherwise allocate their
+            // tuple on every call.
+            MSA.Expression enter = null;
+            if (light != null) {
+                var registerBody = scope.TryUseRegisterLocals(body);
+                if (registerBody != null) {
+                    body = registerBody;
+                    enter = light.EnterWithRegisterLocals(scope);
+                } else {
+                    enter = light.Enter(scope);
+                }
+            }
+
             body = scope.CreateScope(
                 scopeVariable,
-                (light != null) ? light.Enter(scope) : Methods.CreateMethodScope.OpCall(new AstExpressions {
+                enter ?? Methods.CreateMethodScope.OpCall(new AstExpressions {
                     scope.MakeLocalsStorage(),
                     variableNames,
                     Ast.Constant(visiblePrameterCountAndSignatureFlags),
@@ -360,7 +373,7 @@ namespace IronRuby.Compiler.Ast {
             internal MSA.ParameterExpression/*!*/ Callee;
             internal MSA.Expression/*!*/ LazyScope;
             internal Func<MSA.Expression>/*!*/ MakeScope;
-            internal Func<MSA.Expression>/*!*/ MakeScopeIfTraced;
+            internal Func<MSA.Expression, MSA.Expression>/*!*/ MakeScopeIfTraced;
             internal MSA.Expression/*!*/ Name;
 
             /// <summary>
@@ -372,7 +385,23 @@ namespace IronRuby.Compiler.Ast {
                     scope.MakeLocalsStorage(),
                     Ast.Assign(Rfc, Methods.EnterLightMethod.OpCall(_blockParameter)),
                     Ast.Assign(Callee, Methods.TakePendingCallee.OpCall(Name)),
-                    MakeScopeIfTraced()
+                    MakeScopeIfTraced(scope.LocalsTupleVariable)
+                );
+            }
+
+            /// <summary>
+            /// <see cref="Enter"/> of a body that keeps its locals in CLR variables (ScopeBuilder.TryUseRegisterLocals): their
+            /// tuple is made only for the scope a TracePoint listening for calls has made at the entry.
+            /// </summary>
+            internal MSA.Expression/*!*/ EnterWithRegisterLocals(ScopeBuilder/*!*/ scope) {
+                return Ast.Block(
+                    scope.MakeRegisterLocalsStorage(),
+                    Ast.Assign(Rfc, Methods.EnterLightMethod.OpCall(_blockParameter)),
+                    Ast.Assign(Callee, Methods.TakePendingCallee.OpCall(Name)),
+                    Ast.Condition(Methods.IsMethodCallTraced.OpCall(),
+                        MakeScopeIfTraced(scope.MaterializeLocals()),
+                        AstUtils.Constant(null, typeof(RubyMethodScope))
+                    )
                 );
             }
 
@@ -491,12 +520,12 @@ namespace IronRuby.Compiler.Ast {
             light._blockParameter = blockParameter;
 
             var shape = Ast.Constant(new MethodFrameShape((string[])names.Value, visibleParameterCountAndSignatureFlags, _name));
-            Func<MethodInfo, MSA.Expression> make = method => method.OpCall(new AstExpressions {
-                shape, declaringScope, declaringModule, scope.LocalsTupleVariable, selfParameter, blockParameter,
+            Func<MethodInfo, MSA.Expression, MSA.Expression> make = (method, locals) => method.OpCall(new AstExpressions {
+                shape, declaringScope, declaringModule, locals, selfParameter, blockParameter,
                 EnterInterpretedFrameExpression.Instance, light.Rfc, light.Callee
             });
-            light.MakeScope = () => make(Methods.CreateMethodScopeLazy);
-            light.MakeScopeIfTraced = () => make(Methods.CreateMethodScopeIfTraced);
+            light.MakeScope = () => make(Methods.CreateMethodScopeLazy, scope.LocalsTupleVariable);
+            light.MakeScopeIfTraced = locals => make(Methods.CreateMethodScopeIfTraced, locals);
             light.LazyScope = Ast.Coalesce(scopeVariable, Ast.Assign(scopeVariable, light.MakeScope()));
 
             var rewriter = new LightFrameRewriter(scopeVariable, light.LazyScope, light.Rfc, declaringScope);

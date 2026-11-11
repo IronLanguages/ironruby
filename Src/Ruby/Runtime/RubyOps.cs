@@ -388,6 +388,33 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
+        /// <see cref="CreateBlockScopeIfTraced"/> of a block that keeps its locals in CLR variables (ScopeBuilder.TryUseRegisterLocals),
+        /// whose tuple is made only with the scope: the safe point, and whether a TracePoint wants the call event, in which case the
+        /// block makes its scope and reports it (<see cref="TraceBlockCall"/>).
+        /// </summary>
+        [Emitted]
+        public static bool EnterScopeFreeBlock() {
+            RubyUtils.SafePoint();
+            RequireSufficientStack();
+            return (TracePoint.ActiveEvents & (int)(TraceEvents.BCall | TraceEvents.Call)) != 0;
+        }
+
+        [Emitted]
+        public static RubyBlockScope/*!*/ TraceBlockCall(RubyBlockScope/*!*/ scope) {
+            TracePoint.OnBlockCall(scope);
+            return scope;
+        }
+
+        /// <summary>
+        /// Whether a TracePoint wants the call event of a light-frame method, which then makes its scope (CreateMethodScopeIfTraced)
+        /// and, if it keeps its locals in CLR variables, their tuple first.
+        /// </summary>
+        [Emitted, MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool IsMethodCallTraced() {
+            return (TracePoint.ActiveEvents & (int)(TraceEvents.Call | TraceEvents.CCall)) != 0;
+        }
+
+        /// <summary>
         /// The first step of the entry of a block whose body needs its scope but does not define a closure
         /// over it: the safe point, then the scope the last finished call through this BlockParam left there
         /// (each, map, times, a yield in a loop; see BlockParam.ParkScope) unless something captured it, or null.

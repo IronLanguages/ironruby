@@ -1061,6 +1061,7 @@ namespace IronRuby.Tests {
                 Rational_ComplexConventions1,
                 Method_LightFrame1,
                 Method_LightFrame2,
+                Block_RegisterLocals1,
                 BigDecimal_Ruby4_1,
                 BigDecimal_Engine1,
                 BigDecimal_ExponentLimits1,

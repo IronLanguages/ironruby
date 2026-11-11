@@ -6735,6 +6735,63 @@ tracepoint ctor: [[:call, :initialize], [:return, :initialize], [:call, :x], [:r
         }
 
         /// <summary>
+        /// A scope-free block and a light-frame method keep their locals in CLR variables rather than in a tuple allocated on
+        /// every call (ScopeBuilder.TryUseRegisterLocals). The tuple is made with the scope, when a TracePoint hook asks for one,
+        /// and from then on the body reads and writes its locals there: a Binding sees the values the body assigned, also one
+        /// kept past the event, and a local set through it is what the body reads next. Interpreted and compiled bodies agree.
+        /// Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Block_RegisterLocals1() {
+            TestOutput(@"
+require 'ruby4'
+class RL
+  def y1(x) = yield(x)
+  def y3 = yield(1, 2, 3)
+  def keep(a, &b) = b
+  def locs(a); b = a; c = b; [a, b, c]; end
+end
+o = RL.new
+r = 40.times.map { |i| [o.y1(i) { |y| y }, o.y3 { |a, b, c| a = b; [a, b, c] }, o.locs(i), o.keep(i) { i }.call] }
+p r.first, r.last
+p o.y3 { |a, b| x = a; x = b if x; x }
+pr = proc { |x| x }
+l = lambda { |x, y| y }
+p 40.times.map { |i| [pr.call(i), pr.call([i, 1]), l.call(1, i)] }.last
+lines = []
+t1 = TracePoint.new(:line) { |t| lines << t.binding.local_variables.select { |v| %i[a b c].include?(v) }.map { |v| t.binding.local_variable_get(v) } if t.path == __FILE__ }
+t1.enable { o.y3 { |a, b, c|
+  a = 9
+  [a, b, c] } }
+p lines.reject(&:empty?)
+v = nil
+t2 = TracePoint.new(:line) { |t| t.binding.local_variable_set(:a, 42) if t.lineno == __LINE__ + 2 }
+t2.enable { o.y1(1) { |a|
+  v = a } }
+p v
+kept = nil
+t3 = TracePoint.new(:line) { |t| kept ||= t.binding if t.lineno == __LINE__ + 2 }
+t3.enable { o.y1(1) { |a|
+  a = 2
+  a = 3 } }
+p kept.local_variable_get(:a)
+calls = []
+t4 = TracePoint.new(:call, :b_call) { |t| calls << [t.event, t.binding.local_variables.first] if t.path == __FILE__ }
+t4.enable { o.y1(5) { |q| q } }
+p calls
+", @"
+[0, [2, 2, 3], [0, 0, 0], 0]
+[39, [2, 2, 3], [39, 39, 39], 39]
+2
+[39, [39, 1], 39]
+[[1, 2, 3], [9, 2, 3]]
+42
+3
+[[:b_call, :o], [:call, :x], [:b_call, :q]]
+");
+        }
+
+
+        /// <summary>
         /// BigDecimal against CRuby 4.0's bigdecimal 4.0.1: a Rational operand of a comparison is expanded as
         /// for arithmetic (== used to recurse through Rational#== until the stack overflowed), #power and #**
         /// take any real exponent and a precision, round takes half:, and a BigDecimal is frozen and has no
