@@ -278,11 +278,17 @@ namespace IronRuby.Aot {
             }
             if (arm64) {
                 string map = Path.ChangeExtension(tmp, ".map");
-                var tooLarge = File.ReadLines(map)
-                    .Select(line => System.Text.RegularExpressions.Regex.Match(line, @"^0x[0-9A-F]+ \| 0x([0-9A-F]+) .*\| (\S+)\s+\(MethodWithGCInfo\)"))
-                    .Where(m => m.Success && Convert.ToInt64(m.Groups[1].Value, 16) >= ArmMethodLimit)
+                var methods = File.ReadLines(map).Where(line => line.EndsWith("(MethodWithGCInfo)", StringComparison.Ordinal))
+                    .Select(line => System.Text.RegularExpressions.Regex.Match(line, @"^0x[0-9A-F]+ \| 0x([0-9A-F]+) .*\| (\S+)\s+\(MethodWithGCInfo\)")).ToList();
+                var tooLarge = methods.Where(m => m.Success && Convert.ToInt64(m.Groups[1].Value, 16) >= ArmMethodLimit)
                     .Select(m => m.Groups[2].Value + " (" + Convert.ToInt64(m.Groups[1].Value, 16).ToString("N0") + " bytes)").ToList();
                 File.Delete(map);
+                // a map this cannot read (another crossgen2's format) proves nothing: no library then either
+                if (methods.Any(m => !m.Success)) {
+                    File.Delete(tmp);
+                    Console.Error.WriteLine("crossgen2's map lists methods this cannot read the size of: no arm64 library unchecked");
+                    return false;
+                }
                 if (tooLarge.Count > 0) {
                     File.Delete(tmp);
                     Console.Error.WriteLine("crossgen2's arm64 code for " + string.Join(", ", tooLarge) + " is over 1 MB, which RyuJIT " +

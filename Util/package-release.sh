@@ -171,6 +171,8 @@ if [ -f "$bin/IronRuby.Startup.dll" ]; then
     grep -v "^IronRuby.Startup: \(parsing\|compiling\|compiles\|the JIT parses\)" "$check/trace" | head -8 >&2 || true
     head -20 "$check/diff" 2>/dev/null >&2 || true
     if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::warning::$NAME ships without the startup library: $why"; fi
+  elif ! command -v perl > /dev/null; then
+    startup_note "startup library used (no perl here to time it)"
   else
     # `ir -e 1` with and without it: the median of 5 runs each, interleaved, after one of each to warm the caches
     now() { perl -MTime::HiRes=time -e 'printf "%.0f\n", time * 1000'; }

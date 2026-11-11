@@ -544,7 +544,7 @@ namespace IronRuby.Aot {
             string path = Path.Combine(OutputDirectory, name + ".dll");
             ab.Save(path);
             // from its bytes, not the file: a loaded file is locked on Windows, and crossgen2's ReadyToRun image of it
-            // (StartupCommand --r2r) must replace it there (UnauthorizedAccessException in 4.0.5's win-x64 package job)
+            // (StartupCommand --r2r) must replace it there (UnauthorizedAccessException in the win-x64 package job of 58099b4e)
             result = Assembly.Load(File.ReadAllBytes(path)).GetType("D");
             ExtraAssemblies.Add(path);
             return _persistedDelegates[inMemory] = result;
