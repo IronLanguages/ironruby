@@ -22,6 +22,9 @@ on:
       - .github/workflows/release.yml
       - Util/package-release.sh
       - Util/installer/**
+      # the startup library every archive carries: its compiler, and the prelude it compiles most of
+      - Util/aot/**
+      - Src/StdLib/ironruby/ruby4.rb
   workflow_dispatch:
     inputs:
       render_video:
@@ -181,6 +184,7 @@ jobs:
 
       - name: Package
         working-directory: ironruby
+        timeout-minutes: 60
         env:
           IR_TFM: ${{ matrix.tfm }}
         run: |
@@ -199,6 +203,8 @@ jobs:
       # has `ir -e 1` with and without it.
       - name: Startup library, from the archive
         working-directory: dist
+        # a library that hangs a program fails here, instead of holding the job for 6 hours
+        timeout-minutes: 10
         run: |
           dir="$RUNNER_TEMP/startup-check"
           rm -rf "$dir" && mkdir -p "$dir"
@@ -223,6 +229,8 @@ jobs:
           grep -q "IronRuby.Startup: loaded" <<<"$trace"
           # (not `! grep`: set -e does not stop at a negated command that fails)
           if grep -q "IronRuby.Startup: .*not used" <<<"$trace"; then exit 1; fi
+          # registering it threw (the loader catches that, and runs without it)
+          if grep -q "^IronRuby.Startup: [A-Za-z.]*Exception" <<<"$trace"; then exit 1; fi
           grep -q "^done" <<<"$trace"
           echo "ok: $lib loaded and used"
 

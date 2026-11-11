@@ -127,6 +127,28 @@ stage_ir() {
     *)     "$STAGE/ir.sh" "$@" ;;
   esac
 }
+# `with_timeout SECONDS command...`: the command, killed when it runs longer (exit 124). A library that hangs a
+# program (a fiber's block it could not run hung forever) must fail the check, not hold the job for its 6 hours; and
+# macOS has no timeout(1). On Windows the kill takes the process tree: cmd and the ir under it.
+with_timeout() {
+  local seconds=$1 pid watchdog status=0
+  shift
+  "$@" &
+  pid=$!
+  ( sleep "$seconds"
+    case "$RID" in
+      win-*) taskkill //F //T //PID "$(cat /proc/$pid/winpid 2>/dev/null)" > /dev/null 2>&1 ;;
+    esac
+    kill -9 $pid 2> /dev/null ) > /dev/null 2>&1 &
+  watchdog=$!
+  wait $pid || status=$?
+  if kill $watchdog 2> /dev/null; then
+    wait $watchdog 2> /dev/null || true
+  elif [ $status != 0 ]; then
+    status=124
+  fi
+  return $status
+}
 # a line in the log, and on GitHub Actions in the job's summary
 startup_note() {
   echo "package-release.sh: $*"
@@ -151,13 +173,17 @@ if [ -f "$bin/IronRuby.Startup.dll" ]; then
   smoke="$IR_ROOT/Util/aot/startup-smoke.rb"
   case "$RID" in win-*) smoke=$(cygpath -w "$smoke") ;; esac
   # Without the library first: if that fails, the tree is broken, which is not the library's to hide.
-  IR_STARTUP_DLL=none stage_ir "$smoke" > "$check/without"
+  IR_STARTUP_DLL=none with_timeout 300 stage_ir "$smoke" > "$check/without"
   status=0
-  IR_STARTUP_DLL_TRACE=1 stage_ir "$smoke" > "$check/with" 2> "$check/trace" || status=$?
-  if [ $status != 0 ]; then
+  IR_STARTUP_DLL_TRACE=1 with_timeout 300 stage_ir "$smoke" > "$check/with" 2> "$check/trace" || status=$?
+  if [ $status = 124 ]; then
+    why="startup-smoke.rb did not finish in 5 minutes with it"
+  elif [ $status != 0 ]; then
     why="startup-smoke.rb failed with it (exit $status)"
   elif ! grep -q "IronRuby.Startup: loaded" "$check/trace"; then
     why="the archive's ir did not load it"
+  elif grep -q "^IronRuby.Startup: [A-Za-z.]*Exception" "$check/trace"; then
+    why="the archive's ir failed to register it"
   elif grep -q "IronRuby.Startup: .*not used" "$check/trace"; then
     why="the archive's ir did not use it for all of its files"
   elif ! diff "$check/without" "$check/with" > "$check/diff"; then
@@ -176,11 +202,11 @@ if [ -f "$bin/IronRuby.Startup.dll" ]; then
   else
     # `ir -e 1` with and without it: the median of 5 runs each, interleaved, after one of each to warm the caches
     now() { perl -MTime::HiRes=time -e 'printf "%.0f\n", time * 1000'; }
-    stage_ir -e 1 >/dev/null; IR_STARTUP_DLL=none stage_ir -e 1 >/dev/null
+    with_timeout 120 stage_ir -e 1 >/dev/null; IR_STARTUP_DLL=none with_timeout 120 stage_ir -e 1 >/dev/null
     : > "$check/on"; : > "$check/off"
     for i in 1 2 3 4 5; do
-      t=$(now); stage_ir -e 1 >/dev/null; echo $(( $(now) - t )) >> "$check/on"
-      t=$(now); IR_STARTUP_DLL=none stage_ir -e 1 >/dev/null; echo $(( $(now) - t )) >> "$check/off"
+      t=$(now); with_timeout 120 stage_ir -e 1 >/dev/null; echo $(( $(now) - t )) >> "$check/on"
+      t=$(now); IR_STARTUP_DLL=none with_timeout 120 stage_ir -e 1 >/dev/null; echo $(( $(now) - t )) >> "$check/off"
     done
     on=$(sort -n "$check/on" | sed -n 3p) off=$(sort -n "$check/off" | sed -n 3p)
     best_on=$(sort -n "$check/on" | sed -n 1p) best_off=$(sort -n "$check/off" | sed -n 1p)

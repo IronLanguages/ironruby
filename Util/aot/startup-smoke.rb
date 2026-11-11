@@ -30,4 +30,29 @@ require "irb"
 puts "irb: #{defined?(IRB.start).inspect}"
 puts "frozen: #{"lit".frozen?} #{:sym.to_s.frozen?}"
 puts "format: #{format("%05.2f|%-3s|%x", 3.14159, "a", 255)}"
+# Methods of the library whose code runs only when called, not at startup: a method compiled wrong fails here, at its
+# first call (a Fiber's block and IO.pipe once threw InvalidProgramException, and the fiber then hung).
+puts "fiber: #{Fiber.new { |x| Fiber.yield(x + 1); :end }.then { |f| [f.resume(1), f.resume, f.alive?] }.inspect}"
+r, w = IO.pipe
+w.write("piped")
+w.close
+puts "pipe: #{r.read}"
+r.close
+puts "popen: #{IO.popen("echo popen", &:read).strip} #{$?.success?}"
+require "tempfile"
+puts "tempfile: #{Tempfile.create("smoke") { |f| f.write("x"); f.flush; File.size(f.path) }}"
+point = Data.define(:x, :y)
+puts "data: #{point.new(x: 1, y: 2).inspect} #{point.new(1, 2).hash == point.new(1, 2).hash}"
+puts "set inspect: #{Set[1, 2].inspect}"
+puts "hash eql: #{{ a: 1 }.eql?({ a: 1 })}"
+require "stringio"
+puts "stringio: #{StringIO.open("s\nt") { |io| io.readlines.size }}"
+puts "select!: #{[1, 2, 3].select! { |v| v > 1 }.inspect}"
+begin
+  [1].each { raise IndexError, "in block" }
+rescue IndexError => e
+  puts "ensure path: #{e.message}"
+ensure
+  puts "ensure ran"
+end
 puts "done"
