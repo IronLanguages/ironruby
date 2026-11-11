@@ -364,9 +364,12 @@ module Enumerable
         raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
       end
       # The pattern wins and the block is never called, which is worth saying out loud.
-      # MRI names the line that called #all? and friends: this helper, then the method, then it.
+      # MRI names the line that called #all? and friends. The prelude's frames stand in a
+      # backtrace as a C method's do, at their caller's line, and this helper's not at all:
+      # #all? is the first frame above #warn and its caller the second. (uplevel 2 went past
+      # the end of a top-level script's backtrace, and the warning had no location.)
       if block && !args.empty? && !$VERBOSE.nil?
-        warn "given block not used", uplevel: 2
+        warn "given block not used", uplevel: 1
       end
     end
     private :__check_pattern_args__

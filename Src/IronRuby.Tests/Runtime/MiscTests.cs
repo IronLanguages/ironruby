@@ -6977,5 +6977,31 @@ require 'rbconfig'
 p RbConfig::CONFIG['EXECUTABLE_EXTS'].split | [RbConfig::CONFIG['EXEEXT']]
 ", Environment.OSVersion.Platform == PlatformID.Win32NT ? @"["".exe"", "".com"", "".cmd"", "".bat""]" : @"[""""]");
         }
+
+        /// <summary>
+        /// all?, any?, none? and one? given a pattern and a block warn "given block not used" at the line that called
+        /// them, as MRI does. The prelude asked for the location two frames up, past the end of a top-level script's
+        /// backtrace, so the warning had none there, and named the wrong line inside a method.
+        /// </summary>
+        public void Enumerable_PatternUnusedBlockWarning1() {
+            TestOutput(@"
+require 'ruby4'
+err = Object.new
+def err.write(*s) = (($w ||= +'') << s.join; 0)
+$stderr = err
+[1, 2].all?(1) { }
+def m
+  [1].none?(1) { }
+end
+m
+(1..2).one?(1) { }
+$stderr = STDERR
+puts $w.gsub(/^.*?:(\d+): /, 'line \1: ')
+", @"
+line 6: warning: given block not used
+line 8: warning: given block not used
+line 11: warning: given block not used
+");
+        }
     }
 }

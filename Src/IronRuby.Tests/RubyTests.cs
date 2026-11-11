@@ -1289,6 +1289,7 @@ namespace IronRuby.Tests {
                 Hash_InitializeCopyIsReplace1,
                 Hash_UpdateStringKey1,
                 Hash_EqlHashRehash1,
+                Enumerable_PatternUnusedBlockWarning1,
             };
         }
     }
