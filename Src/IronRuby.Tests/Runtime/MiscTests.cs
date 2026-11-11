@@ -462,12 +462,12 @@ puts 2.1560
             Assert((int)dm[1] == 0);
 
             Assert((int)ClrInteger.LeftShift(1, Int32.MinValue) == 0);
-            // 1 << 2**31, which MRI allocates (#89); past .NET 9's BigInteger size cap it is NoMemoryError
-            if (Environment.Version.Major >= 9) {
-                AssertExceptionThrown<OutOfMemoryException>(() => ClrInteger.RightShift(1, Int32.MinValue));
-            } else {
-                Assert(((System.Numerics.BigInteger)ClrInteger.RightShift(1, Int32.MinValue)).GetBitLength() == (1L << 31) + 1);
-            }
+            // 1 << 2**31, which MRI allocates (#89); past .NET's BigInteger size cap (since .NET 9) it is NoMemoryError
+            AssertExceptionThrown<OutOfMemoryException>(() => ClrInteger.RightShift(1, Int32.MinValue));
+            // the same limit for a left shift spelled as >> of a Bignum, and for the magnitude of -2**k
+            AssertExceptionThrown<OutOfMemoryException>(() => ClrInteger.RightShift(System.Numerics.BigInteger.One << 64, -Int32.MaxValue));
+            AssertExceptionThrown<OutOfMemoryException>(() => ClrInteger.RightShift(System.Numerics.BigInteger.One << 64, Int32.MinValue));
+            AssertExceptionThrown<OutOfMemoryException>(() => ClrInteger.LeftShift(System.Numerics.BigInteger.MinusOne, 2147483584));
         }
 
         public void Scenario_RubyInclusions1() {

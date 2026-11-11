@@ -95,12 +95,6 @@ namespace IronRuby.StandardLibrary.Digest {
             private int _count;
 
             private IncrementalHash _incremental;
-#if !NET10_0_OR_GREATER
-            // IncrementalHash.Clone is .NET 10's: before it, a copy (#dup, #clone) of a digest
-            // that has gone incremental replays the input into a new one. The input is kept in
-            // the chunks it came in, so nothing is copied as it arrives.
-            private System.Collections.Generic.List<byte[]> _streamed;
-#endif
 
             protected Base(HashAlgorithm/*!*/ algorithm, int blockLength) {
                 Assert.NotNull(algorithm);
@@ -144,9 +138,6 @@ namespace IronRuby.StandardLibrary.Digest {
             private void Append(byte[]/*!*/ data) {
                 if (_incremental != null) {
                     _incremental.AppendData(data);
-#if !NET10_0_OR_GREATER
-                    _streamed.Add(data);
-#endif
                     return;
                 }
 
@@ -154,11 +145,6 @@ namespace IronRuby.StandardLibrary.Digest {
                     _incremental = IncrementalHash.CreateHash(_algorithmName);
                     _incremental.AppendData(_buffer, 0, _count);
                     _incremental.AppendData(data);
-#if !NET10_0_OR_GREATER
-                    _streamed = new System.Collections.Generic.List<byte[]>();
-                    _streamed.Add(_buffer.AsSpan(0, _count).ToArray());
-                    _streamed.Add(data);
-#endif
                     _buffer = Array.Empty<byte>();
                     _count = 0;
                     return;
@@ -194,15 +180,7 @@ namespace IronRuby.StandardLibrary.Digest {
                 self._buffer = other._buffer.AsSpan(0, other._count).ToArray();
                 self._count = other._count;
                 if (other._incremental != null) {
-#if NET10_0_OR_GREATER
                     self._incremental = other._incremental.Clone();
-#else
-                    self._incremental = IncrementalHash.CreateHash(other._algorithmName);
-                    self._streamed = new System.Collections.Generic.List<byte[]>(other._streamed);
-                    foreach (var chunk in other._streamed) {
-                        self._incremental.AppendData(chunk);
-                    }
-#endif
                 }
                 return self;
             }
@@ -228,16 +206,13 @@ namespace IronRuby.StandardLibrary.Digest {
                     _incremental.Dispose();
                     _incremental = null;
                 }
-#if !NET10_0_OR_GREATER
-                _streamed = null;
-#endif
             }
 
             /// <summary>
             /// True when <paramref name="obj"/> is a built-in digest whose #finish and
             /// #initialize_copy are these: Digest::Instance#digest can then read the current digest
             /// straight off it rather than finishing a copy, which copied all of the input every
-            /// time (and, once streaming, would replay it).
+            /// time (or, once streaming, the hash state).
             /// </summary>
             internal static bool CanSnapshot(RubyContext/*!*/ context, object obj) {
                 var digest = obj as Base;

@@ -444,7 +444,7 @@ NoMethodError
         /// Writes <paramref name="name"/>.dll, version <paramref name="version"/>, to <paramref name="dir"/>: with the Widget
         /// class, or, given the version of PathLoadedWidgets to build against, with WidgetExtensions. Its method is Shout, or
         /// <paramref name="method"/> in a class named after it, and returns its name in lower case. It is emitted with
-        /// System.Reflection.Metadata because PersistedAssemblyBuilder needs .NET 9, and these tests run on .NET 8 too.
+        /// System.Reflection.Metadata (written when these tests also ran on .NET 8, which has no PersistedAssemblyBuilder).
         /// </summary>
         private static void WriteFixtureAssembly(string/*!*/ dir, string/*!*/ name, string/*!*/ version, string widgetsVersion, string method = "Shout") {
             var metadata = new MetadataBuilder();

@@ -48,6 +48,17 @@ env:
   DLR_REF: 922753f8ccbf5186c15899116d5a407b6b1723fb
 
 jobs:
+  # The pull requests and pushes of ci.yml test net11.0 only; the downloads are built on
+  # net10.0, so a v* tag runs ci.yml's whole net10.0 test set first, and the release job
+  # below publishes nothing unless it passed. (The Release PR, from a release/* branch,
+  # has run it on both frameworks already.)
+  tests:
+    name: net10.0 tests
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    uses: ./.github/workflows/ci.yml
+    with:
+      tfms: net10.0
+
   package:
     name: ${{ matrix.rid }}
     if: github.event_name != 'workflow_dispatch' || inputs.video_for == ''
@@ -99,12 +110,11 @@ jobs:
             git -C dlr apply "../$patch"
           done
 
-      # The DLR multi-targets up to net9.0, so the build needs the .NET 10 SDK; the
-      # release itself targets net8.0.
+      # The DLR multi-targets up to net10.0, so the build needs the .NET 10 SDK; the
+      # release itself targets net10.0 (Util/package-release.sh's IR_TFM).
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |
-            8.0.x
             10.0.x
 
       - uses: ruby/setup-ruby@v1
@@ -311,7 +321,7 @@ jobs:
     name: GitHub release
     # A pushed tag only: a run by hand keeps its archives as artifacts, even on a tag.
     if: github.event_name == 'push' && github.ref_type == 'tag'
-    needs: package
+    needs: [tests, package]
     runs-on: ubuntu-latest
     permissions:
       contents: write

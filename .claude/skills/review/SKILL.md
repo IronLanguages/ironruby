@@ -108,7 +108,7 @@ A finding you have not checked is a question, not a finding.
    overloads or signatures.
 3. **Reproduce when it is cheap.**
    - Build with `dotnet build Src/Console/Ruby.Console.csproj -c Release
-     -p:IronRubyTargetFrameworks=net8.0`. A `[RubyMethod]` change first needs
+     -p:IronRubyTargetFrameworks=net10.0`. A `[RubyMethod]` change first needs
      `./regen-initializers.sh`. A file under `Src/StdLib` needs no build.
    - Write a few lines of Ruby and run them with `IR_CONFIG=Release ./ir.sh x.rb` and
      `ruby x.rb`. A difference from CRuby is the bug report. The reference is CRuby 4.0; if the

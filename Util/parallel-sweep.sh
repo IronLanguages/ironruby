@@ -11,8 +11,8 @@
 #   IR=./ir.sh           interpreter script the specs run under (also RUBY_EXE for ruby_exe)
 #   JOBS=8               parallel jobs
 #   SUITES="core library language command_line security"
-#   IR_CONFIG / IR_TFM are read by ir.sh itself, so `IR_TFM=net10.0 Util/parallel-sweep.sh out`
-#   sweeps the .NET 10 build.
+#   IR_CONFIG / IR_TFM are read by ir.sh itself, so `IR_TFM=net11.0 Util/parallel-sweep.sh out`
+#   sweeps the .NET 11 build.
 #
 # OUT_DIR/<suite>.txt gets the sorted unique names of failing examples, OUT_DIR/<suite>/*.log
 # the logs. With a baseline, the summary lists the names that are new and the ones fixed.

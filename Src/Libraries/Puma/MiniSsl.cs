@@ -217,11 +217,7 @@ namespace IronRuby.StandardLibrary.Puma {
                 }
 
                 private static X509Certificate2/*!*/ LoadPkcs12(byte[]/*!*/ pfx, X509KeyStorageFlags flags) {
-#if NET9_0_OR_GREATER
                     return X509CertificateLoader.LoadPkcs12(pfx, null, flags);
-#else
-                    return new X509Certificate2(pfx, (string)null, flags);
-#endif
                 }
             }
 

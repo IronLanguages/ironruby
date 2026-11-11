@@ -124,8 +124,7 @@ namespace IronRuby.Builtins {
         /// (RangeError), and raises NoMemoryError when the allocation fails, as 1 &lt;&lt; 2**40 does
         /// on most machines. ruby/spec (left_shift_spec, right_shift_spec) lets an implementation
         /// other than MRI put that RangeError at 2**32 instead, and IronRuby does: a .NET
-        /// BigInteger cannot hold much more than 2**36 bits anyway (2**31 on .NET 9 and later,
-        /// see ShiftLeftOrFail), so between 2**32 and 2**66 the choice is only between two errors.
+        /// BigInteger cannot hold much more than 2**31 bits anyway (see ShiftLeftOrFail), so between 2**32 and 2**66 the choice is only between two errors.
         /// </para>
         /// </summary>
         internal static object/*!*/ ShiftBeyondInt32(BigInteger self, BigInteger leftShift) {
@@ -162,12 +161,25 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// value &lt;&lt; shift, where a result too big for a BigInteger is the failed allocation MRI
-        /// reports (NoMemoryError). .NET 9 and later cap a BigInteger at about 2**31 bits and throw
-        /// OverflowException past it, so on net10.0 1 &lt;&lt; 2**31 is a NoMemoryError; .NET 8 holds
-        /// it.
+        /// The most bits a BigInteger holds: Array.MaxLength 32-bit or 64-bit limbs' worth, 2**31 - 64 either way.
+        /// .NET 9 and 10 throw OverflowException past it from every operation. .NET 11 keeps the same limit
+        /// (BigInteger.MaxLength) but its shifts no longer check it, while its other operations still do: there
+        /// 1 &lt;&lt; 2**31 succeeded and a later (x | 1) of it threw a raw OverflowException. So IronRuby checks
+        /// the limit itself, and an Integer is held to it on every runtime.
+        /// </summary>
+        internal static readonly long MaxBigIntegerBits = (long)(Array.MaxLength / 64) * 64;
+
+        /// <summary>
+        /// value &lt;&lt; shift, where a result too big for a BigInteger (<see cref="MaxBigIntegerBits"/>) is
+        /// the failed allocation MRI reports (NoMemoryError): 1 &lt;&lt; 2**31 is a NoMemoryError.
         /// </summary>
         internal static BigInteger ShiftLeftOrFail(BigInteger value, int shift) {
+            // the magnitude's bits, which BigInteger stores: GetBitLength is the two's complement width, a bit
+            // short for -2**k (-1 has 0)
+            if (shift > 0 && !value.IsZero &&
+                (long)(value.Sign < 0 ? BigInteger.Abs(value) : value).GetBitLength() + shift > MaxBigIntegerBits) {
+                throw new OutOfMemoryException("failed to allocate memory");
+            }
             try {
                 return value << shift;
             } catch (OverflowException) {

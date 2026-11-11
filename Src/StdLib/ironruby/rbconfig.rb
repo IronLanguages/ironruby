@@ -78,7 +78,7 @@ module RbConfig
   # architecture
   clr_version = "#{System::Environment.Version.Major}.#{System::Environment.Version.Minor}"
   # The .NET runtime IronRuby is running on, not the framework it was compiled for: the
-  # net8.0 build answers "universal-dotnet10.0" under the .NET 10 runtime.
+  # net10.0 build answers "universal-dotnet11.0" under the .NET 11 runtime.
   CONFIG["arch"] = arch = "universal-dotnet#{clr_version}"
   CONFIG["sitearch"] = arch.dup
 

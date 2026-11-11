@@ -65,7 +65,7 @@ for a in "$@"; do
   esac
 done
 
-bin="$ROOT/Src/Console/bin/$IR_CONFIG/${IR_TFM:-net8.0}/ir"
+bin="$ROOT/Src/Console/bin/$IR_CONFIG/${IR_TFM:-net10.0}/ir"
 if [ ! -x "$bin" ]; then
   echo "no $IR_CONFIG build at $bin - build it first:" >&2
   echo "  dotnet build Src/Console/Ruby.Console.csproj -c $IR_CONFIG -p:DlrSourceDir=/root/workspace/dlr/src/core" >&2

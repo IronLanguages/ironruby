@@ -2,13 +2,13 @@
 # The build itself is `dotnet build`; this only saves typing. It needs the DLR checkout at
 # ../dlr with Build/dlr-patches applied, and libprism built in ../prism/build (see README.md).
 #
-#   make                  build ir (Debug, net8.0 and net10.0)
+#   make                  build ir (Debug, net10.0 and net11.0)
 #   make release          the same, Release
 #   make test             build and run the IronRuby.Tests suite; fails on any "> FAILED" line
 #   make spec             ruby/spec's language suite (needs ./spec and ./mspec checkouts)
 #   make clean
 #
-# TFM=net10.0 builds and runs one target framework only, CONFIG=Release the other
+# TFM=net11.0 builds and runs one target framework only, CONFIG=Release the other
 # configuration, DLR=/path/to/dlr/src/core a DLR checkout somewhere other than ../dlr.
 
 CONFIG ?= Debug
@@ -16,7 +16,7 @@ TFM ?=
 DLR ?=
 
 DOTNET_FLAGS = -c $(CONFIG) $(if $(TFM),-p:IronRubyTargetFrameworks=$(TFM)) $(if $(DLR),-p:DlrSourceDir=$(DLR))
-TEST_TFM = $(or $(TFM),net8.0)
+TEST_TFM = $(or $(TFM),net10.0)
 TEST_DIR = Src/IronRuby.Tests/bin/$(CONFIG)/$(TEST_TFM)
 
 .PHONY: build release test spec clean

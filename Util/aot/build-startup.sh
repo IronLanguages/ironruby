@@ -8,21 +8,22 @@
 # IronRubyReadyToRunHost; -p:IronRubyStartupLibrary=false leaves it out), and so does
 # Util/package-release.sh. By hand, after a Release build:
 #
-#   Util/aot/build-startup.sh                     # into Src/Console/bin/R2R/net8.0
+#   Util/aot/build-startup.sh                     # into Src/Console/bin/R2R/net10.0
 #   IR_CONFIG=R2R ./ir.sh -e 1                    # uses it; IR_STARTUP_DLL=none turns it off
 #   IR_STARTUP_DLL_TRACE=1 ...                    # says what it registered and what is still compiled from source
 #
-# Options: --host DIR (the ir's directory), --tfm TFM (its framework, default net8.0), --rid RID,
+# Options: --host DIR (the ir's directory), --tfm TFM (its framework, default net10.0), --rid RID,
 # --root DIR (the tree the host is in, if not this one), --dlr DIR (DlrSourceDir), --il (no
 # ReadyToRun code, for an IL host), --build-references (build IronRuby for the compiler too; the
 # default takes the Release build that is there).
 #
-# The compiler needs .NET 10 (PersistedAssemblyBuilder): without a .NET 10 SDK and runtime this
-# says so and exits 3, and the host simply runs without the library. It runs the host's own
+# The compiler targets the host's framework (it needs PersistedAssemblyBuilder, .NET 9+): without an
+# SDK and runtime of at least that version this says so and exits 3, and the host simply runs
+# without the library. It runs the host's own
 # IronRuby and DLR builds; the library records their identity (MVID) and each source file's
 # hash, so a rebuilt host or an edited file is never run from stale code. An unchanged rebuild
 # copies the last library from the cache in Util/aot/IronRuby.Aot/obj/startup/.
-# Exit status: 0 installed, 3 skipped (no .NET 10), anything else failed.
+# Exit status: 0 installed, 3 skipped (no SDK or runtime for TFM), anything else failed.
 IR_ROOT="$(dirname "$(dirname "$(dirname "$(readlink -f "$0")")")")"
 # One at a time: a build of both frameworks publishes their hosts in parallel, and both use the one
 # compiler. flock -o: the build servers and MSBuild nodes started below outlive this script, and must
@@ -36,7 +37,7 @@ if [ -z "$DOTNET_ROOT" ] && [ -x /usr/local/dotnet/dotnet ]; then
 fi
 [ -n "$DOTNET_ROOT" ] && export DOTNET_ROOT && PATH="$DOTNET_ROOT:$PATH"
 DOTNET="${DOTNET_HOST_PATH:-dotnet}"
-TFM=net8.0 HOST= RID= ROOT= R2R=--r2r BUILDREFS=false
+TFM=net10.0 HOST= RID= ROOT= R2R=--r2r BUILDREFS=false
 # the DLR the tree builds with: --dlr, DLR_SOURCE_DIR, or else what the build itself takes (Directory.Build.props or .rsp)
 DLR="${DLR_SOURCE_DIR:-}"
 while [ $# -gt 0 ]; do
@@ -66,22 +67,25 @@ rm -f "$HOST"/IronRuby.Startup*.dll
 major() { sed -n 's/^\([0-9][0-9]*\)\..*/\1/p' | sort -n | tail -1; }
 sdk=$("$DOTNET" --list-sdks 2>/dev/null | major)
 runtime=$("$DOTNET" --list-runtimes 2>/dev/null | sed -n 's/^Microsoft\.NETCore\.App //p' | major)
-if [ "${sdk:-0}" -lt 10 ] || [ "${runtime:-0}" -lt 10 ]; then
-  echo "build-startup.sh: skipped, the compiler needs the .NET 10 SDK and runtime (found SDK ${sdk:-none}, runtime ${runtime:-none}); ir runs without the startup library"
+need=$(echo "$TFM" | sed -n 's/^net\([0-9][0-9]*\)\.0$/\1/p')
+[ -n "$need" ] || { echo "build-startup.sh: --tfm $TFM is not netN.0" >&2; exit 2; }
+if [ "${sdk:-0}" -lt "$need" ] || [ "${runtime:-0}" -lt "$need" ]; then
+  echo "build-startup.sh: skipped, the compiler needs the .NET $need SDK and runtime (found SDK ${sdk:-none}, runtime ${runtime:-none}); ir runs without the startup library"
   exit 3
 fi
 
 AOT_DIR=Util/aot/IronRuby.Aot
-AOT="$AOT_DIR/bin/Release/net10.0/IronRuby.Aot"
+AOT="$AOT_DIR/bin/Release/$TFM/IronRuby.Aot"
 CACHE="$IR_ROOT/$AOT_DIR/obj/startup/$TFM-${RID:-host}$( [ -f "$HOST/System.Private.CoreLib.dll" ] && echo -sc )${R2R:+-r2r}"
 
 props="${DLR:+-p:DlrSourceDir=$DLR} -p:IronRubyTargetFrameworks=$TFM -p:IronRubyAotHostTfm=$TFM -p:IronRubyR2R=false"
 if [ "$BUILDREFS" = true ]; then
   "$DOTNET" build "$AOT_DIR" -c Release -nologo -v:q -nodeReuse:false $props || exit 1
 else
-  # only the compiler itself: the IronRuby and DLR it runs are the Release build of this tree, and a restore of
-  # their projects with other properties than the build's would rewrite their assets under a running build
-  "$DOTNET" restore "$AOT_DIR" --no-dependencies -nologo -v:q -nodeReuse:false $props &&
+  # only the compiler itself: the IronRuby and DLR it runs are the Release build of this tree. Their assets are
+  # restored for $TFM all the same: the R2R host's publish (Ruby.Console.csproj) restores them for its framework
+  # alone, so after the other framework's publish they lack this one, and the build failed with NETSDK1005.
+  "$DOTNET" restore "$AOT_DIR" -nologo -v:q -nodeReuse:false $props &&
   "$DOTNET" build "$AOT_DIR" -c Release --no-restore -nologo -v:q -nodeReuse:false -p:BuildProjectReferences=false $props || exit 1
 fi
 

@@ -1232,7 +1232,6 @@ namespace IronRuby.Tests {
                 Dlr_DynamicObject2, 
                 Dlr_DynamicObject3, 
 
-                Serialization1,
                 ClrBigIntegerV4,
                 BigInteger1,
                 GcdLcm1,

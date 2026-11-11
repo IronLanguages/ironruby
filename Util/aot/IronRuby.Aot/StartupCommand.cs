@@ -13,7 +13,7 @@ using IronRuby.Runtime.Precompiled;
 
 namespace IronRuby.Aot {
     /// <summary>
-    ///   IronRuby.Aot startup -o dir [--tfm net8.0|net10.0] [--r2r] [--host dir] [--rid rid] [--root dir]
+    ///   IronRuby.Aot startup -o dir [--tfm net10.0|net11.0] [--r2r] [--host dir] [--rid rid] [--root dir]
     ///                        [--crossgen2 path] [--cache dir] (file.rb | @list)...
     ///
     /// Compiles the Ruby code `ir` runs at startup - the core prelude (ruby4.rb), rbconfig, rubygems
@@ -23,8 +23,9 @@ namespace IronRuby.Aot {
     ///
     /// --host names the directory of the ir that is to load the library (default Src/Console/bin/R2R/&lt;tfm&gt;):
     /// the library records the identity of its IronRuby and DLR assemblies and is only used with exactly those.
-    /// --tfm net8.0 retargets the saved assembly's framework references (PersistedAssemblyBuilder writes the running
-    /// .NET 10's) to .NET 8, so the net8.0 host can load it. --r2r runs crossgen2 over it against the host's
+    /// --tfm is the host's framework; the compiler targets the same one, and when it runs on a later runtime (RollForward)
+    /// the saved assembly's framework references (PersistedAssemblyBuilder writes the running runtime's) are retargeted to
+    /// the host's major version, so the host can load it. --r2r runs crossgen2 over it against the host's
     /// assemblies (and, for a framework-dependent host, the installed shared framework of that major version): without
     /// native code its ~16k methods are JIT-compiled at startup. --rid is the host's runtime identifier (default this
     /// machine's); crossgen2 comes from the NuGet cache (microsoft.netcore.app.crossgen2.&lt;rid&gt;) unless --crossgen2
@@ -69,11 +70,15 @@ namespace IronRuby.Aot {
                 }
             }
             if (outDir == null || listed.Count == 0) {
-                Console.Error.WriteLine("usage: IronRuby.Aot startup -o dir [--tfm net8.0|net10.0] [--r2r] [--host dir] [--rid rid] [--root dir] " +
+                Console.Error.WriteLine("usage: IronRuby.Aot startup -o dir [--tfm net10.0|net11.0] [--r2r] [--host dir] [--rid rid] [--root dir] " +
                     "[--crossgen2 path] [--cache dir] (file.rb | @list)...");
                 return 2;
             }
-            int major = tfm == "net8.0" ? 8 : tfm == "net10.0" ? 10 : throw new ArgumentException("--tfm net8.0 or net10.0");
+            var tfmMatch = System.Text.RegularExpressions.Regex.Match(tfm, @"\Anet(\d+)\.0\z");
+            int major = tfmMatch.Success ? int.Parse(tfmMatch.Groups[1].Value) : 0;
+            if (major < 10 || major > Environment.Version.Major) {
+                throw new ArgumentException($"--tfm net10.0 or later, up to this runtime's (net{Environment.Version.Major}.0): not {tfm}");
+            }
             // the portable RID the host is published for (Ruby.Console.csproj: -r linux-x64), not RuntimeIdentifier,
             // which a distribution's own .NET build reports as its distro RID (ubuntu.24.04-x64) - whose crossgen2
             // package nothing restores
