@@ -377,7 +377,8 @@ namespace IronRuby.Builtins {
         }
 
         private static RubyArray/*!*/ ScanParts(MutableString/*!*/ str, bool strict) {
-            ReadOnlySpan<char> text;
+            Span<char> snapshot = stackalloc char[128];
+            ReadOnlySpan<char> text = snapshot;     // (a stack span's scope; it is assigned below)
             if (str.IsBinary) {
                 // Held as bytes, which need not be its characters one for one (invalid or multi-byte
                 // UTF-8): only ASCII characters take part in the scan, and any other byte is just not
@@ -393,11 +394,19 @@ namespace IronRuby.Builtins {
                 ReadOnlySpan<char> chars;
                 ReadOnlySpan<byte> bytes;
                 str.GetCharacterData(out chars, out bytes);
-                text = chars;
+                // The scan reads a snapshot: another thread may change the string meanwhile (there is no GVL),
+                // and a digit turning into an underscore under ReadDigits would back it up past the start. A
+                // short text's snapshot is on the stack.
+                if (chars.Length <= snapshot.Length) {
+                    chars.CopyTo(snapshot);
+                    text = snapshot.Slice(0, chars.Length);
+                } else {
+                    text = chars.ToArray();
+                }
             }
-            // What str2num is to read is made of characters read from the text, each once; a short text's
-            // goes on the stack (it was a StringBuilder, and the text a copy, each on the heap).
-            var scanner = new ComplexScanner(text, text.Length <= 128 ? stackalloc char[text.Length] : new char[text.Length], strict);
+            // What str2num is to read starts in a buffer on the stack (it was a StringBuilder) and grows on the heap
+            // only for a number of more than 128 characters.
+            var scanner = new ComplexScanner(text, stackalloc char[Math.Min(text.Length, 128)], strict);
             return scanner.Parse();
         }
 
@@ -423,8 +432,8 @@ namespace IronRuby.Builtins {
 
             private void Append(char c) {
                 if (_length == _b.Length) {
-                    // not expected - each character is read once - but a full buffer only grows
-                    var larger = new char[_b.Length * 2 + 8];
+                    // each character of the text is read at most once, so the text's length is enough
+                    var larger = new char[Math.Max(_length + 1, (int)Math.Min(_s.Length, _b.Length * 2L + 8))];
                     _b.CopyTo(larger);
                     _b = larger;
                 }
