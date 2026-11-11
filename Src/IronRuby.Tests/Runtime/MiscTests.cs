@@ -2551,9 +2551,10 @@ puts refs.count { |r| r.IsAlive }
                 var set = new System.Threading.ManualResetEventSlim();
                 var done = new System.Threading.ManualResetEventSlim();
                 var t = new System.Threading.Thread(() => {
-                    before = local.Value;
+                    // TryGetValue first: reading Value makes the thread an entry of its own
                     string ignored;
                     foreign = local.TryGetValue(System.Threading.Thread.CurrentThread, out ignored);
+                    before = local.Value;
                     local.Value = "mine" + i;
                     set.Set();
                     done.Wait();
