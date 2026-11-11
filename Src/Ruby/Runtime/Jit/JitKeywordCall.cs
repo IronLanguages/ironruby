@@ -21,6 +21,13 @@
  * answers NoDirect and the call runs exactly as it did before, so the generic body raises
  * whatever ArgumentError there is to raise.
  *
+ * A library method can take such a call too: an overload marked [LibraryKeywordEntry] makes
+ * an entry for the call's shape (Kernel#Integer and #Float for `exception:'), which gets the
+ * same values and answers NoDirect for anything it leaves to the ordinary call - whatever
+ * would raise, above all, so that errors and backtraces come from where they always did.
+ * Its :c_call and :c_return events are the ordinary call's, so while those are traced the
+ * ordinary call is made.
+ *
  * A receiverless call may call a method of any visibility, so resolving the name on the
  * receiver's class with every visibility allowed is what the call site does too. A call with
  * an explicit receiver (other than `self') resolves the name with only public methods visible,
@@ -91,6 +98,8 @@ namespace IronRuby.Runtime.Jit {
             // The literal defaults of the optional positionals the call leaves out (`def m(a, b = 2, k: 1)'
             // called as `m(1, k: 2)'), in the positional slots after the ones it passes; null if none.
             internal object[] OmittedPositionals;
+            // The name resolves to a library method with an entry for this call's shape (LibraryKeywordEntryAttribute).
+            internal LibraryKeywordEntry Library;
         }
 
         private volatile State _state;
@@ -151,6 +160,13 @@ namespace IronRuby.Runtime.Jit {
                 // what the site is waiting for is this resolution's to give
                 _deadCalls = 0;
                 _undecidedCalls = 0;
+            }
+
+            LibraryKeywordEntry library = state.Library;
+            if (library != null) {
+                // The ordinary call reports a library method's :c_call and :c_return (TracePoint.CCallTracing), so
+                // while they are traced it is the one to make.
+                return TracePoint.CCallTracing ? NoDirect : library(self, p0, p1, k0, k1, k2);
             }
 
             JitStub stub = state.Stub;
@@ -218,6 +234,19 @@ namespace IronRuby.Runtime.Jit {
                 // inherited m, still public itself: the forwarder's own visibility is what hides it,
                 // and only a lookup that sees nothing but public methods asks about it.
                 var resolved = cls.ResolveMethod(_name, _publicOnly ? PublicOnly : VisibilityContext.AllVisible);
+                if (resolved.Found && resolved.Info is RubyLibraryMethodInfo) {
+                    // A library entry answers from the first call on, so no ordinary site binds the method and marks it
+                    // as cached in one; unmarked, a change that copies it (private_class_method, `private :m' in a
+                    // subclass) would not bump the method version, and the site would go on calling it. Resolved as a
+                    // site resolves it, it is marked.
+                    using (_context.ClassHierarchyLocker()) {
+                        resolved = cls.ResolveMethodForSiteNoLock(_name, _publicOnly ? PublicOnly : VisibilityContext.AllVisible);
+                    }
+                    if (resolved.Found && resolved.Info is RubyLibraryMethodInfo library) {
+                        state.Library = GetLibraryEntry(library);
+                    }
+                    return state;
+                }
                 var info = resolved.Found ? resolved.Info as RubyMethodInfo : null;
                 if (info == null) { return state; }
 
@@ -257,6 +286,25 @@ namespace IronRuby.Runtime.Jit {
                 state.Stub = null;
             }
             return state;
+        }
+
+        /// <summary>
+        /// The entry the library method makes for this site's call shape (LibraryKeywordEntryAttribute), or null. A user's
+        /// redefinition of the name, a refinement of it or an undef resolves to something else, so it is never called then.
+        /// </summary>
+        private LibraryKeywordEntry GetLibraryEntry(RubyLibraryMethodInfo/*!*/ library) {
+            foreach (var overload in library.Overloads) {
+                var attribute = overload.ReflectionInfo.GetCustomAttribute<LibraryKeywordEntryAttribute>();
+                if (attribute == null) { continue; }
+                var factory = overload.DeclaringType.GetMethod(attribute.Factory, BindingFlags.Public | BindingFlags.Static);
+                if (factory == null) { return null; }
+                var keywords = new string[_keys.Length];
+                for (int i = 0; i < keywords.Length; i++) {
+                    keywords[i] = _keys[i].ToString();
+                }
+                return factory.Invoke(null, new object[] { _context, _positional, keywords }) as LibraryKeywordEntry;
+            }
+            return null;
         }
 
         // ---- compilation of the call ---------------------------------------------------------

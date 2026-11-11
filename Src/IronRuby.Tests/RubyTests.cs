@@ -1268,6 +1268,7 @@ namespace IronRuby.Tests {
                 String_SplitSpaceRegexp1,
                 Integer_OutOfFloatRange1,
                 BasicObject_EqualIdentity1,
+                Kernel_ConversionKeywordEntry1,
             };
         }
     }
