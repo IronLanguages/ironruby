@@ -2505,6 +2505,78 @@ true
 ");
         }
 
+        /// <summary>
+        /// Largo/ironruby#89: a Ruby thread that has finished is collected once nothing refers to it. The DLR's
+        /// ThreadLocal (the interpreter's current frame) used to keep every thread that had run interpreted code
+        /// alive until its array next grew, and with it the CLR's record of the dead thread, which every thread
+        /// exit and every GC suspension walks.
+        /// </summary>
+        public void Thread_FinishedThreadCollected1() {
+            TestOutput(@"
+def spawn
+  Array.new(20) do
+    t = Thread.new { [1, 2].map { |x| x + 1 } }
+    t.join
+    System::WeakReference.new(t)
+  end
+end
+refs = spawn
+3.times { System::GC.Collect; System::GC.WaitForPendingFinalizers }
+puts refs.count { |r| r.IsAlive }
+", @"
+0
+");
+        }
+
+        /// <summary>
+        /// The DLR's ThreadLocal no longer holds the Thread that owns an entry (Largo/ironruby#89), so the
+        /// entry of a finished thread stays behind for a new thread that gets its ManagedThreadId. That thread
+        /// must not see the old value, and another thread's value is still readable while it runs
+        /// (TryGetValue, used for Thread#backtrace).
+        /// </summary>
+        public void Dlr_ThreadLocalOwner1() {
+            var local = new Microsoft.Scripting.Utils.ThreadLocal<string>();
+            WeakReference finished = ThreadLocalOwner_RunAndLeave(local);
+            for (int i = 0; i < 3; i++) {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
+            Assert(!finished.IsAlive, "the ThreadLocal keeps a finished thread alive");
+
+            // Whichever ids they get - the finished thread's among them, once the CLR hands it out again - new
+            // threads start with nothing, and their values are their own.
+            for (int i = 0; i < 20; i++) {
+                string before = "?", after = null;
+                bool foreign = true;
+                var set = new System.Threading.ManualResetEventSlim();
+                var done = new System.Threading.ManualResetEventSlim();
+                var t = new System.Threading.Thread(() => {
+                    before = local.Value;
+                    string ignored;
+                    foreign = local.TryGetValue(System.Threading.Thread.CurrentThread, out ignored);
+                    local.Value = "mine" + i;
+                    set.Set();
+                    done.Wait();
+                });
+                t.Start();
+                set.Wait();
+                Assert(local.TryGetValue(t, out after) && after == "mine" + i, "another thread's value");
+                done.Set();
+                t.Join();
+                Assert(before == null && !foreign, "a new thread saw a finished thread's value");
+            }
+            string main;
+            Assert(!local.TryGetValue(System.Threading.Thread.CurrentThread, out main) && local.Value == null);
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static WeakReference ThreadLocalOwner_RunAndLeave(Microsoft.Scripting.Utils.ThreadLocal<string> local) {
+            var t = new System.Threading.Thread(() => { local.Value = "finished"; });
+            t.Start();
+            t.Join();
+            return new WeakReference(t);
+        }
+
         public void Hash_SelfKey1() {
             TestOutput(@"
 h = { b: 1 }; h[h] = 2

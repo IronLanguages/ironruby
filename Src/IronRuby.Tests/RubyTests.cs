@@ -1065,6 +1065,8 @@ namespace IronRuby.Tests {
                 Thread_JoinSelf1,
                 Thread_InspectLocation1,
                 Thread_IdReuseStartsFresh1,
+                Thread_FinishedThreadCollected1,
+                Dlr_ThreadLocalOwner1,
                 Ractor_Basics1,
                 Ractor_Isolation1,
                 Ractor_Messages1,
