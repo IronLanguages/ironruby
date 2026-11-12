@@ -1733,5 +1733,57 @@ p sym, syms, call(:before)
 [:before, :after]
 ");
         }
+
+        /// <summary>
+        /// A method with keyword parameters but no **rest binds the keywords of a call that passed none from one
+        /// shared empty keyword hash (RubyOps.GetOmittedKeywordArguments) rather than a new one per call. Its
+        /// prologue only reads it: what it binds, the errors it raises - a missing or an unknown keyword, a Hash
+        /// passed positionally, keywords landing in a positional, **nil - and what super and eval("super") pass
+        /// on are as before, in the generic body and in the specialized one, and on several threads at once.
+        /// The output is CRuby 4.0's.
+        /// </summary>
+        public void KeywordsOmitted1() {
+            TestOutput(@"
+require 'ruby4'
+class K
+  def m(a, k: 1, j: a) = [a, k, j]
+  def r(a, k:, j: 2) = [a, k, j]
+  def n(a, **nil) = a
+  def e(k: 1) = k
+end
+class S < K
+  def m(a, k: 5, j: 6) = super
+  def e(k: 7) = [super, eval(""super"")]
+end
+o = K.new; s = S.new
+def try = yield rescue ""#{$!.class}: #{$!.message}""
+60.times do |i|
+  r = [o.m(i), o.m(i, j: 3), s.m(i), o.e, s.e, o.n(i)]
+  p r if i % 30 == 0
+end
+p try { o.r(1) }
+p try { o.m(1, {x: 1}) }
+p try { o.m({k: 2}) }
+p try { o.m(k: 2) }
+p try { o.e(z: 1) }
+p try { o.e({k: 2}) }
+p try { o.n(1, k: 1) }
+p try { o.r(1, {k: 1}) }
+t = 4.times.map { |n| Thread.new { 2000.times.map { |i| o.m(i).sum + o.e }.sum } }
+p t.map(&:value).uniq
+", @"
+[[0, 1, 0], [0, 1, 3], [0, 5, 6], 1, [7, 7], 0]
+[[30, 1, 30], [30, 1, 3], [30, 5, 6], 1, [7, 7], 30]
+""ArgumentError: missing keyword: :k""
+""ArgumentError: wrong number of arguments (given 2, expected 1)""
+[{k: 2}, 1, {k: 2}]
+""ArgumentError: wrong number of arguments (given 0, expected 1)""
+""ArgumentError: unknown keyword: :z""
+""ArgumentError: wrong number of arguments (given 1, expected 0)""
+""ArgumentError: no keywords accepted""
+""ArgumentError: wrong number of arguments (given 2, expected 1; required keyword: k)""
+[4002000]
+");
+        }
     }
 }

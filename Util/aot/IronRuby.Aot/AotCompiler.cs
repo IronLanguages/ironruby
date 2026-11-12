@@ -290,9 +290,25 @@ namespace IronRuby.Aot {
                 if (chunk.Count == 0) return;
                 Count("top-level chunks (SplitTopLevel)");
                 var end = Expression.Label("chunk_end");
-                chunk.Add(Expression.Label(end));
-                var body = Expression.Block(typeof(void), chunk);
-                if (chunkReturns) body = (System.Linq.Expressions.BlockExpression)new ReturnForwarder(returnLabel, returned, returnValue, end).Visit(body);
+                System.Linq.Expressions.BlockExpression body;
+                if (chunkReturns) {
+                    // A return jumps to chunk_returned, where the flag is set: set at the jump, it stayed set when
+                    // an ensure clause on the way out raised and a rescue in the same statement went on (`begin;
+                    // begin; return; ensure; raise; end; rescue; end'), and the top level then returned after the
+                    // chunk, skipping the rest of the file.
+                    var returnedHere = Expression.Label("chunk_returned");
+                    var statementsOfChunk = (System.Linq.Expressions.BlockExpression)new ReturnForwarder(returnLabel, returnValue, returnedHere)
+                        .Visit(Expression.Block(typeof(void), chunk));
+                    body = Expression.Block(typeof(void),
+                        statementsOfChunk,
+                        Expression.Goto(end),
+                        Expression.Label(returnedHere),
+                        Expression.Assign(returned, Expression.Constant(true)),
+                        Expression.Label(end));
+                } else {
+                    chunk.Add(Expression.Label(end));
+                    body = Expression.Block(typeof(void), chunk);
+                }
                 // a call of the delegate's Invoke, not Expression.Invoke, which the compiler inlines into the caller
                 statements.Add(Expression.Call(Expression.Lambda<Action>(body), typeof(Action).GetMethod("Invoke")));
                 if (chunkReturns) statements.Add(Expression.IfThen(returned, Expression.Return(returnLabel, returnValue)));
@@ -303,6 +319,7 @@ namespace IronRuby.Aot {
             for (int i = 0; i < block.Expressions.Count; i++) {
                 var e = block.Expressions[i];
                 var outside = JumpFinder.TargetsOutside(e);
+                bool returns = false;
                 if (outside.Count > 0) {
                     if (returnLabel == null || returnLabel.Type == typeof(void) || outside.Any(t => t != returnLabel)) {
                         Count("top-level statements that jump out, left in place (SplitTopLevel)");
@@ -312,9 +329,13 @@ namespace IronRuby.Aot {
                     }
                     returned ??= Expression.Variable(typeof(bool), "#returned");
                     returnValue ??= Expression.Variable(returnLabel.Type, "#returnValue");
-                    chunkReturns = true;
+                    returns = true;
                 }
                 if (chunkSize > 0 && chunkSize + sizes[i] > SplitChunkNodes) Flush();
+                // Only now, for the chunk the statement goes into: set before the Flush above, the flag went to the chunk
+                // that Flush closed and was cleared with it, and a returning statement that started a chunk kept its jump
+                // to the top level's label, which the chunk's lambda does not define (LabelTargetUndefined).
+                chunkReturns |= returns;
                 chunk.Add(e);
                 chunkSize += sizes[i];
             }
@@ -328,17 +349,16 @@ namespace IronRuby.Aot {
         /// <summary>In a chunk (SplitTopLevel): a jump to the top level's return label notes the value and leaves the chunk.</summary>
         private sealed class ReturnForwarder : ExpressionVisitor {
             private readonly LabelTarget _target, _end;
-            private readonly ParameterExpression _returned, _value;
+            private readonly ParameterExpression _value;
 
-            public ReturnForwarder(LabelTarget target, ParameterExpression returned, ParameterExpression value, LabelTarget end) {
-                _target = target; _returned = returned; _value = value; _end = end;
+            public ReturnForwarder(LabelTarget target, ParameterExpression value, LabelTarget end) {
+                _target = target; _value = value; _end = end;
             }
 
             protected override Expression VisitGoto(GotoExpression node) {
                 if (node.Target != _target) return base.VisitGoto(node);
                 return Expression.Block(typeof(void),
                     Expression.Assign(_value, node.Value != null ? Visit(node.Value) : Expression.Default(_value.Type)),
-                    Expression.Assign(_returned, Expression.Constant(true)),
                     Expression.Return(_end));
             }
 

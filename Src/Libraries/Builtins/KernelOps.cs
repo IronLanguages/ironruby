@@ -1173,6 +1173,9 @@ namespace IronRuby.Builtins {
         [RubyMethod("raise", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("fail", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("fail", RubyMethodAttributes.PublicSingleton)]
+        // What the errors the compiler raises itself call (PrismAstBridge.KernelRaise): a name of its own, so that
+        // a program's `def Kernel.raise' does not get to swallow an unknown keyword or a failed pattern match.
+        [RubyMethod("__ir_raise__", RubyMethodAttributes.PublicSingleton)]
         [RubyStackTraceHidden]
         [ReceivesKeywords]
         public static void RaiseException(RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ storage0, BinaryOpStorage/*!*/ storage1,

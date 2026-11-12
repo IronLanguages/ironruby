@@ -15,6 +15,7 @@
 
 using System;
 using System.Numerics;
+using Microsoft.Scripting;
 using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
 using System.Reflection;
@@ -284,10 +285,24 @@ namespace IronRuby.Builtins {
             if (self == other) {
                 return true;
             }
-            return Protocols.IsEqual(equals, self.Begin, other.Begin)
-                && Protocols.IsEqual(equals, self.End, other.End)
-                && self.ExcludeEnd == other.ExcludeEnd;
+            // A comparison that comes back to the same two ranges answers true there, as MRI's
+            // (rb_exec_recursive_paired in range_eq): ranges that contain themselves used to
+            // overflow the stack.
+            using (IDisposable handle = _EqualsTracker.TrackPair(self, other)) {
+                if (handle == null) {
+                    return true;
+                }
+                return Protocols.IsEqual(equals, self.Begin, other.Begin)
+                    && Protocols.IsEqual(equals, self.End, other.End)
+                    && self.ExcludeEnd == other.ExcludeEnd;
+            }
         }
+
+        [MultiRuntimeAware]
+        private static readonly RubyUtils.PairRecursionTracker _EqualsTracker = new RubyUtils.PairRecursionTracker();
+
+        [MultiRuntimeAware]
+        private static readonly RubyUtils.PairRecursionTracker _EqlTracker = new RubyUtils.PairRecursionTracker();
 
         /// <summary>
         /// Returns true only if self is a Range, has equivalent beginning and end items (by comparing them with eql?),
@@ -305,10 +320,15 @@ namespace IronRuby.Builtins {
                 return true;
             }
 
-            var site = equalsStorage.GetCallSite("eql?");
-            return Protocols.IsTrue(site.Target(site, self.Begin, other.Begin))
-                && Protocols.IsTrue(site.Target(site, self.End, other.End))
-                && self.ExcludeEnd == other.ExcludeEnd;
+            using (IDisposable handle = _EqlTracker.TrackPair(self, other)) {
+                if (handle == null) {
+                    return true;
+                }
+                var site = equalsStorage.GetCallSite("eql?");
+                return Protocols.IsTrue(site.Target(site, self.Begin, other.Begin))
+                    && Protocols.IsTrue(site.Target(site, self.End, other.End))
+                    && self.ExcludeEnd == other.ExcludeEnd;
+            }
         }
 
         #endregion
@@ -578,13 +598,23 @@ namespace IronRuby.Builtins {
         public static int GetHashCode(UnaryOpStorage/*!*/ hashStorage, Range/*!*/ self) {
             // MRI: Ruby treatment of hash return value is inconsistent. 
             // No conversions happen here (unlike e.g. Array.hash).
-            var hashSite = hashStorage.GetCallSite("hash");
-            return unchecked(
-                Protocols.ToHashCode(hashSite.Target(hashSite, self.Begin)) ^
-                Protocols.ToHashCode(hashSite.Target(hashSite, self.End)) ^ 
-                (self.ExcludeEnd ? 179425693 : 1794210891)
-            );
+            // A range that contains itself (Marshal.load can make one) hashes without its ends where it comes
+            // back to itself, as MRI's recursive_hash: asking them again overflowed the stack.
+            using (IDisposable handle = _HashTracker.TrackObject(self)) {
+                if (handle == null) {
+                    return self.ExcludeEnd ? 179425693 : 1794210891;
+                }
+                var hashSite = hashStorage.GetCallSite("hash");
+                return unchecked(
+                    Protocols.ToHashCode(hashSite.Target(hashSite, self.Begin)) ^
+                    Protocols.ToHashCode(hashSite.Target(hashSite, self.End)) ^ 
+                    (self.ExcludeEnd ? 179425693 : 1794210891)
+                );
+            }
         }
+
+        [MultiRuntimeAware]
+        private static readonly RubyUtils.RecursionTracker _HashTracker = new RubyUtils.RecursionTracker();
 
         #endregion
 

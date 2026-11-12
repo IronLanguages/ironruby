@@ -94,7 +94,7 @@ rebuild, a `.cs` change does.
 
 ## Tests
 
-**IronRuby.Tests** (`Src/IronRuby.Tests`), about 1,090 tests, run on every CI job:
+**IronRuby.Tests** (`Src/IronRuby.Tests`), about 1,240 tests, run on every CI job:
 
 ```sh
 dotnet build Src/IronRuby.Tests/IronRuby.Tests.csproj -p:IronRubyTargetFrameworks=net10.0
@@ -125,7 +125,7 @@ DOTNET_ROOT=... IR_TFM=net10.0 ./ir.sh -Imspec/lib mspec/bin/mspec-run spec/core
 Util/parallel-sweep.sh out [baseline_out]    # core, library, language, command_line, security
 ```
 
-- CI runs only `spec/language`. For a change with a wide reach, sweep the branch and a master
+- CI runs only `spec/language`, the nightly sweep (below) all of it. For a change with a wide reach, sweep the branch and a master
   build and compare (`parallel-sweep.sh new master-out` lists new and fixed failures).
   A job the summary reports without an mspec summary line (it crashed or hung) leaves its
   examples out of the counts: resolve those in both sweeps before trusting the comparison.
@@ -134,6 +134,18 @@ Util/parallel-sweep.sh out [baseline_out]    # core, library, language, command_
 - Timing-sensitive examples flip between runs under the sweep's parallel load (e.g.
   `Timeout.timeout ... if message is nil`). Rerun the file alone before believing a "new" one.
 - Do not rebuild while a sweep runs: it measures the in-place build.
+
+**Nightly sweep** (`.github/workflows/spec-sweep.yml`): all five suites on net10.0 every night
+(by hand: `gh workflow run spec-sweep.yml -f tfms=both`), with ci.yml's pins, through
+`Util/ci-sweep.sh` (parallel-sweep, then crashed or hung jobs file by file, then new failures
+rerun alone). It fails on a failing example not in `Util/spec-known-failures.txt`, on a file
+with no mspec summary line, and on a missing shard; a listed example that passes is a warning.
+
+- `Util/spec-known-failures.txt` is one `<suite> <example>` per line, the name as mspec prints
+  it; `flaky <suite> <example>` may pass or fail. Every entry sits under a comment saying why.
+- A fix that makes a listed example pass removes its line in the same commit. The job summary
+  prints new and fixed examples in the file's format, ready to paste.
+- The same check on a sweep of your own: `Util/ci-sweep.sh out && ruby Util/sweep-check.rb out`.
 
 ## Generated code
 

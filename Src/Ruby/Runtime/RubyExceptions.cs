@@ -339,7 +339,7 @@ namespace IronRuby.Runtime {
             //   [1,:b].max => "comparison of Integer with :b failed"
             // An anonymous class has no name; MRI prints it the way #inspect does (#<Class:0x...>).
             // the receiver is always named by class, so nil <=> 1 is "comparison of NilClass with 1 failed"
-            string selfClass = context.GetClassOf(self).GetNonNullName(context);
+            string selfClass = ComparisonClassName(context, self);
             // An Integer is immediate in MRI only while it is a Fixnum (62 bits); a Bignum is
             // spelled by class like any other object.
             string otherClass;
@@ -349,12 +349,27 @@ namespace IronRuby.Runtime {
                 try {
                     otherClass = context.Inspect(other).ToString();
                 } catch (Exception) {
-                    otherClass = MessageTypeName(context.GetClassOf(other).GetNonNullName(context));
+                    otherClass = MessageTypeName(ComparisonClassName(context, other));
                 }
             } else {
-                otherClass = MessageTypeName(context.GetClassOf(other).GetNonNullName(context));
+                otherClass = MessageTypeName(ComparisonClassName(context, other));
             }
             return CreateArgumentError("comparison of {0} with {1} failed", selfClass, otherClass);
+        }
+
+        // MRI formats the class with PRIsVALUE, which asks it for #to_s: an anonymous class that says what it is
+        // (EnvUtil.labeled_class) is named by what it says rather than as #<Class:0x...>.
+        private static string/*!*/ ComparisonClassName(RubyContext/*!*/ context, object obj) {
+            RubyClass cls = context.GetClassOf(obj);
+            if (cls.Name == null) {
+                try {
+                    var toS = context.GetClassOf(cls).InspectResultConversionSite;
+                    return toS.Target(toS, cls).ToString();
+                } catch (Exception) {
+                    // fall back to the display name
+                }
+            }
+            return cls.GetNonNullName(context);
         }
 
         private static readonly BigInteger FixnumMax = BigInteger.Pow(2, 62) - 1;

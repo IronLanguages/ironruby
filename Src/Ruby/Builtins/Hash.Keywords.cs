@@ -51,11 +51,21 @@ namespace IronRuby.Builtins {
         /// </summary>
         internal static Hash/*!*/ CreateUnlinked(IEqualityComparer<object>/*!*/ comparer, int capacity) {
             var result = new Hash(comparer, 0);
+            if (capacity <= SmallUnlinkedSize) {
+                // every keyword call with up to three keywords: no prime table walk and no 64-bit division
+                result._entries = new Entry[SmallUnlinkedSize];
+                result._fastModMultiplier = SmallUnlinkedMultiplier;
+                return result;
+            }
             int size = GetPrime(capacity);
             result._entries = new Entry[size];
             result._fastModMultiplier = UInt64.MaxValue / (uint)size + 1;
             return result;
         }
+
+        // GetPrime's answer for up to three keys, and the FastMod multiplier that goes with it.
+        private const int SmallUnlinkedSize = 3;
+        private const ulong SmallUnlinkedMultiplier = UInt64.MaxValue / SmallUnlinkedSize + 1;
 
         /// <summary>
         /// Adds a Symbol key to a hash made by <see cref="CreateKeywordArguments"/>, within the

@@ -93,7 +93,9 @@ namespace IronRuby.Runtime {
             if (value >= Int32.MinValue && value <= Int32.MaxValue) {
                 return GetFixnumHashCode((int)value);
             }
-            return MixHash(unchecked((uint)value ^ (uint)(value >> 32)) + 0x7feb352d);
+            // The low half is keyed before the high half is added: folded together first, every (n << 32) + n
+            // had the same hash under any key.
+            return MixHash(unchecked((uint)MixHash((uint)value) + (uint)(value >> 32) + 0x7feb352d));
         }
 
         public static int GetIntegerHashCode(BigInteger value) {
@@ -101,7 +103,22 @@ namespace IronRuby.Runtime {
             if (value.AsInt64(out small)) {
                 return GetIntegerHashCode(small);
             }
-            return value.GetHashCode();
+            // A bignum's words go through the keyed mix one by one: BigInteger.GetHashCode is not keyed, so
+            // bignums that collide in it could be computed ahead of time (CVE-2011-4815 again), and they are what
+            // Rational#hash and Complex#hash are made of.
+            byte[] bytes = value.ToByteArray();
+            uint h = 0x7feb352d;
+            unchecked {
+                int i = 0;
+                for (; i + 4 <= bytes.Length; i += 4) {
+                    h = (uint)MixHash(h + BitConverter.ToUInt32(bytes, i));
+                }
+                uint tail = 0;
+                for (int shift = 0; i < bytes.Length; i++, shift += 8) {
+                    tail |= (uint)bytes[i] << shift;
+                }
+                return MixHash(h + tail + (uint)bytes.Length);
+            }
         }
 
         public static int GetFloatHashCode(double value) {
@@ -1231,6 +1248,63 @@ namespace IronRuby.Runtime {
 
                 public void Dispose() {
                     _tracker.Remove(_obj);
+                }
+            }
+        }
+
+        /// <summary>
+        /// A <see cref="RecursionTracker"/> for operations on two objects (==, eql?), MRI's rb_exec_recursive_paired:
+        /// the operation has recursed only when it comes back to the same two operands in the same order. Tracking each
+        /// operand by itself would call `a == d' a repeat inside `a == b' and `c == d', though that pair was never compared.
+        /// </summary>
+        public class PairRecursionTracker {
+            private sealed class PairComparer : IEqualityComparer<KeyValuePair<object, object>> {
+                public bool Equals(KeyValuePair<object, object> x, KeyValuePair<object, object> y) {
+                    return Same(x.Key, y.Key) && Same(x.Value, y.Value);
+                }
+
+                public int GetHashCode(KeyValuePair<object, object> pair) {
+                    return unchecked(Hash(pair.Key) * 31 + Hash(pair.Value));
+                }
+
+                // An Integer or a Float is its value: each boxing of one outside the cache of small integers is a new
+                // object, and an operand that came back in a new box would never be recognized (Integer#& with a
+                // #coerce that hands 1000 back recursed until the stack overflowed).
+                private static bool Same(object x, object y) {
+                    return ReferenceEquals(x, y) || (x is ValueType && x.Equals(y));
+                }
+
+                private static int Hash(object obj) {
+                    return obj is ValueType ? obj.GetHashCode() : RuntimeHelpers.GetHashCode(obj);
+                }
+            }
+
+            // per thread, as in RecursionTracker
+            private readonly System.Threading.ThreadLocal<HashSet<KeyValuePair<object, object>>>/*!*/ _pairs =
+                new System.Threading.ThreadLocal<HashSet<KeyValuePair<object, object>>>(
+                    () => new HashSet<KeyValuePair<object, object>>(new PairComparer()));
+
+            /// <summary>
+            /// Marks the pair as being inside the operation on this thread until the result is disposed.
+            /// Null if it already is.
+            /// </summary>
+            public IDisposable TrackPair(object first, object second) {
+                var pairs = _pairs.Value;
+                var pair = new KeyValuePair<object, object>(first, second);
+                return pairs.Add(pair) ? new PairHandle(pairs, pair) : null;
+            }
+
+            private sealed class PairHandle : IDisposable {
+                private readonly HashSet<KeyValuePair<object, object>>/*!*/ _pairs;
+                private readonly KeyValuePair<object, object> _pair;
+
+                internal PairHandle(HashSet<KeyValuePair<object, object>>/*!*/ pairs, KeyValuePair<object, object> pair) {
+                    _pairs = pairs;
+                    _pair = pair;
+                }
+
+                public void Dispose() {
+                    _pairs.Remove(_pair);
                 }
             }
         }
