@@ -1683,7 +1683,7 @@ class String
   # encoding: and capacity: are the constructor's. MRI's rb_str_init takes them in
   # #initialize too, as a subclass's super or a call through #send does: the keywords and
   # the argument are checked first, then a frozen receiver is a FrozenError, and the string
-  # is emptied when there is nothing to copy (capacity is only a size hint).
+  # is emptied when a capacity comes with nothing to copy (capacity is only a size hint).
   alias_method :__ir_initialize__, :initialize
   private :__ir_initialize__
 
@@ -1699,16 +1699,32 @@ class String
     end
     encoding = opts[:encoding]
     encoding = ::Encoding.find(encoding) unless encoding.nil? || encoding.is_a?(::Encoding)
-    ::Math.__send__(:__int__, opts[:capacity]) unless opts[:capacity].nil?
-    unless args.empty? || args[0].is_a?(::String)
-      converted = args[0].respond_to?(:to_str) ? args[0].to_str : nil
-      unless converted.is_a?(::String)
+    # NUM2LONG: a #to_int that answers something else is a TypeError, and a bignum does not fit.
+    capacity = opts[:capacity]
+    unless capacity.nil?
+      capacity = ::Math.__send__(:__int__, capacity)
+      capacity = ::Integer.try_convert(opts[:capacity]) unless ::Integer === capacity
+      unless capacity >= -0x8000_0000_0000_0000 && capacity <= 0x7fff_ffff_ffff_ffff
+        ::Kernel.raise(::RangeError, "bignum too big to convert into 'long'")
+      end
+    end
+    # The conversion String.new makes without keywords (rb_check_string_type): #to_str is
+    # called whether it is private or the object a BasicObject.
+    unless args.empty? || ::String === args[0]
+      converted = ::String.try_convert(args[0])
+      if converted.nil?
         ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_type_name__(args[0])} into String")
       end
       args = [converted]
     end
     ::Kernel.raise(::FrozenError.new("can't modify frozen String: #{inspect}", receiver: self)) if frozen?
-    args.empty? ? clear : __ir_initialize__(args[0])
+    # Only a capacity empties a string that is given nothing to copy: encoding: alone, or
+    # capacity: nil, leaves the bytes and changes the encoding.
+    if !args.empty?
+      __ir_initialize__(args[0])
+    elsif !capacity.nil?
+      clear
+    end
     force_encoding(encoding) if encoding
     self
   end

@@ -15,10 +15,9 @@
 warn "#{__FILE__}: warning: callcc is obsolete; use Fiber instead"
 
 class Continuation
-  # The state of each continuation, kept out of its instance variables:
-  # [thread, fiber, live?].
-  STATE__ = ObjectSpace::WeakMap.new
-  __hide_constant__ :STATE__
+  # The state of each continuation is [thread, fiber, live?] in a hidden instance variable,
+  # out of #instance_variables. Not an ObjectSpace::WeakMap entry: that holds its values
+  # weakly too, and the array had no other reference to keep it.
 
   class << self
     alias_method :__ir_allocate__, :allocate
@@ -33,11 +32,11 @@ class Continuation
     # the block finishes.
     private def __ir_callcc__
       cont = __ir_allocate__
-      STATE__[cont] = [Thread.current, Fiber.current, true]
+      cont.__send__(:__ir_set_hidden_ivar__, :@__state__, [Thread.current, Fiber.current, true])
       begin
         catch(cont) { yield cont }
       ensure
-        STATE__[cont] = [Thread.current, Fiber.current, false]
+        cont.__send__(:__ir_set_hidden_ivar__, :@__state__, [Thread.current, Fiber.current, false])
       end
     end
   end
@@ -46,7 +45,7 @@ class Continuation
   # Makes the callcc that created this continuation return args (nil for none,
   # the value itself for one, an array for more).
   def call(*args)
-    thread, fiber, live = STATE__[self]
+    thread, fiber, live = __ir_hidden_ivar__(:@__state__)
     raise RuntimeError, 'continuation called across threads' unless thread.equal?(Thread.current)
     raise RuntimeError, 'continuation called across fiber' unless fiber.equal?(Fiber.current)
     unless live
