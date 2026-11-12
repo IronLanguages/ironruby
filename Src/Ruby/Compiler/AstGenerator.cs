@@ -253,6 +253,11 @@ namespace IronRuby.Compiler.Ast {
             // The line of the last statement given a TracePoint :line hook in this scope's code.
             internal int LastTracedLine;
 
+            // The scope's code is a lambda of its own in a compiled frame of its own (CompiledFrameExpression): a method's, a
+            // block's or a file's. Not a module body's, whose lambda is invoked in place - the DLR compiles it into the method
+            // of the code around it - while its frame record has a name of its own.
+            internal bool HasOwnCompiledFrame;
+
             public ScopeBuilder/*!*/ Builder {
                 get { return _builder; }
             }
@@ -555,6 +560,16 @@ namespace IronRuby.Compiler.Ast {
         // runtime scope variable of the current variable scope:
         public MSA.ParameterExpression/*!*/ CurrentScopeVariable {
             get { return _currentVariableScope.RuntimeScopeVariable; }
+        }
+
+        /// <summary>
+        /// The index of the current frame's record in PrecompiledFrames, an int: the frame's own once compiled
+        /// (CompiledFrameExpression), -1 where it has none or it is not known - interpreted, saved ahead of time, a module body.
+        /// </summary>
+        internal MSA.Expression/*!*/ CurrentCompiledFrameDepth {
+            get {
+                return _currentVariableScope.HasOwnCompiledFrame ? (MSA.Expression)new CompiledFrameDepthExpression() : AstUtils.Constant(-1);
+            }
         }
 
         // inner-most scope builder:

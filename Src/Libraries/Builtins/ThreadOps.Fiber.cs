@@ -472,7 +472,7 @@ namespace IronRuby.Builtins {
                 return Switch(target, FiberMessage.YieldKind, PackArguments(args), false);
             }
 
-            private static object PackArguments(RubyArray args) {
+            internal static object PackArguments(RubyArray args) {
                 return args.Count == 0 ? null : args.Count == 1 ? args[0] : args;
             }
 
@@ -568,7 +568,7 @@ namespace IronRuby.Builtins {
         /// none is parked (the fiber then gets a new thread).
         /// </summary>
         [RubyMethod("__fiber_reuse__", RubyMethodAttributes.PublicSingleton)]
-        public static Thread ReuseFiberThread(object self, object fiber) {
+        public static Thread ReuseFiberThread(RubyContext/*!*/ context, object self, object fiber) {
             FiberWorker worker;
             while (true) {
                 using (new RubyUtils.UninterruptedLock(_idleFiberWorkers)) {
@@ -589,6 +589,9 @@ namespace IronRuby.Builtins {
             RubyThreadInfo creator = RubyThreadInfo.FromThread(Thread.CurrentThread);
             info.Group = creator.Group;
             info.Ractor = creator.Ractor;
+            // The pool is the process's, and the thread may have been parked by another runtime: it
+            // belongs to this one now, whose end kills it (TerminateAllThreads) and no other's.
+            info.Context = context;
             info.IsIdleFiberWorker = false;
             worker.Jobs.Post(fiber);
             return worker.Thread;
@@ -600,7 +603,7 @@ namespace IronRuby.Builtins {
         /// time, or the program is ending).
         /// </summary>
         [RubyMethod("__fiber_park__", RubyMethodAttributes.PublicSingleton)]
-        public static object ParkFiberThread(object self) {
+        public static object ParkFiberThread(RubyContext/*!*/ context, object self) {
             Thread current = Thread.CurrentThread;
             IronRuby.StandardLibrary.Threading.RubyMutex.ReleaseLocksOf(current);
             // A Thread#raise that reached the fiber as it finished belongs to the fiber now running
@@ -623,7 +626,7 @@ namespace IronRuby.Builtins {
 
             FiberWorker worker = _fiberWorker ?? (_fiberWorker = new FiberWorker(current));
             using (new RubyUtils.UninterruptedLock(_idleFiberWorkers)) {
-                if (_terminating || _idleFiberWorkers.Count >= MaxIdleFiberWorkers) {
+                if (IsTerminating(context) || _idleFiberWorkers.Count >= MaxIdleFiberWorkers) {
                     return null;
                 }
                 info.IsIdleFiberWorker = true;
@@ -720,6 +723,46 @@ namespace IronRuby.Builtins {
         public static object FiberCorePost(object self, [NotNull]FiberCore/*!*/ core, int kind, object payload) {
             core.Post(kind, payload);
             return null;
+        }
+
+        /// <summary>
+        /// Begins a fiber switch: interrupts are held (RubyUtils.HoldInterrupts) while the switch's
+        /// bookkeeping runs in Ruby - who resumed whom, the target's thread (Fiber#resume,
+        /// Fiber.yield... in ruby4.rb) - until <see cref="FiberSwitch"/> hands control over. Every Ruby
+        /// method entry in the bookkeeping is a safe point, and a Thread#raise raised at one of them
+        /// left it half done: a fiber that took it in Fiber.yield after letting go of its resumer, but
+        /// before the resumer had let go of it, finished by handing control to itself, and its thread
+        /// waited in Fiber#resume for ever. Held, the exception is parked until the switch, which
+        /// hands it on with control (FiberCore.MakeRunning): MRI raises it once the switch is done,
+        /// too. Answers the hold, for __fiber_switch__ - and for __fiber_unhold__, which the caller's
+        /// rescue calls should the bookkeeping fail.
+        /// </summary>
+        [RubyMethod("__fiber_hold__", RubyMethodAttributes.PublicSingleton)]
+        public static int HoldFiberSwitch(object self) {
+            return RubyUtils.HoldInterrupts();
+        }
+
+        [RubyMethod("__fiber_unhold__", RubyMethodAttributes.PublicSingleton)]
+        public static object ReleaseFiberSwitchHold(object self, int hold) {
+            RubyUtils.ReleaseInterrupts(hold);
+            return null;
+        }
+
+        /// <summary>
+        /// Ends the hold <paramref name="hold"/> (<see cref="HoldFiberSwitch"/>) and hands control from
+        /// <paramref name="current"/> to <paramref name="target"/>, as FiberCore.Switch; answers the
+        /// message that brings it back. Nothing between the end of the hold and the handing over is a
+        /// safe point.
+        /// </summary>
+        [RubyMethod("__fiber_switch__", RubyMethodAttributes.PublicSingleton)]
+        public static object FiberSwitch(object self, [NotNull]FiberCore/*!*/ current, [NotNull]FiberCore/*!*/ target,
+            int kind, object payload, bool resumed, int hold) {
+
+            RubyUtils.ReleaseInterrupts(hold);
+            if (kind == FiberCore.FiberMessage.YieldKind) {
+                payload = FiberCore.PackArguments((RubyArray)payload);
+            }
+            return current.Switch(target, kind, payload, resumed);
         }
 
         [RubyMethod("__fiber_post__", RubyMethodAttributes.PublicSingleton)]

@@ -235,6 +235,7 @@ namespace IronRuby.Compiler.Ast {
             // Blocks written inside this method are labelled "block in <this frame's label>",
             // so they need the qualified form rather than the bare method name.
             gen.CurrentMethod.FrameLabel = frameLabel;
+            gen.CurrentMethod.HasOwnCompiledFrame = true;
 
             // profiling:
             MSA.Expression profileStart = AstUtils.Empty();

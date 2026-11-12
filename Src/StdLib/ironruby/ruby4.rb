@@ -2634,9 +2634,17 @@ unless defined?(Fiber)
         Fiber.__err__(::FiberError, "attempt to resume a resuming fiber") if @resuming
         # suspended by #transfer rather than Fiber.yield: only a transfer can go back to it
         Fiber.__err__(::FiberError, "attempt to resume a transferring fiber") if @thread && !@yielded
-        @prev = cur
-        cur.__set_resuming__(self)
-        State.__switch__(cur, self, MSG_RESUME, args)
+        held = ::Thread.__fiber_hold__
+        begin
+          __start__
+          @prev = cur
+          cur.__set_resuming__(self)
+          msg = ::Thread.__fiber_switch__(cur.__core__, @core, MSG_RESUME, args, false, held)
+        rescue ::Exception
+          ::Thread.__fiber_unhold__(held)
+          ::Kernel.raise
+        end
+        cur.__act__(msg)
       end
 
       ruby2_keywords def transfer(*args)
@@ -2646,8 +2654,17 @@ unless defined?(Fiber)
         Fiber.__err__(::FiberError, "attempt to transfer to a resuming fiber") if @resuming
         Fiber.__err__(::FiberError, "attempt to transfer to a yielding fiber") if @yielded
         Fiber.__err__(::FiberError, "dead fiber called") unless @alive
-        cur.__set_transferred__
-        State.__switch__(cur, self, MSG_TRANSFER, args)
+        resumed = cur.__resumed__
+        held = ::Thread.__fiber_hold__
+        begin
+          __start__
+          cur.__set_transferred__
+          msg = ::Thread.__fiber_switch__(cur.__core__, @core, MSG_TRANSFER, args, resumed, held)
+        rescue ::Exception
+          ::Thread.__fiber_unhold__(held)
+          ::Kernel.raise
+        end
+        cur.__act__(msg)
       end
 
       def kill
@@ -2673,8 +2690,7 @@ unless defined?(Fiber)
         # throw happens as soon as control comes back to it (MRI does the same).
         return self if @resuming
 
-        __adopt__(cur)
-        State.__switch__(cur, self, MSG_KILL)
+        cur.__act__(__adopt_and_switch__(cur, MSG_KILL, nil))
         self
       end
 
@@ -2697,8 +2713,18 @@ unless defined?(Fiber)
         __check_thread__(cur)
         Fiber.__err__(::FiberError, "attempt to resume a terminated fiber") unless @alive
         Fiber.__err__(::FiberError, "cannot raise exception on unborn fiber") unless @thread
-        __adopt__(cur)
-        State.__switch__(cur, self, MSG_RAISE, exc)
+        cur.__act__(__adopt_and_switch__(cur, MSG_RAISE, exc))
+      end
+
+      def __adopt_and_switch__(cur, kind, payload)
+        held = ::Thread.__fiber_hold__
+        begin
+          __adopt__(cur)
+          ::Thread.__fiber_switch__(cur.__core__, @core, kind, payload, false, held)
+        rescue ::Exception
+          ::Thread.__fiber_unhold__(held)
+          ::Kernel.raise
+        end
       end
 
       # ---- class methods ---------------------------------------------------
@@ -2766,11 +2792,24 @@ unless defined?(Fiber)
 
       # ---- the switch ------------------------------------------------------
 
-      # Hands control from `cur` to `target` and blocks until control comes back.
-      def self.__switch__(cur, target, kind, payload = nil)
-        target.__start__
-        cur.__act__(cur.__core__.switch(target.__core__, kind, payload, cur.__resumed__))
-      end
+      # Every switch hands control from `cur` to `target` and blocks until control comes back:
+      #
+      #   held = ::Thread.__fiber_hold__
+      #   begin
+      #     bookkeeping
+      #     msg = ::Thread.__fiber_switch__(cur's core, target's core, kind, payload, cur resumed?, held)
+      #   rescue ::Exception
+      #     ::Thread.__fiber_unhold__(held)
+      #     ::Kernel.raise
+      #   end
+      #
+      # The bookkeeping records who resumed whom and starts the target's thread (#__start__). It
+      # runs with interrupts held, so that a Thread#raise cannot leave it half done; the switch
+      # ends the hold just before it hands control over, and the rescue should anything fail
+      # before that (ThreadOps.HoldFiberSwitch) - re-raising with ::Kernel.raise, since a bare
+      # `raise` here is State#raise, Fiber#raise. The checks come before the hold, and #__start__
+      # (a thread that cannot be had) before the rest of the bookkeeping. Not a block passed to
+      # the switch: the closure cost most of what a switch's Ruby side costs.
 
       # A fiber runs on a thread of its own: one whose last fiber has finished if one is
       # parked (Thread.__fiber_reuse__, ThreadOps.Fiber.cs), a new one otherwise. A thread
@@ -2821,10 +2860,18 @@ unless defined?(Fiber)
         if @root || target.nil?
           Fiber.__err__(::FiberError, "attempt to yield on a not resumed fiber")
         end
-        @prev = nil
-        target.__set_resuming__(nil)
-        @yielded = true
-        msg = @core.yield(target.__core__, args)
+        held = ::Thread.__fiber_hold__
+        begin
+          @prev = nil
+          target.__set_resuming__(nil)
+          @yielded = true
+          msg = ::Thread.__fiber_switch__(@core, target.__core__, MSG_YIELD, args, false, held)
+        rescue ::Exception
+          ::Thread.__fiber_unhold__(held)
+          # also when the switch raises a Thread#raise as control comes back: the fiber runs
+          @yielded = false
+          ::Kernel.raise
+        end
         @yielded = false
         __act__(msg)
       end
