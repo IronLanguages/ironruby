@@ -1,0 +1,206 @@
+# Cross-checks Kernel#Integer, #Float, #Rational and #Complex against CRuby.
+#
+#   ruby     Util/numeric-conversion-matrix.rb > /tmp/cruby.txt
+#   ./ir.sh  Util/numeric-conversion-matrix.rb > /tmp/ir.txt
+#   diff -u  /tmp/cruby.txt /tmp/ir.txt | grep -c '^-'
+#
+# Same shape as Util/format-matrix.rb, Util/file-path-matrix.rb and
+# Util/pack-matrix.rb: every case prints a *literal* label, so a diff line names
+# exactly which input disagrees, and nothing in the harness depends on the code
+# under test (no #inspect of the result, no nested conversion).
+#
+# These four share one surface - a string grammar, a base, and a coercion
+# protocol over #to_int/#to_i/#to_str/#to_f/#to_r/#to_c - which is why they are
+# checked together: a rule fixed in one is usually wrong in the others too.
+#
+# The result of an integer conversion is reported as "(Integer)" whatever
+# IronRuby's concrete class is: Fixnum/Bignum vs Integer belongs to the parked
+# unification branch and would otherwise bury every real difference.
+#
+# Expected differences: none.  Every line that differs is a bug.
+
+def show(label, &block)
+  result =
+    begin
+      value = block.call
+      case value
+      when nil     then "nil"
+      # Fixnum/Bignum vs Integer is the parked unification branch's business, so
+      # the class name is normalised rather than reported as a difference here.
+      when Integer then "#{value} (Integer)"
+      when Float   then (value.nan? ? "NaN" : value.to_s) + " (Float)"
+      else "#{value} (#{value.class})"
+      end
+    rescue Exception => e
+      "#{e.class}: #{e.message.gsub(/0x[0-9a-f]+/, '0xXX')}"
+    end
+  puts "#{label} => #{result}"
+end
+
+# --------------------------------------------------------------------------
+# String inputs.  The grammar is the interesting part: signs, underscores,
+# whitespace, base prefixes, empty and malformed text.
+# --------------------------------------------------------------------------
+
+STRINGS = [
+  "0", "1", "-1", "+1", "10", "-10", "007", "0009",
+  " 1", "1 ", "  1  ", "\t1\n", "\n", " ", "",
+  "1_000", "1__0", "_1", "1_", "10_", "1_0_0",
+  "0x1f", "0X1F", "-0x1f", "0b101", "0B101", "0o17", "0O17", "017", "0",
+  "0d99", "0D99", "0xg", "0b2", "0o8", "09",
+  "abc", "1abc", "abc1", "1.5", "1e3", "1.0e3", ".5", "5.", "1/2", "2+3i",
+  "--1", "++1", "+-1", "-", "+", "1-", "1+",
+  "0x", "0b", "0o", "0d",
+  "\u00A0" + "1", "1\x00", "1\x002",
+  "1000000000000000000000000000000", "-1000000000000000000000000000000",
+  "Infinity", "NaN", "inf", "nan",
+]
+
+BASES = [nil, 0, 2, 8, 10, 16, 36, 1, 37, -1]
+
+STRINGS.each do |text|
+  BASES.each do |base|
+    label = "Integer #{text.inspect} base=#{base.inspect}"
+    if base.nil?
+      show(label) { Integer(text) }
+    else
+      show(label) { Integer(text, base) }
+    end
+  end
+
+  # exception: false turns every one of those errors into nil.
+  show("Integer-noexc #{text.inspect}") { Integer(text, exception: false) }
+  show("Float #{text.inspect}")         { Float(text) }
+  show("Float-noexc #{text.inspect}")   { Float(text, exception: false) }
+  show("Rational #{text.inspect}")      { Rational(text) }
+  show("Complex #{text.inspect}")       { Complex(text) }
+  show("Complex-noexc #{text.inspect}") { Complex(text, exception: false) }
+end
+
+# --------------------------------------------------------------------------
+# Non-string inputs
+# --------------------------------------------------------------------------
+
+VALUES = [
+  ["0", 0],
+  ["1", 1],
+  ["-1", -1],
+  ["big", 10**30],
+  ["-big", -(10**30)],
+  ["0.0", 0.0],
+  ["1.9", 1.9],
+  ["-1.9", -1.9],
+  ["1e20", 1e20],
+  ["1e400", Float::INFINITY],
+  ["-inf", -Float::INFINITY],
+  ["nan", Float::NAN],
+  ["nil", nil],
+  ["true", true],
+  ["false", false],
+  ["sym", :sym],
+  ["array", [1]],
+  ["hash", {}],
+  ["rational", Rational(3, 2)],
+  ["complex-real", Complex(3, 0)],
+  ["complex-imag", Complex(3, 4)],
+]
+
+VALUES.each do |label, value|
+  show("Integer #{label}")        { Integer(value) }
+  show("Integer-noexc #{label}")  { Integer(value, exception: false) }
+  show("Float #{label}")          { Float(value) }
+  show("Float-noexc #{label}")    { Float(value, exception: false) }
+  show("Rational #{label}")       { Rational(value) }
+  show("Complex #{label}")        { Complex(value) }
+end
+
+# Integer() with a base is only legal for strings.
+VALUES.each do |label, value|
+  show("Integer-base #{label}") { Integer(value, 16) }
+end
+
+# --------------------------------------------------------------------------
+# The coercion protocol.  MRI tries #to_int then #to_i for Integer(), #to_str
+# first when the object offers one, and reports which method misbehaved.
+# --------------------------------------------------------------------------
+
+def object_with(**methods)
+  o = Object.new
+  methods.each do |name, value|
+    o.define_singleton_method(name) { value.is_a?(Proc) ? value.call : value }
+  end
+  o
+end
+
+COERCIONS = {
+  "to_int=42"                 => { to_int: 42 },
+  "to_i=42"                   => { to_i: 42 },
+  "to_int=42,to_i=7"          => { to_int: 42, to_i: 7 },
+  "to_int=nil"                => { to_int: nil },
+  "to_i=nil"                  => { to_i: nil },
+  "to_int=nil,to_i=7"         => { to_int: nil, to_i: 7 },
+  "to_int=nil,to_i=nil"       => { to_int: nil, to_i: nil },
+  "to_int=str"                => { to_int: "7" },
+  "to_i=str"                  => { to_i: "7" },
+  "to_str=7"                  => { to_str: "7" },
+  "to_str=0x1f"               => { to_str: "0x1f" },
+  "to_str=bad"                => { to_str: "abc" },
+  "to_str=nonstring"          => { to_str: 7 },
+  "to_str=7,to_i=9"           => { to_str: "7", to_i: 9 },
+  "to_str=7,to_int=9"         => { to_str: "7", to_int: 9 },
+  "to_f=1.5"                  => { to_f: 1.5 },
+  "to_f=nil"                  => { to_f: nil },
+  "to_f=str"                  => { to_f: "x" },
+  "to_r=rational"             => { to_r: Rational(1, 2) },
+  "to_c=complex"              => { to_c: Complex(1, 2) },
+  "none"                      => {},
+}
+
+COERCIONS.each do |label, methods|
+  show("Integer coerce:#{label}")   { Integer(object_with(**methods)) }
+  show("Float coerce:#{label}")     { Float(object_with(**methods)) }
+  show("Rational coerce:#{label}")  { Rational(object_with(**methods)) }
+  show("Complex coerce:#{label}")   { Complex(object_with(**methods)) }
+  show("Integer-noexc coerce:#{label}") { Integer(object_with(**methods), exception: false) }
+  show("Float-noexc coerce:#{label}")   { Float(object_with(**methods), exception: false) }
+end
+
+# A #to_int / #to_i that raises must let the exception through even with
+# exception: false, which only suppresses conversion *failures*.
+show("Integer raising to_int") do
+  o = Object.new
+  def o.to_int; raise "boom"; end
+  Integer(o, exception: false)
+end
+show("Float raising to_f") do
+  o = Object.new
+  def o.to_f; raise "boom"; end
+  Float(o, exception: false)
+end
+
+# --------------------------------------------------------------------------
+# Two-argument Rational and Complex
+# --------------------------------------------------------------------------
+
+PAIRS = [
+  [1, 2], [3, 1], [-1, 2], [1, -2], [0, 5], [1, 0],
+  [1.5, 2], [1, 1.5], ["1", "2"], ["1/2", 1], [Rational(1, 2), 2],
+  [nil, 1], [1, nil], [:a, 1],
+]
+
+PAIRS.each do |a, b|
+  show("Rational2 #{a.inspect},#{b.inspect}") { Rational(a, b) }
+  show("Complex2 #{a.inspect},#{b.inspect}")  { Complex(a, b) }
+end
+
+# --------------------------------------------------------------------------
+# Arity and keyword handling
+# --------------------------------------------------------------------------
+
+show("Integer no args")        { Integer() }
+show("Integer 3 args")         { Integer("1", 10, 10) }
+show("Integer exception:true") { Integer("x", exception: true) }
+show("Integer bad kw")         { Integer("1", bogus: 1) }
+show("Float 2 args")           { Float("1", 10) }
+show("Rational no args")       { Rational() }
+show("Complex no args")        { Complex() }

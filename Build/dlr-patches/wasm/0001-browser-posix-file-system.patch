@@ -1,0 +1,31 @@
+diff --git a/src/core/Microsoft.Scripting/PlatformAdaptationLayer.cs b/src/core/Microsoft.Scripting/PlatformAdaptationLayer.cs
+index 91c46fa..d71397a 100644
+--- a/src/core/Microsoft.Scripting/PlatformAdaptationLayer.cs
++++ b/src/core/Microsoft.Scripting/PlatformAdaptationLayer.cs
+@@ -76,7 +76,12 @@ namespace Microsoft.Scripting {
+             get {
+ #if FEATURE_FILESYSTEM
+                 return Environment.OSVersion.Platform == PlatformID.Unix
+-                    || Environment.OSVersion.Platform == PlatformID.MacOSX;
++                    || Environment.OSVersion.Platform == PlatformID.MacOSX
++#if NET
++                    // browser-wasm reports PlatformID.Other, but its (emscripten) file system is POSIX
++                    || OperatingSystem.IsBrowser() || OperatingSystem.IsWasi()
++#endif
++                    ;
+ #else
+                 return true;
+ #endif
+@@ -86,7 +91,11 @@ namespace Microsoft.Scripting {
+         public virtual StringComparer PathComparer {
+             get {
+ #if FEATURE_FILESYSTEM
+-                return Environment.OSVersion.Platform == PlatformID.Unix ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;
++                return Environment.OSVersion.Platform == PlatformID.Unix
++#if NET
++                    || OperatingSystem.IsBrowser() || OperatingSystem.IsWasi()
++#endif
++                    ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;
+ #else
+                 return StringComparer.OrdinalIgnoreCase;
+ #endif

@@ -25,7 +25,7 @@ def foo()
 end
 
 foo
-");
+", 1, 0);
             }, "1");
         }
 
@@ -66,7 +66,7 @@ undefined");
   puts b rescue p $!
   
   eval <<-END
-    puts b, c
+    puts((b rescue $!.class), (c rescue $!.class))
   END
 }
 
@@ -78,21 +78,26 @@ eval <<-END
   puts b rescue p $!
 END
 ";
+            // Locals an eval defines are its own: neither the frame nor the next eval sees them (MRI 1.9+).
+            // A bare name that is neither is a NameError under ir, as in MRI; this test runs hosted, in a
+            // ScriptScope whose variables a bare name may also mean, and there it is NoMethodError, its
+            // subclass. `a`, assigned in the block and read only inside eval strings, is the one parse
+            // warning `ruby -wc` gives for each wrapping.
             string output = @"
-#<NoMethodError: * `b' *>
-2
-3
-#<NoMethodError: * `a' *>
-#<NoMethodError: * `b' *>
-#<NoMethodError: * `a' *>
-#<NoMethodError: * `b' *>
+#<N*Error: * 'b' *>
+N*Error
+N*Error
+#<N*Error: * 'a' *>
+#<N*Error: * 'b' *>
+#<N*Error: * 'a' *>
+#<N*Error: * 'b' *>
 ";
 
-            AssertOutput(() => CompilerTest(String.Format(@"def foo; {0}; end; foo", body)), output, OutputFlags.Match);
-            AssertOutput(() => CompilerTest(String.Format(@"module M; {0}; end", body)), output, OutputFlags.Match);
-            AssertOutput(() => CompilerTest(String.Format(@"class C; {0}; end", body)), output, OutputFlags.Match);
-            AssertOutput(() => CompilerTest(String.Format(@"class << Object.new; {0}; end", body)), output, OutputFlags.Match);
-            AssertOutput(() => CompilerTest(body), output, OutputFlags.Match);
+            AssertOutput(() => CompilerTest(String.Format(@"def foo; {0}; end; foo", body), 1, 0), output, OutputFlags.Match);
+            AssertOutput(() => CompilerTest(String.Format(@"module M; {0}; end", body), 1, 0), output, OutputFlags.Match);
+            AssertOutput(() => CompilerTest(String.Format(@"class C; {0}; end", body), 1, 0), output, OutputFlags.Match);
+            AssertOutput(() => CompilerTest(String.Format(@"class << Object.new; {0}; end", body), 1, 0), output, OutputFlags.Match);
+            AssertOutput(() => CompilerTest(body, 1, 0), output, OutputFlags.Match);
         }
 
         /// <summary>
@@ -123,13 +128,13 @@ class C
 end
 
 z = 1
-instance_eval 'x = z + 1'
-C.class_eval 'y = x + 1; z = 4'
-
-eval('p x,y,z')", @"
+instance_eval 'x = z + 1; p x'
+C.class_eval 'z = 4'
+p z
+begin; eval('x'); rescue NameError; p :undefined; end", @"
 2
-3
 4
+:undefined
 ");
         }
 
@@ -166,11 +171,11 @@ $b.each do |bin|
   END
 end", @"
 [1, nil, nil, nil, nil]
+[1, 2, nil, nil, nil]
 [1, 2, 3, nil, nil]
-[1, 2, 3, nil, nil]
+[1, 2, 3, 4, nil]
 [1, 2, 3, 4, 5]
-[1, 2, 3, 4, 5]
-");
+", 2);
         }
 
         public void LocalNames1() {
@@ -183,7 +188,7 @@ def f
 end
 
 f
-");
+", 2, 0);
             }, @"
 a
 b");
@@ -204,7 +209,7 @@ end
 bar
 
 eval('puts local_variables.sort', $b)
-");
+", 1, 0);
             }, @"
 x
 y
@@ -228,7 +233,7 @@ end
     
 eval('puts x', $p[0])
 eval('puts x', $p[1])
-");
+", 1, 0);
             }, @"
 0
 1
@@ -255,7 +260,7 @@ end
 bar
 
 eval('puts local_variables.sort', $b)
-");
+", 0, 1);
             }, @"
 y
 z
@@ -288,7 +293,7 @@ end
 foo
 
 p eval('x+y', $b)
-");
+", 2, 0);
             }, "3");
         }
 
@@ -313,6 +318,10 @@ b = 1
 nil");
         }
 
+        /// <summary>
+        /// A Proc used to be accepted in place of a Binding, and the block's locals were visible
+        /// to the evaluated string. Ruby stopped accepting one in 1.9.
+        /// </summary>
         public void EvalWithProcBinding1() {
             AssertOutput(delegate() {
                 CompilerTest(@"
@@ -328,9 +337,9 @@ def z
   1
 end
 
-p eval('x+y+z', goo)
-");
-            }, @"4");
+p eval('x+y+z', goo) rescue p $!
+", 3, 0);
+            }, @"#<TypeError: wrong argument type proc (expected binding)>");
         }
 
         public void ModuleEvalProc1() {
@@ -343,7 +352,7 @@ puts M.module_eval { |*a|
   'result'
 }
 ", @"
-[]
+[M]
 M
 result
 ");
@@ -515,6 +524,73 @@ bye
 ");
         }
 
+        /// <summary>
+        /// Class.new and `class X &lt; S' take what MRI's rb_check_inheritable does: not Class itself, nor a singleton
+        /// class. A subclass of a class with no allocator (Integer) has none either.
+        /// </summary>
+        public void ModuleClassNew3() {
+            TestOutput(@"
+[Class, Object.new.singleton_class, 1, nil].each do |s|
+  Class.new(s) rescue puts ""#{$!.class}: #{$!.message}""
+end
+begin
+  class X < Class; end
+rescue TypeError => e
+  puts e.message
+end
+p defined?(X)
+Class.new(Integer).allocate rescue puts ""#{$!.class}: #{$!.message.sub(/0x\h+/, 'X')}""
+p Class.new(Class.new).superclass.superclass, Class.new(Module).new.class.superclass
+", @"
+TypeError: can't make subclass of Class
+TypeError: can't make subclass of singleton class
+TypeError: superclass must be an instance of Class (given an instance of Integer)
+TypeError: superclass must be an instance of Class (given an instance of NilClass)
+can't make subclass of Class
+nil
+TypeError: allocator undefined for #<Class:X>
+Object
+Module
+");
+        }
+
+        /// <summary>
+        /// Classes made at run time, past the 4096 versions a shared call-site rule's version set holds before it starts over
+        /// (RuleVersionSet): calls on them still dispatch, see later redefinitions, and Class#subclasses lists each class once
+        /// (a new class registers with its superclass and modules without a duplicate scan).
+        /// </summary>
+        public void ModuleClassNew4() {
+            TestOutput(@"
+require 'ruby4'
+base = Class.new { def hi = :base }
+m = Module.new { def mod = :mod }
+cs = (1..5000).map { |i| Class.new(base) { include m; define_method(:i) { i } } }
+p [base.subclasses.size, base.subclasses.uniq.size, cs.sum { |c| c.new.i }]
+p cs.map { |c| [c.new.hi, c.new.mod] }.uniq
+base.class_eval { def hi = :changed }
+m.module_eval { def mod = :changed_mod }
+p cs.map { |c| [c.new.hi, c.new.mod] }.uniq
+s = (1..3000).map { |i| Struct.new(:a, :b, keyword_init: i.odd? ? true : nil) { def sum = a + b } }
+p s.map { |k| k.keyword_init? }.tally, s[0].new(a: 1, b: 2).sum, s[1].new(3, 4).sum
+p s[0].inspect.end_with?(""(keyword_init: true)""), s[1].inspect.include?(""keyword_init"")
+d = (1..3000).map { |i| Data.define(:x) { define_method(:k) { i } } }
+p d.sum { |k| k.new(x: 1).k }, d[5].members, d[5].new(9).x, Data.respond_to?(:members)
+", @"
+[5000, 5000, 12502500]
+[[:base, :mod]]
+[[:changed, :changed_mod]]
+{true => 1500, nil => 1500}
+3
+7
+true
+false
+4501500
+[:x]
+9
+false
+");
+        }
+
         public void ModuleEvalString1() {
             AssertOutput(delegate() {
                 CompilerTest(@"
@@ -592,7 +668,7 @@ def foo
 end
 
 foo
-");
+", 1, 0);
             }, @"
 1
 1");

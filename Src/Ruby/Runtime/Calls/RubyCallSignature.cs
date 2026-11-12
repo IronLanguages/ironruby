@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Diagnostics;
@@ -60,13 +56,22 @@ namespace IronRuby.Runtime.Calls {
 
         // SuperCallAction only: the super site dynamically loads its parameters from scope.
         HasImplicitArguments = 128,
+
+        // CallAction only: a bare identifier that could have been a local variable (`foo`, no receiver,
+        // arguments nor parentheses). When nothing answers it MRI raises NameError "undefined local
+        // variable or method" rather than NoMethodError.
+        IsVariableCall = 256,
+
+        // CallAction only: a call written in Ruby source with a block (literal or &arg), as opposed
+        // to one a library method makes. Only such a call warns that the callee ignores the block.
+        HasSourceBlock = 512,
     }
         
     /// <summary>
     /// RubyScope/RubyContext, (self), (argument){ArgumentCount}, (splatted-argument)?, (block)?
     /// </summary>
     public struct RubyCallSignature : IEquatable<RubyCallSignature> {
-        private const int FlagsCount = 8;
+        private const int FlagsCount = 10;
 
         private const int ResolveOnlyArgumentCount = (int)(UInt32.MaxValue >> FlagsCount);
         private const int MaxArgumentCount = ResolveOnlyArgumentCount - 1;
@@ -83,23 +88,14 @@ namespace IronRuby.Runtime.Calls {
         public bool IsVirtualCall { get { return (_countAndFlags & (uint)RubyCallFlags.IsVirtualCall) != 0; } }
         public bool HasImplicitArguments { get { return (_countAndFlags & (uint)RubyCallFlags.HasImplicitArguments) != 0; } }
         public bool IsSuperCall { get { return (_countAndFlags & (uint)RubyCallFlags.IsSuperCall) != 0; } }
+        public bool IsVariableCall { get { return (_countAndFlags & (uint)RubyCallFlags.IsVariableCall) != 0; } }
+        public bool HasSourceBlock { get { return (_countAndFlags & (uint)RubyCallFlags.HasSourceBlock) != 0; } }
 
         // defined? ignores arguments hence we can use one argument number (max) to represent resolve only sites:
         public bool ResolveOnly { get { return ArgumentCount == ResolveOnlyArgumentCount; } }
 
         public int ArgumentCount { get { return (int)(_countAndFlags >> FlagsCount); } }
         internal RubyCallFlags Flags { get { return (RubyCallFlags)(_countAndFlags & FlagsMask); } }
-        
-        // total call-site arguments w/o RubyContext/RubyScope
-        public int TotalArgumentCount {
-            get {
-                return 1 + // instance (self)
-                    ArgumentCount +
-                    (HasSplattedArgument ? 1 : 0) +
-                    (HasBlock ? 1 : 0) +
-                    (HasRhsArgument ? 1 : 0);
-            }
-        }
 
         /// <summary>
         /// Used by defined? operator applied on methods.
@@ -146,24 +142,12 @@ namespace IronRuby.Runtime.Calls {
             return new RubyCallSignature(argumentCount, RubyCallFlags.HasSplattedArgument);
         }
 
-        public static RubyCallSignature WithSplatAndBlock(int argumentCount) {
-            return new RubyCallSignature(argumentCount, RubyCallFlags.HasBlock | RubyCallFlags.HasSplattedArgument);
-        }
-
         public static RubyCallSignature WithScope(int argumentCount) {
             return new RubyCallSignature(argumentCount, RubyCallFlags.HasScope);
         }
 
         public static RubyCallSignature WithScopeAndBlock(int argumentCount) {
             return new RubyCallSignature(argumentCount, RubyCallFlags.HasScope | RubyCallFlags.HasBlock);
-        }
-
-        public static RubyCallSignature WithScopeAndSplat(int argumentCount) {
-            return new RubyCallSignature(argumentCount, RubyCallFlags.HasScope | RubyCallFlags.HasSplattedArgument);
-        }
-
-        public static RubyCallSignature WithScopeAndSplatAndBlock(int argumentCount) {
-            return new RubyCallSignature(argumentCount, RubyCallFlags.HasScope | RubyCallFlags.HasBlock | RubyCallFlags.HasSplattedArgument);
         }
 
         public static RubyCallSignature IsDefined(bool hasImplicitSelf) {
@@ -177,6 +161,11 @@ namespace IronRuby.Runtime.Calls {
         public bool Equals(RubyCallSignature other) {
             return _countAndFlags == other._countAndFlags;
         }
+
+        public override bool Equals(object obj) => obj is RubyCallSignature other && Equals(other);
+
+        // the signature is a binder cache key: hash the packed value without boxing it
+        public override int GetHashCode() => (int)_countAndFlags;
 
         public override string/*!*/ ToString() {
             return "(" +

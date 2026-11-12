@@ -16,8 +16,6 @@
 using System;
 using System.Text.RegularExpressions;
 using IronRuby.Builtins;
-using System.Text;
-using System.Diagnostics;
 
 namespace IronRuby.Tests {
     public partial class Tests {
@@ -41,15 +39,38 @@ puts t = /yy#{s}yy/.to_s
 
         public void Regex2() {
             TestOutput(@"
-puts(/#{/a/}/)                     # MRI: (?-mix:a)
-puts(/#{nil}#{/a/}#{nil}/)         # MRI: (?-mix:a)
+puts(/#{/a/}/)
+puts(/#{nil}#{/a/}#{nil}/)
 puts(/#{/a/}b/)
 puts(/b#{/a/}/)
 ", @"
-(?-mix:(?-mix:a))
-(?-mix:(?-mix:a))
+(?-mix:a)
+(?-mix:a)
 (?-mix:(?-mix:a)b)
 (?-mix:b(?-mix:a))
+");
+
+            // A MatchData keeps the subject as it was when it matched: a later change to the
+            // string must not show through #pre_match, #[] or #string. Regexp#match,
+            // String#match and the $~ String#scan leaves behind used to share the live string.
+            TestOutput(@"
+def show(md) p [md.pre_match, md[0], md[1], md.post_match, md.string, md.string.frozen?] end
+s = 'hello world'.dup; md = /o (w)/.match(s); s.replace('ZZZZZZZZZZZZZZZZ'); show md
+s = 'hello world'.dup; md = s.match(/o (w)/); s.replace('ZZZZZZZZZZZZZZZZ'); show md
+s = 'hello world'.dup; md = s.match(/o(r)/, 5); s[0, 1] = 'J'; show md
+s = 'hello world'.dup; s.scan(/o(.)/); md = $~; s << '!!'; s[0] = 'J'; show md
+s = 'hello world'.dup; s =~ /o (w)/; md = $~; s.insert(0, 'AAA'); show md
+s = ""h\u00e9llo w\u00f6rld"".dup; md = /\u00f6(r)/.match(s); s.upcase!; p [md.begin(0), md.pre_match.size, md[1], md.post_match, md.string.ascii_only?, md.string.frozen?]
+s = 'hello world'.dup; mds = []; s.scan(/o(.)/) { mds << $~ }; s.clear; mds.each { |m| show m }
+", @"
+[""hell"", ""o w"", ""w"", ""orld"", ""hello world"", true]
+[""hell"", ""o w"", ""w"", ""orld"", ""hello world"", true]
+[""hello w"", ""or"", ""r"", ""ld"", ""hello world"", true]
+[""hello w"", ""or"", ""r"", ""ld"", ""hello world"", true]
+[""hell"", ""o w"", ""w"", ""orld"", ""hello world"", true]
+[7, 7, ""r"", ""ld"", false, true]
+[""hell"", ""o "", "" "", ""world"", ""hello world"", true]
+[""hello w"", ""or"", ""r"", ""ld"", ""hello world"", true]
 ");
         }
 
@@ -60,7 +81,8 @@ puts(/b#{/a/}/)
             // escapes
             TestCorrectPatternTranslation(@"\\", @"\\");
             TestCorrectPatternTranslation(@"\_", @"_");
-            TestCorrectPatternTranslation(@"abc\0\01\011", "abc\\0\\01\\011");
+            // An octal escape is decoded to the character it denotes, the same way \x is.
+            TestCorrectPatternTranslation(@"abc\0\01\011", "abc\u0000\u0001\\\t");
             TestCorrectPatternTranslation(@"\n\t\r\f\v\a\e\b\A\B\Z\z", "\\\n\\\t\\\r\f\v\a\u001B\\b\\A\\B\\Z\\z");
             TestCorrectPatternTranslation(@"[\n\t\r\f\v\a\e\b\A\B\Z\z]", "[\\\n\\\t\\\r\f\v\a\u001B\bABZz]");
             TestCorrectPatternTranslation(@"\G", RubyRegexOptions.NONE, @"\G", true);
@@ -71,7 +93,7 @@ puts(/b#{/a/}/)
             TestCorrectPatternTranslation(@"\*", @"\*");
             TestCorrectPatternTranslation(@"\[", @"\[");
             TestCorrectPatternTranslation(@"\#", @"\#");
-            TestCorrectPatternTranslation(@"\0", @"\0");
+            TestCorrectPatternTranslation(@"\0", "\u0000");
             TestCorrectPatternTranslation(@"\x09\x0a\x0d\x20\u0009\u000a\u000d\u0020\u{9 a d 20}",
                                            "\\\u0009\\\u000a\\\u000d\\\u0020\\\u0009\\\u000a\\\u000d\\\u0020\\\u0009\\\u000a\\\u000d\\\u0020");
             TestCorrectPatternTranslation(@"[a\-z]", @"[a\-z]");
@@ -82,62 +104,70 @@ puts(/b#{/a/}/)
             TestCorrectPatternTranslation(@"\u{005b}", @"\[");
             TestCorrectPatternTranslation(@"\u{5b 2a}", @"\[\*");
 
-            // Posix categories
-            TestCorrectPatternTranslation(@"[x[:alnum:]y]", @"[x\p{L}\p{N}\p{M}y]");
-            TestCorrectPatternTranslation(@"[a[^:alnum:]b]", @"[a\P{L}b-[\p{N}\p{M}-[ab]]]");
-            TestCorrectPatternTranslation(@"[[:alpha:]]", @"[\p{L}\p{M}]");
-            TestCorrectPatternTranslation(@"[[^:alpha:]]", @"[\P{L}-[\p{M}]]");
-            TestCorrectPatternTranslation(@"[[:ascii:]]", @"[\p{IsBasicLatin}]");
-            TestCorrectPatternTranslation(@"[[^:ascii:]]", @"[\P{IsBasicLatin}]");
-            TestCorrectPatternTranslation(@"[[:blank:]]", "[\\p{Zs}\t]");
-            TestCorrectPatternTranslation(@"[[^:blank:]]", "[\\P{Zs}-[\t]]");
-            TestCorrectPatternTranslation(@"[[:cntrl:]]", @"[\p{Cc}]");
-            TestCorrectPatternTranslation(@"[[^:cntrl:]]", @"[\P{Cc}]");
-            TestCorrectPatternTranslation(@"[[:digit:]]", @"[\p{Nd}]");
-            TestCorrectPatternTranslation(@"[[^:digit:]]", @"[\P{Nd}]");
-            TestCorrectPatternTranslation(@"[[:lower:]]", @"[\p{Ll}]");
-            TestCorrectPatternTranslation(@"[[^:lower:]]", @"[\P{Ll}]");
-            TestCorrectPatternTranslation(@"[[:punct:]]", @"[\p{P}]");
-            TestCorrectPatternTranslation(@"[[^:punct:]]", @"[\P{P}]");
-            TestCorrectPatternTranslation(@"[[:space:]]", "[\\p{Z}\u0085\u0009-\u000d]");
-            TestCorrectPatternTranslation(@"[[^:space:]]", "[\\P{Z}-[\u0085\u0009-\u000d]]");
-            TestCorrectPatternTranslation(@"[[:upper:]]", @"[\p{Lu}]");
-            TestCorrectPatternTranslation(@"[[^:upper:]]", @"[\P{Lu}]");
-            TestCorrectPatternTranslation(@"[[:xdigit:]]", "[a-fA-F0-9]");
-            TestCorrectPatternTranslation(@"[[^:xdigit:]]", "[\0-\uffff-[a-fA-F0-9]]");
+            // POSIX classes and properties are spelled out from Onigmo's own tables (see
+            // UnicodeProperties), so these check what the translation matches rather than its
+            // text; every expectation was checked against CRuby 4.0.6. A class with members
+            // outside the BMP gets surrogate-pair alternatives, which the non-BMP characters here
+            // exercise.
+            TestClassTranslation(@"[x[:alnum:]y]", "xyaZ5\u00e9\u0663\U0001D400", "-_ \U0001F600");
+            TestClassTranslation(@"[a[^:alnum:]b]", "abxZ5-\U0001F600", ":lnum");
+            TestClassTranslation(@"[[:alpha:]]", "aZ\u00e9\u03b1\u6f22\U00020000", "5_- \U0001F600");
+            TestClassTranslation(@"[[:^alpha:]]", "5_- \U0001F600", "aZ\u00e9\u6f22\U00020000");
+            TestClassTranslation(@"[[:ascii:]]", "\u0000A\u007f", "\u0080\u00e9\U0001F600");
+            TestClassTranslation(@"[[:^ascii:]]", "\u0080\u00e9\U0001F600", "\u0000A\u007f");
+            TestClassTranslation(@"[[:blank:]]", " \u0009\u3000", "\u000aa");
+            TestClassTranslation(@"[[:cntrl:]]", "\u0000\u001f\u007f\u0085", "a \u00a0");
+            TestClassTranslation(@"[[:digit:]]", "09\u0663\uff10\U0001D7CE", "a\u00b2\u00bd");
+            TestClassTranslation(@"[[:^digit:]]", "a\u00b2\U0001F600", "0\u0663\U0001D7CE");
+            TestClassTranslation(@"[[:lower:]]", "a\u00df\u03b1\U00010428", "A1\U00010400");
+            TestClassTranslation(@"[[:punct:]]", "!$+<^`|~\u00bf", "a1 ");
+            TestClassTranslation(@"[[:space:]]", " \u0009\u000a\u000b\u000c\u000d\u0085\u00a0\u2028\u3000", "a\u200b");
+            TestClassTranslation(@"[[:upper:]]", "A\u03a9\U00010400", "a1\U00010428");
+            TestClassTranslation(@"[[:xdigit:]]", "09afAF", "gG\uff10");
+            TestClassTranslation(@"[[:word:]]", "a_1\u00e9\u0301\u200c\U0001D400", "-! \U0001F600");
+            TestClassTranslation(@"(?a)[[:alpha:]]", "aZ", "\u00e9\u03b1\U00020000");
+            TestClassTranslation(@"(?a)[[:^alpha:]]", "1\u00e9\u3042\U00020000", "aZ");
+            TestClassTranslation(@"\p{L}", "a\u00e9\u6f22\U0001D400", "1_ ");
+            TestClassTranslation(@"\P{L}", "1_ \U0001F600", "a\u00e9\u6f22\U0001D400");
+            TestClassTranslation(@"\p{^L}", "1_ \U0001F600", "a\u00e9\u6f22\U0001D400");
+            TestClassTranslation(@"\P{^L}", "a\u00e9\u6f22\U0001D400", "1_ ");
+            TestClassTranslation(@"\p{Alnum}", "a1\u0663\U0001D400", "-_\U0001F600");
+            TestClassTranslation(@"[a\p{Alnum}b]", "ab1\U0001D400", "-_\U0001F600");
+            TestClassTranslation(@"[^\p{Alnum}]", "-_ \U0001F600", "a1\U0001D400");
+            TestClassTranslation(@"[\P{Alnum}]", "-_ \U0001F600", "a1\U0001D400");
+            TestClassTranslation(@"[\p{Alnum}-]", "a1-", "_ ");
+            TestClassTranslation(@"\p{Punct}", "!_\u00bf", "$+a");
+            TestClassTranslation(@"\p{Word}", "a_\u0301\U0001D400", "-\U0001F600");
+            TestClassTranslation(@"\p{XDigit}", "0aF", "g\uff10");
+            TestClassTranslation(@"\p{Emoji}", "#*09\u00a9\u263a\U0001F600", "a \u00e9");
+            TestClassTranslation(@"\P{Emoji}", "a\u00e9\U00010400", "#0\u263a\U0001F600");
+            TestClassTranslation(@"[\p{Emoji}&&[^\d#*]]", "\u00a9\u263a\U0001F600\U0001F44D", "#*09a");
+            TestClassTranslation(@"[^\p{Emoji}&&[^\d#*]]", "#*0a\U00010400", "\u00a9\u263a\U0001F600");
+            TestClassTranslation(@"[\p{Emoji}&&[^\u{1f600}-\u{1f64f}]]", "\u263a\U0001F44D1", "\U0001F600\U0001F64Fa");
+            TestClassTranslation(@"\p{Emoji_Presentation}", "\u231a\U0001F600", "\u263a1");
+            TestClassTranslation(@"\p{Extended_Pictographic}", "\u00a9\u263a\U0001F600\U0001FFFD", "1#");
+            TestClassTranslation(@"\p{Han}", "\u6f22\u3005\U00020000", "a\u3042");
+            TestClassTranslation(@"\p{Hiragana}", "\u3042\u309d", "\u30a2\u309b");
+            TestClassTranslation(@"\p{Greek}", "\u03b1\u1f00\U00010140", "a\u03e2");
+            TestClassTranslation(@"\p{In_Greek_and_Coptic}", "\u03b1\u03e2", "\u1f00a");
+            TestClassTranslation(@"\p{Latin}", "a\u00e9\u1e00\uff21", "\u03b11");
+            TestClassTranslation(@"\p{Any}", "\u0000a\uffff\U0001F600\U0010FFFF", "");
+            TestClassTranslation(@"\p{Assigned}", "a\U0001F600", "\u0378\U0010FFFF");
+            TestClassTranslation(@"\p{Age=6.0}", "a\U0001F601", "\U0001F600\U0001F97A");
+            TestClassTranslation(@"\p{alpha}", "a\u00e9", "1");
+            TestClassTranslation(@"\p{ ALPHA }", "a\u00e9", "1");
+            TestClassTranslation(@"\p{Lc}", "aA\u01c5", "\u02b01");
+            TestClassTranslation(@"\p{Cs}", "", "a\U0001F600");
 
-            // Unicode categories
-            TestCorrectPatternTranslation(@"\p{L}", @"[\p{L}]");
-            TestCorrectPatternTranslation(@"\p{Alnum}", @"[\p{L}\p{N}\p{M}]");
-            TestCorrectPatternTranslation(@"\P{Alnum}*", @"[\P{L}-[\p{N}\p{M}]]*");
-            TestCorrectPatternTranslation(@"\P{^Alnum}", @"[\p{L}\p{N}\p{M}]");
-            TestCorrectPatternTranslation(@"[a\p{Alnum}b]", @"[a\p{L}\p{N}\p{M}b]");
-            TestCorrectPatternTranslation(@"[^\p{Alnum}]", "[\0-\uffff-[\\p{L}\\p{N}\\p{M}]]");
-            TestCorrectPatternTranslation(@"[\P{Alnum}]", @"[\P{L}-[\p{N}\p{M}]]");
-            TestCorrectPatternTranslation(@"\P{^Alnum}", @"[\p{L}\p{N}\p{M}]");
-            TestCorrectPatternTranslation(@"\p{^Alnum}", @"[\P{L}-[\p{N}\p{M}]]");
-            TestCorrectPatternTranslation(@"\p{Alnum}", @"[\p{L}\p{N}\p{M}]");
-            TestCorrectPatternTranslation(@"\P{Alnum}", @"[\P{L}-[\p{N}\p{M}]]");
-            TestCorrectPatternTranslation(@"\p{Alpha}", @"[\p{L}\p{M}]");
-            TestCorrectPatternTranslation(@"\P{Alpha}", @"[\P{L}-[\p{M}]]");
-            TestCorrectPatternTranslation(@"\p{ASCII}", "[\\p{IsBasicLatin}]");
-            TestCorrectPatternTranslation(@"\P{ASCII}", "[\\P{IsBasicLatin}]");
-            TestCorrectPatternTranslation(@"\p{Blank}", "[\\p{Zs}\t]");
-            TestCorrectPatternTranslation(@"\P{Blank}", "[\\P{Zs}-[\t]]");
-            TestCorrectPatternTranslation(@"\p{Cntrl}", @"[\p{Cc}]");
-            TestCorrectPatternTranslation(@"\P{Cntrl}", @"[\P{Cc}]");
-            TestCorrectPatternTranslation(@"\p{Digit}", @"[\p{Nd}]");
-            TestCorrectPatternTranslation(@"\P{Digit}", @"[\P{Nd}]");
-            TestCorrectPatternTranslation(@"\p{Lower}", @"[\p{Ll}]");
-            TestCorrectPatternTranslation(@"\P{Lower}", @"[\P{Ll}]");
-            TestCorrectPatternTranslation(@"\p{Punct}", @"[\p{P}]");
-            TestCorrectPatternTranslation(@"\P{Punct}", @"[\P{P}]");
-            TestCorrectPatternTranslation(@"\p{Space}", "[\\p{Z}\u0085\u0009-\u000d]");
-            TestCorrectPatternTranslation(@"\P{Space}", "[\\P{Z}-[\u0085\u0009-\u000d]]");
-            TestCorrectPatternTranslation(@"\p{Upper}", @"[\p{Lu}]");
-            TestCorrectPatternTranslation(@"\P{Upper}", @"[\P{Lu}]");
-            TestCorrectPatternTranslation(@"\p{XDigit}", "[a-fA-F0-9]");
-            TestCorrectPatternTranslation(@"\P{XDigit}", "[\0-\uffff-[a-fA-F0-9]]");
+            // the rendering itself, for small sets
+            TestCorrectPatternTranslation(@"[[:xdigit:]]", "[0-9A-Fa-f]");
+            TestCorrectPatternTranslation(@"\p{XDigit}", "[0-9A-Fa-f]");
+            TestCorrectPatternTranslation(@"[[:^xdigit:]]", "(?:[\0-\uffff-[0-9A-Fa-f\\ud800-\\udfff]]|[\\ud800-\\udbff][\\udc00-\\udfff])");
+            TestCorrectPatternTranslation(@"\p{Emoji_Modifier}", "(?:\\ud83c[\\udffb-\\udfff])");
+            // a * or + loop over a class holding every non-BMP character stays a class loop,
+            // and may not stop between the halves of a surrogate pair
+            TestCorrectPatternTranslation(@"\P{XDigit}*", "[\0-\uffff-[0-9A-Fa-f]]*(?<![\\ud800-\\udbff])");
+            TestCorrectPatternTranslation(@"[^a]+?", "[\0-\uffff-[a]]+?(?<![\\ud800-\\udbff])");
        
             // possessive quantifiers
             TestCorrectPatternTranslation(@"xyza*+", @"xyz(?>a*)");
@@ -164,18 +194,20 @@ puts(/b#{/a/}/)
             TestCorrectPatternTranslation(@"[\u{1 2 40}-\u0060]", "[\u0001\u0002\u0040-\u0060]");
             TestCorrectPatternTranslation(@"[\u{1 2 40}-z]", "[\u0001\u0002\u0040-z]");
             TestCorrectPatternTranslation(@"[\x3f-\u{40 1 2}]", "[\\\u003f-\u0040\u0001\u0002]");
-            TestCorrectPatternTranslation(@"[\w-]", @"[\w\-]");
-            TestCorrectPatternTranslation(@"[\p{Alnum}-]", @"[\p{L}\p{N}\p{M}\-]");
+            // \w is ASCII only in Ruby unless (?u) is in effect, so it is expanded rather than
+            // handed to .NET, whose \w is Unicode aware. Checked against CRuby 4.0.6:
+            //   /[\w-]+/.match("a-\u3042")  =>  "a-"
+            TestCorrectPatternTranslation(@"[\w-]", @"[a-zA-Z0-9_\-]");
 
             // character set operations
-            TestCorrectPatternTranslation("[a-z&&d-e]", "[a-z-[\0-\uffff-[d-e]]]");
-            TestCorrectPatternTranslation("[a-z&&[d-e&&e-f]]", "[a-z-[\0-\uffff-[d-e-[\0-\uffff-[e-f]]]]]");
-            TestCorrectPatternTranslation("[a-z&&^[b[^c]]]", "[a-z-[c-[b^]]]");
-            TestCorrectPatternTranslation("[a-z&&[^b[^c]]]", "[a-z-[\0-\uffff-[c-[b]]]]");
-            TestCorrectPatternTranslation("[[^a-z][e-f][^b-q]]", "[\0-\uffff-[a-z-[\0-\uffff-[b-q-[e-f]]]]]");
+            TestCorrectPatternTranslation("[a-z&&d-e]", "[de]");
+            TestCorrectPatternTranslation("[a-z&&[d-e&&e-f]]", "[e]");
+            TestCorrectPatternTranslation("[a-z&&^[b[^c]]]", "[abd-z]");
+            TestCorrectPatternTranslation("[a-z&&[^b[^c]]]", "[c]");
+            TestCorrectPatternTranslation("[[^a-z][e-f][^b-q]]", "(?:[\0-\uffff-[b-dg-q\\ud800-\\udfff]]|[\\ud800-\\udbff][\\udc00-\\udfff])");
             TestCorrectPatternTranslation("[&&d-e]", "[a-[a]]");
-            TestCorrectPatternTranslation("[a-z&&[d-e&&e-f]x&&^[b[^c]]]", "[a-z-[\0-\uffff-[d-ex-[\0-\uffff-[e-fx-[c-[b^]]]]]]]");
-            TestCorrectPatternTranslation("[^[a-b][c-d][^e-f]&&[a-z&&[^d-e]]]", "[\0-\uffff-[a-z-[d-ee-f-[a-bc-d-[d-e]]]]]");
+            TestCorrectPatternTranslation("[a-z&&[d-e&&e-f]x&&^[b[^c]]]", "[ex]");
+            TestCorrectPatternTranslation("[^[a-b][c-d][^e-f]&&[a-z&&[^d-e]]]", "(?:[\0-\uffff-[a-cg-z\\ud800-\\udfff]]|[\\ud800-\\udbff][\\udc00-\\udfff])");
 
             // groups
             TestCorrectPatternTranslation("((((a))))", "((((a))))");
@@ -189,8 +221,10 @@ puts(/b#{/a/}/)
             TestCorrectPatternTranslation("(?m:a)", "(?s:a)");
             TestCorrectPatternTranslation("(?mi:a)", "(?si:a)");
             TestCorrectPatternTranslation("(?m)", "(?s)");
-            TestCorrectPatternTranslation("(?<name2>)(?<name1-name2>a)", "(?<name2>)(?<name1-name2>a)");
-            TestCorrectPatternTranslation("(?'name2')(?'name1-name2'a)", "(?'name2')(?'name1-name2'a)");
+            // In Ruby "name1-name2" is just a group name (CRuby: names => ["name2", "name1-name2"]),
+            // not a .NET balancing group, so it is given a .NET-safe name.
+            TestCorrectPatternTranslation("(?<name2>)(?<name1-name2>a)", "(?<name2>)(?<__irnname1_002dname2>a)");
+            TestCorrectPatternTranslation("(?'name2')(?'name1-name2'a)", "(?'name2')(?'__irnname1_002dname2'a)");
             TestCorrectPatternTranslation("(?=)", "(?=)");
             TestCorrectPatternTranslation("(?=x)", "(?=x)");
             TestCorrectPatternTranslation("(?<=)", "(?<=)");
@@ -199,12 +233,39 @@ puts(/b#{/a/}/)
             TestCorrectPatternTranslation("(?<!x)", "(?<!x)");
             TestCorrectPatternTranslation("(?>)", "(?>)");
             TestCorrectPatternTranslation("(?>x)", "(?>x)");
-            TestCorrectPatternTranslation("(?>(?=(?<!f)(o)(o))(?<bar>))", "(?>(?=(?<!f)(o)(o))(?<bar>))");
+            TestCorrectPatternTranslation("(?>(?=(?<!f)(o)(o))(?<bar>))", "(?>(?=(?<!f)(?:o)(?:o))(?<bar>))");
             
             // backreferences:
-            TestCorrectPatternTranslation(@"(x) (?'name') \k<1> \k<name> \k'1' \k<name>", @"(x) (?'name') \k<1> \k<name> \k'1' \k<name>");
+            // A numbered backreference is invalid once the pattern declares a named group, so
+            // the two forms cannot appear together. Both halves checked against CRuby 4.0.6:
+            //   Regexp.new("(x) (?'name') \\k<1>")  =>  numbered backref/call is not allowed. (use name)
+            TestCorrectPatternTranslation(@"(x) (y) \k<1> \k'2'", @"(x) (y) \k<1> \k<2>");
+            // once a pattern has a named group its plain groups do not capture (Onigmo)
+            TestCorrectPatternTranslation(@"(x) (?'name') \k<name> \k'name'", @"(?:x) (?'name') \k<name> \k<name>");
+            // a backreference inside the group it refers to never matches (Onigmo resets the group)
+            TestCorrectPatternTranslation(@"(a\1?){2}", @"(a(?!)?){2}");
+
+            // subexpression calls: the called group is copied under its own number, nested groups too
+            TestCorrectPatternTranslation(@"((a)b)\g<1>", @"((a)b)(?<1>(?<2>a)b)");
 
             // error: TestCorrectPatternTranslation("(?<a)b>c)", "(?<a)b>c)");
+        }
+
+        // Translates a class and checks, with the .NET regex, that it matches each character of
+        // members as a whole and none of those of nonMembers (a surrogate pair is one character).
+        private void TestClassTranslation(string/*!*/ pattern, string/*!*/ members, string/*!*/ nonMembers) {
+            bool hasGAnchor;
+            string actual = RegexpTransformer.Transform(pattern, RubyRegexOptions.NONE, out hasGAnchor);
+            var regex = new Regex(@"\A(?:" + actual + @")\z", RubyRegex.ToClrOptions(RubyRegexOptions.NONE));
+            for (int i = 0; i < members.Length; i += Char.IsHighSurrogate(members[i]) ? 2 : 1) {
+                string c = members.Substring(i, Char.IsHighSurrogate(members[i]) ? 2 : 1);
+                Assert(regex.IsMatch(c), pattern + " should match U+" + Char.ConvertToUtf32(c, 0).ToString("X4"));
+            }
+            for (int i = 0; i < nonMembers.Length; i += Char.IsHighSurrogate(nonMembers[i]) ? 2 : 1) {
+                string c = nonMembers.Substring(i, Char.IsHighSurrogate(nonMembers[i]) ? 2 : 1);
+                Assert(!regex.IsMatch(c), pattern + " should not match U+" + Char.ConvertToUtf32(c, 0).ToString("X4"));
+            }
+            Assert(!hasGAnchor);
         }
 
         //[DebuggerHidden]
@@ -216,6 +277,11 @@ puts(/b#{/a/}/)
         private void TestCorrectPatternTranslation(string/*!*/ pattern, RubyRegexOptions options, string/*!*/ expected, bool expectedGAnchor) {
             bool hasGAnchor;
             string actual = RegexpTransformer.Transform(pattern, options, out hasGAnchor);
+            // a class with members outside the BMP gets a surrogate-pair alternative after it (see
+            // TestClassTranslation); the BMP part is what these expectations spell out
+            if (actual != expected && actual.StartsWith("(?:" + expected + "|", StringComparison.Ordinal) && actual.EndsWith(")", StringComparison.Ordinal)) {
+                expected = actual;
+            }
             AreEqual(expected, actual);
             new Regex(expected);
             Assert(hasGAnchor == expectedGAnchor);
@@ -243,24 +309,26 @@ puts(/b#{/a/}/)
         (?:\#((?:[-_.!~*'()a-zA-Z\d;/?:@&=+$,\[\]]|%[a-fA-F\d]{2})*))?            (?# 9: fragment)
       $";
 
-            string e = @"^
-        ([a-zA-Z][\-+.a-zA-Z\d]*):                     
+            // ^ is expanded: .NET's Multiline ^ also matches the empty line it considers a
+            // trailing \n to open, which Ruby has no equivalent of.
+            string e = @"(?:\A|(?<=\n)(?!\z))
+        ([a-zA-Z][\-+.a-zA-Z0-9]*):                     
         (?:
-           ((?:[\-_.!~*'()a-zA-Z\d;?:@&=+$,]|%[a-fA-F\d]{2})(?:[\-_.!~*'()a-zA-Z\d;/?:@&=+$,\[\]]|%[a-fA-F\d]{2})*)              
+           ((?:[\-_.!~*'()a-zA-Z0-9;?:@&=+$,]|%[a-fA-F0-9]{2})(?:[\-_.!~*'()a-zA-Z0-9;/?:@&=+$,\[\]]|%[a-fA-F0-9]{2})*)              
         |
            (?:(?:
              //(?:
-                 (?:(?:((?:[\-_.!~*'()a-zA-Z\d;:&=+$,]|%[a-fA-F\d]{2})*)@)?  
-                   (?:((?:(?:(?:[a-zA-Z\d](?:[\-a-zA-Z\d]*[a-zA-Z\d])?)\.)*(?:[a-zA-Z](?:[\-a-zA-Z\d]*[a-zA-Z\d])?)\.?|[\d]{1,3}\.[\d]{1,3}\.[\d]{1,3}\.[\d]{1,3}|\[(?:(?:[a-fA-F\d]{1,4}:)*(?:[a-fA-F\d]{1,4}|[\d]{1,3}\.[\d]{1,3}\.[\d]{1,3}\.[\d]{1,3})|(?:(?:[a-fA-F\d]{1,4}:)*[a-fA-F\d]{1,4})?::(?:(?:[a-fA-F\d]{1,4}:)*(?:[a-fA-F\d]{1,4}|[\d]{1,3}\.[\d]{1,3}\.[\d]{1,3}\.[\d]{1,3}))?)\]))(?::([\d]*))?))?
+                 (?:(?:((?:[\-_.!~*'()a-zA-Z0-9;:&=+$,]|%[a-fA-F0-9]{2})*)@)?  
+                   (?:((?:(?:(?:[a-zA-Z0-9](?:[\-a-zA-Z0-9]*[a-zA-Z0-9])?)\.)*(?:[a-zA-Z](?:[\-a-zA-Z0-9]*[a-zA-Z0-9])?)\.?|[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|\[(?:(?:[a-fA-F0-9]{1,4}:)*(?:[a-fA-F0-9]{1,4}|[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})|(?:(?:[a-fA-F0-9]{1,4}:)*[a-fA-F0-9]{1,4})?::(?:(?:[a-fA-F0-9]{1,4}:)*(?:[a-fA-F0-9]{1,4}|[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}))?)\]))(?::([0-9]*))?))?
                |
-                 ((?:[\-_.!~*'()a-zA-Z\d$,;+@&=+]|%[a-fA-F\d]{2})+)           
+                 ((?:[\-_.!~*'()a-zA-Z0-9$,;+@&=+]|%[a-fA-F0-9]{2})+)           
                )
              |
              (?!//))                              
-             (/(?:[\-_.!~*'()a-zA-Z\d:@&=+$,]|%[a-fA-F\d]{2})*(?:;(?:[\-_.!~*'()a-zA-Z\d:@&=+$,]|%[a-fA-F\d]{2})*)*(?:/(?:[\-_.!~*'()a-zA-Z\d:@&=+$,]|%[a-fA-F\d]{2})*(?:;(?:[\-_.!~*'()a-zA-Z\d:@&=+$,]|%[a-fA-F\d]{2})*)*)*)?              
-           )(?:\?((?:[\-_.!~*'()a-zA-Z\d;/?:@&=+$,\[\]]|%[a-fA-F\d]{2})*))?           
+             (/(?:[\-_.!~*'()a-zA-Z0-9:@&=+$,]|%[a-fA-F0-9]{2})*(?:;(?:[\-_.!~*'()a-zA-Z0-9:@&=+$,]|%[a-fA-F0-9]{2})*)*(?:/(?:[\-_.!~*'()a-zA-Z0-9:@&=+$,]|%[a-fA-F0-9]{2})*(?:;(?:[\-_.!~*'()a-zA-Z0-9:@&=+$,]|%[a-fA-F0-9]{2})*)*)*)?              
+           )(?:\?((?:[\-_.!~*'()a-zA-Z0-9;/?:@&=+$,\[\]]|%[a-fA-F0-9]{2})*))?           
         )
-        (?:\#((?:[\-_.!~*'()a-zA-Z\d;/?:@&=+$,\[\]]|%[a-fA-F\d]{2})*))?            
+        (?:\#((?:[\-_.!~*'()a-zA-Z0-9;/?:@&=+$,\[\]]|%[a-fA-F0-9]{2})*))?            
       $";
             
             bool hasGAnchor;
@@ -282,7 +350,7 @@ puts(/b#{/a/}/)
                 @"\(\*\)",
 
                 "$_^_|_[_]_(_)_\\_._#_-_{_}_*_+_?_\t_\n_\r_\f_\v_\a_\b",
-                @"\$_\^_\|_\[_\]_\(_\)_\\_\._\#_\-_\{_\}_\*_\+_\?_\t_\n_\r_\f_" + "\v_\a_\b"
+                @"\$_\^_\|_\[_\]_\(_\)_\\_\._\#_\-_\{_\}_\*_\+_\?_\t_\n_\r_\f_\v_" + "\a_\b"
             };
 
             for (int i = 0; i < patterns.Length; i += 2) {
@@ -295,15 +363,13 @@ puts(/b#{/a/}/)
         public void RegexCondition1() {
             AssertOutput(delegate() {
                 CompilerTest(@"
-$_ = 'foo'.taint
+$_ = 'foo'
 if /(foo)/ then
   puts $1
-  puts $1.tainted?
 end
-");
+", 1, 0);
             }, @"
 foo
-true
 ");
         }
 
@@ -322,151 +388,238 @@ end
 z = /foo/
 puts(z =~ 'foo')
 
-puts(/foo/ =~ 'xxxfoo')
+puts(/foo/ =~ 'xxxfoo')     # a literal calls a redefined Regexp#=~ too (MRI 1.9+)
 ");
             }, @"
 3
 =~
-3
+=~
 ");
         }
+
+        /// <summary>
+        /// Byte escapes in a regexp of a multibyte encoding spell characters of it (/\xa4\xa2/e is one
+        /// character), and every match operation answers character offsets: the regex runs on the
+        /// string's own characters rather than on a k-coded decoding of its bytes.
+        /// </summary>
+        public void Regex_ByteEscapes1() {
+            TestOutput(@"
+s = ""あaいbあ"".encode(""EUC-JP"")
+re = Regexp.new('\xa4\xa2'.force_encoding(""EUC-JP""))
+p s =~ re, s.index(re, 1), s.rindex(re), re.encoding
+m = s.match(re, 1)
+p [m.begin(0), m.end(0), m.byteoffset(0), m.pre_match.size, $~.begin(0)]
+p s.scan(re).size, s.gsub(re, ""x"").encode(""UTF-8""), s.index(/b/e, 2), s =~ /\xa4\xa4/e
+w = ""あaいb"".encode(""Windows-31J"")
+p w =~ /\x82\xa2/s, w.split(/\x82\xa2/s).map(&:bytesize)
+p ""ああ"".encode(""EUC-JP"") =~ Regexp.new('\xa4\xa2*'.force_encoding(""EUC-JP"")), $~[0].bytesize
+p ""あaいb"" =~ /\xe3\x81\x84/, ""あaいb"".match(/b/u).byteoffset(0), ""あaいb"".match(/[\xe3\x81\x82-\xe3\x81\x84]+/)[0].size
+p((Regexp.new('\xe3\x81') rescue $!), (Regexp.new('\xff', Regexp::IGNORECASE) rescue $!))
+require 'strscan'
+ss = StringScanner.new(s)
+p ss.scan(re).bytesize, ss.scan(/a/e), ss.scan(/./e).bytesize, ss.pos, ss.charpos
+p((""abc"".encode(""UTF-16LE"") =~ /b/ rescue $!), (""abc"".encode(""UTF-16LE"") =~ /b/n rescue $!))
+p((""\xff"".force_encoding(""BINARY"").sub(""é"", """") rescue $!), (""abc"".encode(""UTF-16LE"").sub(""b"", """") rescue $!))
+", @"
+0
+4
+4
+#<Encoding:EUC-JP>
+[4, 5, [6, 8], 4, 4]
+2
+""xaいbx""
+3
+2
+2
+[3, 1]
+0
+4
+2
+[7, 8]
+1
+#<RegexpError: too short escaped multibyte character: /\xe3\x81/>
+#<RegexpError: invalid multibyte escape: /\xff/i>
+2
+""a""
+2
+5
+3
+#<Encoding::CompatibilityError: incompatible encoding regexp match (US-ASCII regexp with UTF-16LE string)>
+#<Encoding::CompatibilityError: incompatible encoding regexp match (US-ASCII regexp with UTF-16LE string)>
+#<Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8>
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8>
+");
+        }
+
+        /// <summary>
+        /// Onigmo reads no escape inside a comment, so a byte escape that spells no character there
+        /// is no error: (?#...), and under /x, or (?x) for the rest of a group, # to the end of the line.
+        /// </summary>
+        public void Regex_ByteEscapeComments1() {
+            TestOutput(@"
+p Regexp.new(""a(?#\\xff)b"") =~ ""ab"", Regexp.new(""a # \\xff\nb"", Regexp::EXTENDED) =~ ""ab""
+p Regexp.new(""(?x)a # \\xff\nb"") =~ ""ab"", Regexp.new(""(?x:a # \\xff\n)b"") =~ ""ab"", Regexp.new(""a(?#\\)\\xff)b"") =~ ""ab""
+p /a#\xff/x =~ ""a"", /a(?#\xff)/ =~ ""a"", Regexp.new(""a # caf\\xc3\\xa9\n\\xc3\\xa9"", Regexp::EXTENDED) =~ ""aé""
+p((Regexp.new(""(?x:a)# \\xff"") rescue $!), (Regexp.new(""[#\\xff]"", Regexp::EXTENDED) rescue $!))
+", @"
+0
+0
+0
+0
+0
+0
+0
+0
+#<RegexpError: invalid multibyte escape: /(?x:a)# \xff/>
+#<RegexpError: invalid multibyte escape: /[#\xff]/x>
+");
+        }
+
         
-#if OBSOLETE //? 
-        [Options(NoRuntime = true)]
-        public void RegexEncoding1() {
-            MatchData m;
-            // the k-coding of the pattern string is irrelevant:
-            foreach (var pe in new[] {  RubyEncoding.Binary }) {
-                var p = MutableString.CreateBinary(new byte[] { 0x82, 0xa0, (byte)'{', (byte)'2', (byte)'}' }, pe);
-
-                var r = new RubyRegex(p, RubyRegexOptions.NONE);
-                var rs = new RubyRegex(p, RubyRegexOptions.SJIS);
-
-                // the k-coding of the string is irrelevant:
-                foreach (var se in new[] { RubyEncoding.Binary }) {
-                    var s = MutableString.CreateBinary(new byte[] { 0x82, 0xa0,  0xa0 }, se);
-                    var t = MutableString.CreateBinary(new byte[] { 0x82, 0xa0,  0xa0,  0x82, 0xa0,  0xa0, 0xff }, se);
-                    var u = MutableString.CreateBinary(new byte[] { 0x82, 0xa0,  0x82, 0xa0,  0x82, 0xa0 }, se);
-
-                    // /あ{2}/ does not match "あ\xa0"
-                    m = r.Match(RubyEncoding.KCodeSJIS, s);
-                    Assert(m == null);
-
-                    // /\x82\xa0{2}/ matches "[ \x82\xa0\xa0 ] \x82\xa0\xa0\xff"
-                    m = r.Match(null, s);
-                    Assert(m != null && m.Index == 0);
-
-                    // /\x82\xa0{2}/ matches "\x82\xa0\xa0 [ \x82\xa0\xa0 ] \xff" starting from byte #1:
-                    m = r.Match(null, t, 1, false);
-                    Assert(m != null && m.Index == 3 && m.Length == 3);
-
-                    // /あ{2}/s does not match "あ\xa0", current KCODE is ignored
-                    m = rs.Match(null, s);
-                    Assert(m == null);
-
-                    // /あ{2}/s does not match "あ\xa0", current KCODE is ignored
-                    m = rs.Match(RubyEncoding.KCodeUTF8, s);
-                    Assert(m == null);
-
-                    // /あ{2}/s matches "ああ\xff", current KCODE is ignored
-                    m = rs.Match(RubyEncoding.KCodeUTF8, u, 2, false);
-                    Assert(m != null && m.Index == 2 && m.Length == 4);
-
-
-                    // /あ{2}/ does not match "あ\xa0あ\xa0"
-                    m = r.LastMatch(RubyEncoding.KCodeSJIS, t);
-                    Assert(m == null);
-
-                    // /\x82\xa0{2}/ matches "\x82\xa0\xa0 [ \x82\xa0\xa0 ] \xff"
-                    m = r.LastMatch(null, t);
-                    Assert(m != null && m.Index == 3);
-
-                    // /あ{2}/s does not match "あ\xa0あ\xa0", current KCODE is ignored
-                    m = rs.LastMatch(null, t);
-                    Assert(m == null);
-
-                    // /あ{2}/s does not match "あ\xa0あ\xa0", current KCODE is ignored
-                    m = rs.LastMatch(RubyEncoding.KCodeUTF8, t);
-                    Assert(m == null);
-                }
-            }
+        /// <summary>
+        /// $~ after a String#sub or #sub! with a block is what the block left it: a match made inside it, nil after
+        /// a failed one (#137). rb_str_sub_bang does not set it again after the block; IronRuby reset it to the
+        /// sub's own match. #gsub and #gsub! do reset it to their last match, and #scan leaves the block's. The
+        /// expected output is CRuby 4.0's.
+        /// </summary>
+        public void Regex_BackrefAfterBlockSub1() {
+            TestOutput(@"
+def a; r = ""ab"".sub(/(.)/) { ""x"".match(/(.)/); ""z"" }; puts ""sub blk match: #{$~&.[](0).inspect} #{r.inspect}""; end
+def b; r = ""ab"".sub(/(.)/) { ""z"" }; puts ""sub blk none: #{$~&.[](0).inspect} #{r.inspect}""; end
+def c; r = ""ab"".sub(/(.)/) { ""x"".match(/q/); ""z"" }; puts ""sub blk failed: #{$~&.[](0).inspect} #{r.inspect}""; end
+def d; s = +""ab""; r = s.sub!(/(.)/) { ""x"".match(/(.)/); ""z"" }; puts ""sub! blk match: #{$~&.[](0).inspect} #{r.inspect}""; end
+def e; r = ""ab"".gsub(/(.)/) { ""x"".match(/(.)/); ""z"" }; puts ""gsub blk match: #{$~&.[](0).inspect} #{r.inspect}""; end
+def f; r = ""ab"".gsub(/(.)/) { $1.upcase }; puts ""gsub blk none: #{$~&.[](0).inspect} #{r.inspect}""; end
+def g; r = ""ab"".gsub(/(.)/) { ""x"".match(/q/); ""z"" }; puts ""gsub blk failed: #{$~&.[](0).inspect} #{r.inspect}""; end
+def h; s = +""ab""; r = s.gsub!(/(.)/) { ""y"".match(/(.)/); ""z"" }; puts ""gsub! blk match: #{$~&.[](0).inspect} #{r.inspect}""; end
+def i; r = ""ab"".sub(""b"") { ""x"" =~ /x/; ""z"" }; puts ""sub str blk: #{$~&.[](0).inspect} #{r.inspect}""; end
+def j; ""12"".scan(/(.)/) { ""y"".match(/(.)/) }; puts ""scan blk: #{$~&.[](0).inspect}""; end
+def k; ""12"".scan(/(.)/) { ""y"".match(/(.)/); break }; puts ""scan blk break: #{$~&.[](0).inspect}""; end
+def l; r = []; ""ab"".gsub(/(.)/) { r << $~[0]; ""x"".match(/./); r << $~[0]; ""z"" }; puts ""gsub inside: #{r.inspect} after #{$~&.[](0).inspect}""; end
+def m; ""ab"".sub(/(.)/) { ""x"".match(/(.)/); ""z"" }; puts ""sub then $1: #{$1.inspect} #{$`.inspect}""; end
+def n; ""ab"".sub(/z/) { 1 }; puts ""sub nomatch: #{$~.inspect}""; end
+%i[a b c d e f g h i j k l m n].each { |x| send(x) }
+", @"
+sub blk match: ""x"" ""zb""
+sub blk none: ""a"" ""zb""
+sub blk failed: nil ""zb""
+sub! blk match: ""x"" ""zb""
+gsub blk match: ""b"" ""zz""
+gsub blk none: ""b"" ""AB""
+gsub blk failed: ""b"" ""zz""
+gsub! blk match: ""b"" ""zz""
+sub str blk: ""x"" ""az""
+scan blk: ""2""
+scan blk break: ""y""
+gsub inside: [""a"", ""x"", ""b"", ""x""] after ""b""
+sub then $1: ""x"" """"
+sub nomatch: nil
+");
         }
 
-        [Options(NoRuntime = true)]
-        public void RegexEncoding2() {
-            var SJIS = RubyEncoding.KCodeSJIS.StrictEncoding;
-
-            // 1.9 encodings:
-            var invalidUtf8 = MutableString.CreateBinary(new byte[] { 0x80 }, RubyEncoding.UTF8);
-            AssertExceptionThrown<ArgumentException>(() => new RubyRegex(invalidUtf8, RubyRegexOptions.NONE));
-
-            // LastMatch
-
-            MatchData m;
-            var u = MutableString.CreateBinary(SJIS.GetBytes("あああ"), RubyEncoding.KCodeSJIS);
-            var p = MutableString.CreateBinary(SJIS.GetBytes("あ{2}"), RubyEncoding.KCodeSJIS);
-
-            var rs = new RubyRegex(p, RubyRegexOptions.SJIS);
-
-            // /あ{2}/ matches "あああ", the resulting index is in bytes:
-            m = rs.LastMatch(null, u);
-            Assert(m != null && m.Index == 2);
-
-            rs = new RubyRegex(MutableString.CreateBinary(SJIS.GetBytes("あ")), RubyRegexOptions.SJIS);
-
-            // "start at" in the middle of a character:
-            m = rs.LastMatch(null, u, 0);
-            Assert(m != null && m.Index == 0);
-
-            m = rs.LastMatch(null, u, 1);
-            Assert(m != null && m.Index == 0);
-
-            m = rs.LastMatch(null, u, 2);
-            Assert(m != null && m.Index == 2);
-
-            m = rs.LastMatch(null, u, 3);
-            Assert(m != null && m.Index == 2);
-
-            // Split
-            
-            u = MutableString.CreateBinary(SJIS.GetBytes("あちあちあ"), RubyEncoding.UTF8);
-            rs = new RubyRegex(MutableString.CreateBinary(SJIS.GetBytes("ち")), RubyRegexOptions.SJIS);
-            var parts = rs.Split(null, u);
-            Assert(parts.Length == 3);
-            foreach (var part in parts) {
-                Assert(part.Encoding == RubyEncoding.KCodeSJIS);
-                Assert(part.ToString() == "あ");
-            }
-
-            // groups
-
-            rs = new RubyRegex(MutableString.CreateBinary(SJIS.GetBytes("ち(a(あ+)(b+))+あ")), RubyRegexOptions.SJIS);
-            u = MutableString.CreateBinary(SJIS.GetBytes("ちaああbaあbbbあ"));
-
-            m = rs.Match(null, u);
-            Assert(m.GroupCount == 4);
-
-            int s, l;
-            Assert(m.GetGroupStart(0) == (s = 0));
-            Assert(m.GetGroupLength(0) == (l = u.GetByteCount()));
-            Assert(m.GetGroupEnd(0) == s + l);
-
-            // the group has 2 captures, the last one is its value:
-            Assert(m.GetGroupStart(1) == (s = SJIS.GetByteCount("ちaああb")));
-            Assert(m.GetGroupLength(1) == (l = SJIS.GetByteCount("aあbbb")));
-            Assert(m.GetGroupEnd(1) == s + l);
-
-            // the group has 2 captures, the last one is its value:
-            Assert(m.GetGroupStart(2) == (s = SJIS.GetByteCount("ちaああba")));
-            Assert(m.GetGroupLength(2) == (l = SJIS.GetByteCount("あ")));
-            Assert(m.GetGroupEnd(2) == s + l);
-
-            // the group has 2 captures, the last one is its value:
-            Assert(m.GetGroupStart(3) == (s = SJIS.GetByteCount("ちaああbaあ")));
-            Assert(m.GetGroupLength(3) == (l = SJIS.GetByteCount("bbb")));
-            Assert(m.GetGroupEnd(3) == s + l);
+        /// <summary>
+        /// $~.string keeps a String subclass's class and is a frozen receiver itself (rb_str_new_frozen),
+        /// except after String#sub: rb_str_sub matches on str_duplicate(rb_cString, str), so there it is
+        /// a String copy even for a subclass or a frozen receiver (#89). The expected output is CRuby 4.0's.
+        /// </summary>
+        public void Regex_MatchStringClassAndIdentity1() {
+            TestOutput(@"
+class S < String; end
+def t(label, src, m) = puts([label, m.string.class, m.string.equal?(src), m.string.frozen?, m.string].inspect)
+s = S.new(""abc""); f = ""xyz"".freeze; fs = S.new(""xyz"").freeze; u = +""hello""
+s =~ /b/; t(:match_sub, s, $~)
+f =~ /y/; t(:match_frozen, f, $~)
+fs =~ /y/; t(:match_frozen_sub, fs, $~)
+u =~ /l/; t(:match_plain, u, $~)
+s.sub(/a/, ""q""); t(:sub, s, $~)
+f.sub(/x/, ""q""); t(:sub_frozen, f, $~)
+fs.sub(/x/) { ""q"" }; t(:sub_blk_frozen_sub, fs, $~)
+s.sub(/a/, ""a"" => ""q""); t(:sub_hash, s, $~)
+s.sub(""a"", ""q""); t(:sub_strpat, s, $~)
+u.sub(/l/, ""q""); t(:sub_plain, u, $~)
+s1 = S.new(""abc""); s1.sub!(/a/, ""q""); t(:sub_bang, s1, $~)
+s.gsub(/a/, ""q""); t(:gsub, s, $~)
+f.gsub(/x/, ""q""); t(:gsub_frozen, f, $~)
+f.scan(/./); t(:scan_frozen, f, $~)
+s2 = S.new(""abc""); m = s2.match(/b/); s2 << ""zz""; t(:mutated, s2, m)
+", @"
+[:match_sub, S, false, true, ""abc""]
+[:match_frozen, String, true, true, ""xyz""]
+[:match_frozen_sub, S, true, true, ""xyz""]
+[:match_plain, String, false, true, ""hello""]
+[:sub, String, false, true, ""abc""]
+[:sub_frozen, String, false, true, ""xyz""]
+[:sub_blk_frozen_sub, String, false, true, ""xyz""]
+[:sub_hash, String, false, true, ""abc""]
+[:sub_strpat, String, false, true, ""abc""]
+[:sub_plain, String, false, true, ""hello""]
+[:sub_bang, S, false, true, ""abc""]
+[:gsub, S, false, true, ""abc""]
+[:gsub_frozen, String, true, true, ""xyz""]
+[:scan_frozen, String, true, true, ""xyz""]
+[:mutated, S, false, true, ""abc""]
+");
         }
-#endif
+
+        /// <summary>
+        /// Regexps of the same pattern, options and timeout share the translated CLR regex (#89):
+        /// errors are still raised every time, \G and named groups still work, and each Regexp
+        /// still counts its own way up to being compiled. The expected output is CRuby 4.0's.
+        /// </summary>
+        public void Regex_SharedTranslation1() {
+            TestOutput(@"
+r = (1..3).map { Regexp.new(""(?<w>\\w+)@(\\w+)"") }
+p [r.map(&:names).uniq, r.map { ""joe@ex"" =~ it }, r[0] == r[2], r[0].equal?(r[1])]
+p [Regexp.new(""ab"", Regexp::IGNORECASE) =~ ""xAB"", Regexp.new(""ab"") =~ ""xAB"", Regexp.new(""a.c"", Regexp::MULTILINE) =~ ""a\nc"", Regexp.new(""a.c"") =~ ""a\nc""]
+g = Regexp.new(""\\Gab""); h = Regexp.new(""\\Gab"")
+p [""xab"".index(g, 1), ""xab"".index(h, 0), ""abab"".scan(h), ""xabab"".scan(g)]
+3.times { p((Regexp.new(""a(b"") rescue $!.class)) }
+t1 = Regexp.new(""a+"", timeout: 1.5); t2 = Regexp.new(""a+"")
+p [t1.timeout, t2.timeout, ""baa""[t1], ""baa""[t2]]
+x = ""ab""
+p (0...9000).map { |i| ""zab#{i % 3}"" =~ /#{x}#{i % 3}/ }.uniq
+p (1..5).map { |i| /(#{i})-(?<n>x)?/.names }
+src = ""(\\w+)@(\\w+)\\.com""
+12000.times { ""joe@example.com"" =~ Regexp.new(src) }
+hot = Regexp.new(src)
+12000.times { ""joe@example.com"" =~ hot }
+p [""a joe@example.com b"".match(Regexp.new(src)).captures, $~.begin(0), ""no"" =~ Regexp.new(src)]
+", @"
+[[[""w""]], [0, 0, 0], true, false]
+[1, nil, 0, nil]
+[1, nil, [""ab"", ""ab""], []]
+RegexpError
+RegexpError
+RegexpError
+[1.5, nil, ""aa"", ""aa""]
+[1]
+[[""n""], [""n""], [""n""], [""n""], [""n""]]
+[[""joe"", ""example""], 2, nil]
+");
+        }
+
+        public void Regex_SharedTranslation2() {
+            var field = typeof(RubyRegex).GetField("_cachedRegex", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            var pattern = "shared(tr)+anslation2";
+            var a = new RubyRegex(MutableString.CreateAscii(pattern), RubyRegexOptions.NONE);
+            var b = new RubyRegex(MutableString.CreateAscii(pattern), RubyRegexOptions.NONE);
+            var c = new RubyRegex(MutableString.CreateAscii(pattern), RubyRegexOptions.IgnoreCase);
+            Assert(field.GetValue(a) != null && field.GetValue(a) == field.GetValue(b));
+            Assert(field.GetValue(a) != field.GetValue(c));
+
+            // a tiers up on its own uses; b, which already has its regex, is not affected, and a
+            // Regexp made afterwards starts with the compiled one
+            var input = MutableString.CreateAscii("x sharedtrtranslation2 y");
+            for (int i = 0; i < 10001; i++) {
+                Assert(a.Match(input) != null);
+            }
+            var compiled = (Regex)field.GetValue(a);
+            Assert((compiled.Options & RegexOptions.Compiled) != 0);
+            Assert(field.GetValue(b) != compiled);
+            var d = new RubyRegex(MutableString.CreateAscii(pattern), RubyRegexOptions.NONE);
+            Assert(field.GetValue(d) == compiled);
+            Assert(d.Match(input).GetGroupStart(1) == 10); // the last "tr"
+        }
     }
 }
 

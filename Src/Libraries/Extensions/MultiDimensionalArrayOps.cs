@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-using System;
-using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Math;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Generation;
 
 namespace IronRuby.Builtins {
     /// <summary>

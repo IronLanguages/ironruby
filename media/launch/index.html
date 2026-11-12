@@ -1,0 +1,401 @@
+<!doctype html>
+<!--
+  The IronRuby 4.0 launch video: a HyperFrames composition (media/launch/README.md).
+  1920x1080, 55 s, one paused GSAP timeline. Every figure on screen is taken from the
+  project README, and every line of code runs on IronRuby 4.0.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>IronRuby 4.0</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      @font-face { font-family: "Inter"; src: url("assets/fonts/inter-latin-400-normal.woff2") format("woff2"); font-weight: 400; }
+      @font-face { font-family: "Inter"; src: url("assets/fonts/inter-latin-600-normal.woff2") format("woff2"); font-weight: 600; }
+      @font-face { font-family: "Inter"; src: url("assets/fonts/inter-latin-700-normal.woff2") format("woff2"); font-weight: 700; }
+      @font-face { font-family: "Inter"; src: url("assets/fonts/inter-latin-800-normal.woff2") format("woff2"); font-weight: 800; }
+      @font-face { font-family: "JetBrains Mono"; src: url("assets/fonts/jetbrains-mono-latin-400-normal.woff2") format("woff2"); font-weight: 400; }
+      @font-face { font-family: "JetBrains Mono"; src: url("assets/fonts/jetbrains-mono-latin-500-normal.woff2") format("woff2"); font-weight: 500; }
+      @font-face { font-family: "JetBrains Mono"; src: url("assets/fonts/jetbrains-mono-latin-700-normal.woff2") format("woff2"); font-weight: 700; }
+
+      :root {
+        --ruby: #e0115f; --violet: #7a5af8; --hot: #ff4d7a; --lilac: #a78bfa;
+        --bg-1: #0a0b1c; --bg-2: #171433; --text: #e8ebf5; --muted: #9aa3c0; --dim: #5b6283;
+        --win: #0e1024; --win-bar: #141634; --line: rgba(255, 255, 255, 0.09);
+        --t-comment: #6c7699; --t-keyword: #c792ea; --t-const: #ffcb6b; --t-method: #82aaff;
+        --t-string: #c3e88d; --t-symbol: #f78c6c; --t-param: #f07178; --t-punct: #89ddff; --t-num: #f78c6c;
+        --sans: "Inter", system-ui, sans-serif; --mono: "JetBrains Mono", ui-monospace, monospace;
+      }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 1920px; height: 1080px; overflow: hidden; background: var(--bg-1); }
+      #root { position: relative; width: 1920px; height: 1080px; overflow: hidden; color: var(--text); font-family: var(--sans); -webkit-font-smoothing: antialiased; }
+
+      /* The backdrop all scenes share */
+      #backdrop { position: absolute; inset: 0; background: linear-gradient(160deg, var(--bg-1), var(--bg-2)); }
+      .grid { position: absolute; inset: -120px; background:
+        linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px) 0 0 / 80px 80px,
+        linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px) 0 0 / 80px 80px; }
+      .glow { position: absolute; border-radius: 50%; }
+      #glow-ruby { width: 1300px; height: 1300px; left: -420px; top: -620px; background: radial-gradient(circle, rgba(224,17,95,0.30) 0%, rgba(224,17,95,0.08) 42%, rgba(224,17,95,0) 70%); }
+      #glow-violet { width: 1400px; height: 1400px; left: 1050px; top: 380px; background: radial-gradient(circle, rgba(122,90,248,0.32) 0%, rgba(122,90,248,0.08) 42%, rgba(122,90,248,0) 70%); }
+      #vignette { position: absolute; inset: 0; background: radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, rgba(0,0,0,0.45) 100%); }
+
+      .scene { position: absolute; inset: 0; width: 1920px; height: 1080px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+      .kicker { font: 600 28px var(--mono); color: var(--muted); letter-spacing: 1px; }
+      .headline { font-size: 76px; font-weight: 800; letter-spacing: -2px; line-height: 1.08; text-align: center; }
+      .accent { background: linear-gradient(90deg, var(--hot), var(--lilac)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+      .sub { font-size: 34px; font-weight: 600; color: var(--muted); text-align: center; }
+
+      /* 1. 2011 */
+      #s-2011 { filter: saturate(0.2); }
+      #year-old { font: 800 260px var(--sans); letter-spacing: -10px; color: rgba(255,255,255,0.10); line-height: 1; }
+      .fact { font: 500 44px var(--mono); color: #b9bfd6; margin-top: 18px; }
+      #last-release { font: 700 52px var(--sans); color: var(--text); margin-top: 46px; }
+
+      /* 2. title */
+      #year-new { font: 800 120px var(--sans); color: var(--muted); letter-spacing: -3px; font-variant-numeric: tabular-nums; }
+      #title { font-size: 210px; font-weight: 800; letter-spacing: -8px; line-height: 1; margin-top: 10px; }
+      #title-sub { margin-top: 40px; font-size: 48px; }
+      #title-rule { width: 760px; height: 4px; margin-top: 44px; border-radius: 2px; background: linear-gradient(90deg, var(--ruby), var(--violet)); transform-origin: 0 50%; }
+
+      /* terminal and code windows */
+      .window { border-radius: 22px; background: var(--win); border: 1px solid var(--line); overflow: hidden;
+        box-shadow: 0 40px 120px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.02) inset; }
+      .bar { height: 56px; background: var(--win-bar); border-bottom: 1px solid var(--line); display: flex; align-items: center; padding: 0 24px; gap: 11px; }
+      .bar i { width: 15px; height: 15px; border-radius: 50%; display: block; }
+      .bar i:nth-child(1) { background: #ff5f57; } .bar i:nth-child(2) { background: #febc2e; } .bar i:nth-child(3) { background: #28c840; }
+      .bar span { margin-left: 18px; font: 500 20px var(--mono); color: var(--muted); }
+      .code { padding: 30px 40px; font: 400 31px/1.62 var(--mono); color: var(--text); font-variant-ligatures: none; }
+      .code .ln { display: block; white-space: pre; }
+      .code .ln .tx { display: inline-block; white-space: pre; }
+      .pr { color: var(--dim); } .out { color: var(--muted); }
+      .c { color: var(--t-comment); font-style: italic; } .k { color: var(--t-keyword); } .n { color: var(--t-const); }
+      .m { color: var(--t-method); } .s { color: var(--t-string); } .y { color: var(--t-symbol); } .p { color: var(--t-punct); }
+      .v { color: var(--t-param); } .d { color: var(--t-num); }
+
+      /* 3. irb */
+      #s-irb { flex-direction: row; gap: 40px; }
+      #irb { width: 1310px; }
+      #irb .code { font-size: 28px; }
+      #irb-notes { width: 440px; display: flex; flex-direction: column; gap: 22px; }
+      .note { font: 600 30px var(--sans); color: var(--text); padding: 20px 26px; border-radius: 16px; background: rgba(255,255,255,0.05); border: 1px solid var(--line); }
+      .note b { color: var(--hot); font-weight: 700; }
+      .note small { display: block; margin-top: 6px; font: 500 23px var(--sans); color: var(--muted); }
+
+      /* 4. prism */
+      #pipeline { display: flex; align-items: center; gap: 0; margin-top: 90px; }
+      .stage { width: 238px; padding: 26px 10px; border-radius: 18px; text-align: center; background: rgba(255,255,255,0.05); border: 1px solid var(--line); }
+      .stage b { display: block; font: 700 27px var(--mono); color: var(--text); white-space: nowrap; }
+      .stage small { display: block; margin-top: 8px; font: 500 19px var(--sans); color: var(--muted); }
+      .stage.hot { background: rgba(224,17,95,0.12); border-color: rgba(224,17,95,0.55); }
+      .stage.cool { background: rgba(122,90,248,0.14); border-color: rgba(122,90,248,0.6); }
+      .arrow { width: 40px; height: 4px; margin: 0 4px; border-radius: 2px; background: linear-gradient(90deg, rgba(255,255,255,0.15), rgba(255,255,255,0.6)); transform-origin: 0 50%; }
+      #prism-note { margin-top: 80px; }
+
+      /* 5. ruby/spec */
+      #specs { display: flex; gap: 46px; margin-top: 80px; }
+      .spec { width: 500px; padding: 40px 36px; border-radius: 24px; background: rgba(255,255,255,0.05); border: 1px solid var(--line); }
+      .spec .suite { font: 600 30px var(--mono); color: var(--muted); }
+      .spec .count { font: 800 104px var(--sans); letter-spacing: -3px; margin-top: 14px; line-height: 1; }
+      .spec .label { font: 600 26px var(--sans); color: var(--muted); margin-top: 6px; }
+      .spec .fails { font: 700 36px var(--sans); margin-top: 28px; }
+      .spec .fails.zero { color: #4ade80; }
+      .spec .fails.some { color: var(--t-const); }
+
+      /* 6. JIT */
+      #ratios { display: flex; gap: 46px; margin-top: 80px; }
+      .ratio { width: 760px; padding: 40px 44px; border-radius: 24px; background: rgba(255,255,255,0.05); border: 1px solid var(--line); }
+      .ratio .val { font: 800 104px var(--sans); letter-spacing: -3px; line-height: 1; }
+      .ratio.fast .val { color: #4ade80; }
+      .ratio .what { font: 700 32px var(--sans); margin-top: 22px; }
+      .ratio .detail { font: 500 26px var(--sans); color: var(--muted); margin-top: 10px; line-height: 1.4; }
+      #jit-note { margin-top: 60px; font-size: 28px; }
+
+      /* 7. .NET */
+      #s-net { flex-direction: row; gap: 60px; }
+      #net-left { width: 640px; display: flex; flex-direction: column; gap: 34px; }
+      #net-left .headline { text-align: left; font-size: 64px; }
+      #net-code { width: 640px; }
+      #net-code .code { font-size: 26px; padding: 24px 30px; }
+      #notepad { width: 1100px; height: 666px; position: relative; }
+      #notepad img { width: 1100px; height: 666px; display: block; border-radius: 12px; box-shadow: 0 50px 140px rgba(0,0,0,0.65); }
+      #net-caption { position: absolute; left: 0; right: 0; bottom: -78px; text-align: center; font: 600 30px var(--sans); color: var(--text); }
+      #net-caption b { color: var(--hot); }
+
+      /* 8. tooling */
+      #tools { display: flex; gap: 40px; margin-top: 80px; }
+      .tool { width: 520px; padding: 40px 38px; border-radius: 24px; background: rgba(255,255,255,0.05); border: 1px solid var(--line); }
+      .tool .what { font: 800 44px var(--sans); letter-spacing: -1px; }
+      .tool .how { margin-top: 22px; font: 500 26px var(--mono); color: var(--t-string); padding: 16px 20px; border-radius: 12px; background: rgba(0,0,0,0.35); white-space: nowrap; }
+      .tool .how .pr { color: var(--ruby); }
+      .tool .why { margin-top: 22px; font: 500 27px var(--sans); color: var(--muted); line-height: 1.4; }
+
+      /* 9. end */
+      #end-title { font-size: 190px; font-weight: 800; letter-spacing: -7px; line-height: 1; }
+      #end-version { font: 700 46px var(--mono); color: var(--muted); margin-top: 18px; }
+      #downloads { display: flex; gap: 26px; margin-top: 70px; }
+      .os { font: 700 34px var(--sans); padding: 20px 36px; border-radius: 18px; background: rgba(255,255,255,0.06); border: 1px solid var(--line); }
+      #end-url { margin-top: 64px; font: 600 44px var(--mono); color: var(--text); padding: 20px 34px; border-radius: 16px; background: rgba(0,0,0,0.35); border: 1px solid var(--line); }
+      #end-url .pr { color: var(--ruby); margin-right: 16px; }
+      #end-license { margin-top: 34px; font: 500 26px var(--sans); color: var(--dim); }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-start="0" data-width="1920" data-height="1080" data-duration="55">
+      <!-- Grieg, In the Hall of the Mountain King (public domain; tools/fetch-music.sh fetches
+           it for the render). The recording is 154.1 s; from its loudness (fetch-music.sh
+           --profile): the opening is near -40 LUFS, the full orchestra enters at 101 s, the
+           general pause is 147.5-148.3 s, the final chords 148.4-150.4 s. So the opening
+           plays under 2011, 11 dB up, and the film cuts in at 104.1 s with the title: the
+           pause falls just before the end card, and the final chord on it (49.6 s). -->
+      <audio id="music-intro" src="assets/music/mountain-king.mp3" data-start="0" data-duration="5.9" data-media-start="0" data-volume="3.5" data-track-index="10"></audio>
+      <audio id="music-main" src="assets/music/mountain-king.mp3" data-start="5.3" data-duration="49.7" data-media-start="104.1" data-track-index="11"></audio>
+
+      <div id="backdrop" class="clip" data-start="0" data-duration="55" data-track-index="0">
+        <div class="grid" id="grid"></div>
+        <div class="glow" id="glow-ruby"></div>
+        <div class="glow" id="glow-violet"></div>
+        <div id="vignette"></div>
+      </div>
+
+      <section id="s-2011" class="scene clip" data-start="0" data-duration="5.6" data-track-index="1">
+        <div id="year-old">2011</div>
+        <div class="fact" id="fact-1">IronRuby 1.1.3</div>
+        <div class="fact" id="fact-2">Ruby 1.9.2 · .NET Framework 4</div>
+        <div id="last-release">The last release.</div>
+      </section>
+
+      <section id="s-title" class="scene clip" data-start="5.2" data-duration="5.6" data-track-index="2">
+        <div id="year-new">2011</div>
+        <div id="title">Iron<span class="accent">Ruby</span> 4.0</div>
+        <div id="title-rule"></div>
+        <div class="sub" id="title-sub">Ruby 4.0 on .NET 8 and 10</div>
+      </section>
+
+      <section id="s-irb" class="scene clip" data-start="10.4" data-duration="9.8" data-track-index="1">
+        <div class="window" id="irb">
+          <div class="bar"><i></i><i></i><i></i><span>irb — IronRuby 4.0.0</span></div>
+          <div class="code">
+            <div class="ln" id="irb-1"><span class="tx"><span class="pr">irb(main):001&gt; </span><span class="n">RUBY_DESCRIPTION</span></span></div>
+            <div class="ln out" id="irb-1o"><span class="tx">=&gt; <span class="s">"IronRuby 4.0.0 (4.0.0) on .NET 8.0.31 [x64-mswin64]"</span></span></div>
+            <div class="ln" id="irb-2"><span class="tx"><span class="pr">irb(main):002&gt; </span><span class="k">def</span> <span class="m">fib</span><span class="p">(</span><span class="v">n</span><span class="p">)</span> <span class="p">=</span> <span class="v">n</span> <span class="p">&lt;</span> <span class="d">2</span> <span class="p">?</span> <span class="v">n</span> <span class="p">:</span> <span class="m">fib</span><span class="p">(</span><span class="v">n</span> <span class="p">-</span> <span class="d">1</span><span class="p">)</span> <span class="p">+</span> <span class="m">fib</span><span class="p">(</span><span class="v">n</span> <span class="p">-</span> <span class="d">2</span><span class="p">)</span></span></div>
+            <div class="ln out" id="irb-2o"><span class="tx">=&gt; <span class="y">:fib</span></span></div>
+            <div class="ln" id="irb-3"><span class="tx"><span class="pr">irb(main):003&gt; </span><span class="p">(</span><span class="d">1</span><span class="p">..</span><span class="d">10</span><span class="p">).</span><span class="m">map</span> <span class="p">{</span> <span class="m">fib</span><span class="p">(</span><span class="v">it</span><span class="p">)</span> <span class="p">}</span></span></div>
+            <div class="ln out" id="irb-3o"><span class="tx">=&gt; <span class="p">[</span><span class="d">1</span>, <span class="d">1</span>, <span class="d">2</span>, <span class="d">3</span>, <span class="d">5</span>, <span class="d">8</span>, <span class="d">13</span>, <span class="d">21</span>, <span class="d">34</span>, <span class="d">55</span><span class="p">]</span></span></div>
+            <div class="ln" id="irb-4"><span class="tx"><span class="pr">irb(main):004&gt; </span><span class="n">Point</span> <span class="p">=</span> <span class="n">Struct</span><span class="p">.</span><span class="m">new</span><span class="p">(</span><span class="y">:x</span><span class="p">,</span> <span class="y">:y</span><span class="p">)</span></span></div>
+            <div class="ln out" id="irb-4o"><span class="tx">=&gt; <span class="n">Point</span></span></div>
+            <div class="ln" id="irb-5"><span class="tx"><span class="pr">irb(main):005&gt; </span><span class="k">case</span> <span class="n">Point</span><span class="p">.</span><span class="m">new</span><span class="p">(</span><span class="d">3</span><span class="p">,</span> <span class="d">4</span><span class="p">)</span></span></div>
+            <div class="ln" id="irb-6"><span class="tx"><span class="pr">irb(main):006*   </span><span class="k">in</span> <span class="p">[</span><span class="n">Integer</span> <span class="p">=&gt;</span> <span class="v">x</span><span class="p">,</span> <span class="n">Integer</span> <span class="p">=&gt;</span> <span class="v">y</span><span class="p">]</span> <span class="k">then</span> <span class="n">Math</span><span class="p">.</span><span class="m">hypot</span><span class="p">(</span><span class="v">x</span><span class="p">,</span> <span class="v">y</span><span class="p">)</span></span></div>
+            <div class="ln" id="irb-7"><span class="tx"><span class="pr">irb(main):007* </span><span class="k">end</span></span></div>
+            <div class="ln out" id="irb-7o"><span class="tx">=&gt; <span class="d">5.0</span></span></div>
+          </div>
+        </div>
+        <div id="irb-notes">
+          <div class="note" id="note-1">Ruby <b>4.0</b> syntax<small>pattern matching, endless def, it</small></div>
+          <div class="note" id="note-2">irb <b>1.16</b> + reline<small>highlighting, completion, history</small></div>
+          <div class="note" id="note-3">The stdlib of <b>Ruby 4.0</b><small>vendored, first on the load path</small></div>
+        </div>
+      </section>
+
+      <section id="s-prism" class="scene clip" data-start="20" data-duration="6.2" data-track-index="2">
+        <div class="headline">Parsed by <span class="accent">prism</span>,</div>
+        <div class="headline">the parser CRuby uses.</div>
+        <div id="pipeline">
+          <div class="stage" id="st-1"><b>source</b><small>your .rb</small></div>
+          <div class="arrow" id="ar-1"></div>
+          <div class="stage hot" id="st-2"><b>libprism</b><small>CRuby's parser</small></div>
+          <div class="arrow" id="ar-2"></div>
+          <div class="stage" id="st-3"><b>binary AST</b><small>serialized</small></div>
+          <div class="arrow" id="ar-3"></div>
+          <div class="stage" id="st-4"><b>PrismLoader</b><small>generated C#</small></div>
+          <div class="arrow" id="ar-4"></div>
+          <div class="stage" id="st-5"><b>IronRuby AST</b><small>lowered</small></div>
+          <div class="arrow" id="ar-5"></div>
+          <div class="stage cool" id="st-6"><b>DLR</b><small>IL on .NET</small></div>
+        </div>
+        <div class="sub" id="prism-note">152 node classes, generated from prism's own config</div>
+      </section>
+
+      <section id="s-specs" class="scene clip" data-start="25.8" data-duration="6.4" data-track-index="1">
+        <div class="kicker">MEASURED WITH RUBY/SPEC AT CRUBY 4.0.6</div>
+        <div id="specs">
+          <div class="spec" id="sp-1"><div class="suite">spec/language</div><div class="count" id="cn-1">0</div><div class="label">examples</div><div class="fails zero">0 failing</div></div>
+          <div class="spec" id="sp-2"><div class="suite">spec/library</div><div class="count" id="cn-2">0</div><div class="label">examples</div><div class="fails zero">0 failing</div></div>
+          <div class="spec" id="sp-3"><div class="suite">spec/core</div><div class="count" id="cn-3">0</div><div class="label">examples</div><div class="fails some">21 failing</div></div>
+        </div>
+      </section>
+
+      <section id="s-jit" class="scene clip" data-start="31.8" data-duration="5.6" data-track-index="2">
+        <div class="headline">Method JIT + OSR,</div>
+        <div class="headline"><span class="accent">on by default.</span></div>
+        <div id="ratios">
+          <div class="ratio fast" id="rt-1"><div class="val">0.27–0.74×</div><div class="what">ahead of CRuby</div><div class="detail">int and float arithmetic, compare and branch, while loops, fib, mandelbrot</div></div>
+          <div class="ratio" id="rt-2"><div class="val">3.25×</div><div class="what">geomean, all 50 benchmarks</div><div class="detail">calls, ivars, strings and arrays 2–4×; raise and fibers far behind</div></div>
+        </div>
+        <div class="sub" id="jit-note">IronRuby's time over CRuby 4.0.6's, Release build: lower is faster</div>
+      </section>
+
+      <section id="s-net" class="scene clip" data-start="37" data-duration="7.4" data-track-index="1">
+        <div id="net-left">
+          <div class="headline">.NET is <span class="accent">right there.</span></div>
+          <div class="window" id="net-code">
+            <div class="bar"><i></i><i></i><i></i><span>hello.rb</span></div>
+            <div class="code">
+              <div class="ln"><span class="k">require</span> <span class="s">"System.Windows.Forms"</span></div>
+              <div class="ln"><span class="n">Forms</span> <span class="p">=</span> <span class="n">System</span><span class="p">::</span><span class="n">Windows</span><span class="p">::</span><span class="n">Forms</span></div>
+              <div class="ln"> </div>
+              <div class="ln">form <span class="p">=</span> <span class="n">Forms</span><span class="p">::</span><span class="n">Form</span><span class="p">.</span><span class="m">new</span></div>
+              <div class="ln">form<span class="p">.</span><span class="m">text</span> <span class="p">=</span> <span class="s">"Hello from Ruby"</span></div>
+              <div class="ln"><span class="n">Forms</span><span class="p">::</span><span class="n">Application</span><span class="p">.</span><span class="m">run</span><span class="p">(</span>form<span class="p">)</span></div>
+            </div>
+          </div>
+        </div>
+        <div id="notepad">
+          <img src="assets/images/notepad.png" alt="IronRuby Notepad showing its own source" />
+          <div id="net-caption">Windows Notepad, in <b>1,365 lines of Ruby</b></div>
+        </div>
+      </section>
+
+      <section id="s-tools" class="scene clip" data-start="44" data-duration="5.8" data-track-index="2">
+        <div class="headline">Gems, apps, <span class="accent">downloads.</span></div>
+        <div id="tools">
+          <div class="tool" id="tl-1"><div class="what">RubyGems + Bundler</div><div class="how"><span class="pr">$ </span>igem install rack</div><div class="why">RubyGems 4.0.16, over real TLS</div></div>
+          <div class="tool" id="tl-2"><div class="what">irubyc</div><div class="how"><span class="pr">$ </span>irubyc --single-file</div><div class="why">A Ruby program as one executable</div></div>
+          <div class="tool" id="tl-3"><div class="what">Self-contained</div><div class="how"><span class="pr">$ </span>ir.cmd app.rb</div><div class="why">Unzip and run: no .NET to install</div></div>
+        </div>
+      </section>
+
+      <section id="s-end" class="scene clip" data-start="49.4" data-duration="5.6" data-track-index="1">
+        <div id="end-title">Iron<span class="accent">Ruby</span></div>
+        <div id="end-version">4.0.0</div>
+        <div id="downloads">
+          <div class="os" id="os-1">Windows x64</div>
+          <div class="os" id="os-2">Linux x64</div>
+          <div class="os" id="os-3">macOS arm64</div>
+        </div>
+        <div id="end-url"><span class="pr">↓</span>github.com/Largo/ironruby</div>
+        <div id="end-license">Apache License 2.0</div>
+      </section>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+      const ease = "power3.out";
+
+      // Scene boundaries: each scene fades in at its start and out before its end.
+      function scene(id, start, duration, fadeIn = 0.5, fadeOut = 0.4) {
+        tl.fromTo(id, { opacity: 0 }, { opacity: 1, duration: fadeIn, ease: "power2.out" }, start);
+        tl.to(id, { opacity: 0, duration: fadeOut, ease: "power2.in" }, start + duration - fadeOut);
+      }
+      function rise(target, at, dur = 0.7, y = 40) {
+        tl.fromTo(target, { autoAlpha: 0, y }, { autoAlpha: 1, y: 0, duration: dur, ease }, at);
+      }
+      // Typing: the line is uncovered left to right, one character per step.
+      function type(id, at, chars, perChar = 0.028) {
+        tl.fromTo(`${id} .tx`, { clipPath: "inset(0 100% 0 0)" }, { clipPath: "inset(0 0% 0 0)", duration: chars * perChar, ease: `steps(${chars})` }, at);
+        tl.fromTo(id, { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.01 }, at);
+      }
+      function show(id, at) {
+        tl.fromTo(id, { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.15 }, at);
+      }
+      function count(id, value, at, dur = 1.6) {
+        const el = document.querySelector(id);
+        const state = { v: 0 };
+        tl.to(state, { v: value, duration: dur, ease: "power2.out", onUpdate: () => { el.textContent = Math.round(state.v).toLocaleString("en-US"); } }, at);
+      }
+
+      // Music: the orchestra is there with the title, and fades out at the very end. The
+      // opening keeps its static data-volume (3.5, +11 dB): a volume tween is a media
+      // element's volume, which only goes from 0 to 1, and the render fails beyond that.
+      // It needs no fade either: the recording begins in silence, and the cut covers its end.
+      tl.fromTo("#music-main", { volume: 0 }, { volume: 1, duration: 0.25, ease: "none" }, 5.3);
+      tl.to("#music-main", { volume: 0, duration: 1.2, ease: "none" }, 53.8);
+
+      // The backdrop drifts through the whole film.
+      tl.fromTo("#glow-ruby", { x: 0, y: 0 }, { x: 260, y: 140, duration: 55, ease: "sine.inOut" }, 0);
+      tl.fromTo("#glow-violet", { x: 0, y: 0 }, { x: -320, y: -180, duration: 55, ease: "sine.inOut" }, 0);
+      tl.fromTo("#grid", { x: 0, y: 0 }, { x: 80, y: 40, duration: 55, ease: "none" }, 0);
+
+      // 1. 2011: the last release
+      scene("#s-2011", 0, 5.6, 0.8, 0.6);
+      tl.fromTo("#year-old", { autoAlpha: 0, scale: 1.08 }, { autoAlpha: 1, scale: 1, duration: 1.4, ease: "power2.out" }, 0.2);
+      rise("#fact-1", 1.1);
+      rise("#fact-2", 1.6);
+      rise("#last-release", 2.6, 0.8, 24);
+
+      // 2. 2026: IronRuby 4.0
+      scene("#s-title", 5.2, 5.6, 0.5, 0.5);
+      const year = { v: 2011 };
+      const yearEl = document.querySelector("#year-new");
+      tl.to(year, { v: 2026, duration: 1.1, ease: "power1.inOut", onUpdate: () => { yearEl.textContent = String(Math.round(year.v)); } }, 5.5);
+      tl.fromTo("#year-new", { color: "#5b6283" }, { color: "#e8ebf5", duration: 0.4 }, 6.4);
+      tl.fromTo("#title", { autoAlpha: 0, y: 60, scale: 0.94 }, { autoAlpha: 1, y: 0, scale: 1, duration: 0.9, ease: "back.out(1.4)" }, 6.7);
+      tl.fromTo("#title-rule", { scaleX: 0 }, { scaleX: 1, duration: 0.8, ease }, 7.3);
+      rise("#title-sub", 7.6, 0.7, 24);
+
+      // 3. irb
+      scene("#s-irb", 10.4, 9.8);
+      rise("#irb", 10.5, 0.8, 50);
+      type("#irb-1", 11.2, 32);
+      show("#irb-1o", 12.2);
+      type("#irb-2", 12.6, 64, 0.022);
+      show("#irb-2o", 14.1);
+      type("#irb-3", 14.4, 39);
+      show("#irb-3o", 15.6);
+      type("#irb-4", 15.9, 43, 0.022);
+      show("#irb-4o", 17.0);
+      type("#irb-5", 17.2, 39, 0.02);
+      type("#irb-6", 18.0, 70, 0.012);
+      type("#irb-7", 18.9, 18, 0.02);
+      show("#irb-7o", 19.3);
+      rise("#note-1", 11.6, 0.6, 24);
+      rise("#note-2", 13.4, 0.6, 24);
+      rise("#note-3", 15.2, 0.6, 24);
+
+      // 4. prism
+      scene("#s-prism", 20, 6.2);
+      for (let i = 1; i <= 6; i++) {
+        rise(`#st-${i}`, 20.6 + (i - 1) * 0.42, 0.55, 30);
+        if (i < 6) tl.fromTo(`#ar-${i}`, { scaleX: 0 }, { scaleX: 1, duration: 0.3, ease }, 20.9 + (i - 1) * 0.42);
+      }
+      rise("#prism-note", 23.4, 0.7, 20);
+
+      // 5. ruby/spec
+      scene("#s-specs", 25.8, 6.4);
+      for (let i = 1; i <= 3; i++) rise(`#sp-${i}`, 26.2 + (i - 1) * 0.25, 0.7, 50);
+      count("#cn-1", 2934, 26.5);
+      count("#cn-2", 6398, 26.75);
+      count("#cn-3", 23136, 27.0);
+
+      // 6. JIT and OSR: README, Performance (Util/bench/run.sh, 50 benchmarks)
+      scene("#s-jit", 31.8, 5.6);
+      rise("#rt-1", 32.3, 0.7, 50);
+      rise("#rt-2", 33.0, 0.7, 50);
+      rise("#jit-note", 33.8, 0.6, 16);
+
+      // 7. .NET: Windows Forms, and the Notepad sample
+      scene("#s-net", 37, 7.4);
+      rise("#net-left .headline", 37.3, 0.7, 30);
+      rise("#net-code", 37.8, 0.7, 40);
+      tl.fromTo("#notepad", { autoAlpha: 0, x: 120, rotationY: -14, transformPerspective: 2200 }, { autoAlpha: 1, x: 0, rotationY: -4, duration: 1.2, ease }, 38.6);
+      tl.to("#notepad", { rotationY: 0, duration: 4, ease: "sine.inOut" }, 39.9);
+      rise("#net-caption", 40.2, 0.6, 16);
+
+      // 8. tooling
+      scene("#s-tools", 44, 5.8);
+      for (let i = 1; i <= 3; i++) rise(`#tl-${i}`, 44.5 + (i - 1) * 0.3, 0.7, 50);
+
+      // 9. end card
+      scene("#s-end", 49.4, 5.6, 0.6, 0.01);
+      tl.fromTo("#end-title", { autoAlpha: 0, scale: 0.92 }, { autoAlpha: 1, scale: 1, duration: 0.9, ease: "back.out(1.3)" }, 49.6);
+      rise("#end-version", 50.1, 0.6, 20);
+      for (let i = 1; i <= 3; i++) rise(`#os-${i}`, 50.6 + (i - 1) * 0.18, 0.5, 24);
+      rise("#end-url", 51.4, 0.6, 20);
+      rise("#end-license", 51.9, 0.6, 12);
+
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

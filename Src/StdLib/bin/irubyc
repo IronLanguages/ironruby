@@ -1,0 +1,7 @@
+#!/usr/bin/env ruby
+# The irubyc executable -- IronRuby's ahead-of-time compiler, the analogue of
+# JRuby's jrubyc.  Like irb and gem, it ships as part of the standard library,
+# and ir.sh puts this directory on RUBYPATH, so `ir -S irubyc` finds it.
+require "ironruby/compiler"
+
+exit IronRuby::Compiler.compile_argv(ARGV.clone)

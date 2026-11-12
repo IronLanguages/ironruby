@@ -1,0 +1,168 @@
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs b/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs
+index 1a32e58..0a97958 100644
+--- a/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs
+@@ -146,10 +146,26 @@ namespace Microsoft.Scripting.Interpreter {
+ 
+         internal void SaveTraceToException(Exception exception) {
+             if (exception.GetData(typeof(InterpretedFrameInfo)) is null) {
+-                exception.SetData(typeof(InterpretedFrameInfo), GetStackTraceDebugInfo().ToArray());
++                exception.SetData(typeof(InterpretedFrameInfo), GetStackTraceDebugInfoArray());
+             }
+         }
+ 
++        // GetStackTraceDebugInfo().ToArray() without the iterator and the list it grows: every
++        // exception that passes an interpreted frame takes this snapshot of the whole chain.
++        private InterpretedFrameInfo[] GetStackTraceDebugInfoArray() {
++            int count = 0;
++            for (var frame = this; frame is not null; frame = frame.Parent) {
++                count++;
++            }
++
++            var result = new InterpretedFrameInfo[count];
++            int i = 0;
++            for (var frame = this; frame is not null; frame = frame.Parent) {
++                result[i++] = new InterpretedFrameInfo(frame.Name, frame.GetDebugInfo(frame.InstructionIndex));
++            }
++            return result;
++        }
++
+         public static InterpretedFrameInfo[] GetExceptionStackTrace(Exception exception) {
+             return exception.GetData(typeof(InterpretedFrameInfo)) as InterpretedFrameInfo[];
+         }
+diff --git a/src/core/Microsoft.Dynamic/Utils/ExceptionUtils.cs b/src/core/Microsoft.Dynamic/Utils/ExceptionUtils.cs
+index 7176c59..047827a 100644
+--- a/src/core/Microsoft.Dynamic/Utils/ExceptionUtils.cs
++++ b/src/core/Microsoft.Dynamic/Utils/ExceptionUtils.cs
+@@ -30,6 +30,131 @@ namespace Microsoft.Scripting.Utils {
+         public static void RemoveData(this Exception e, object key) {
+             e.Data.Remove(key);
+         }
++#elif NETCOREAPP
++        // Exception.Data's dictionary, as on the desktop: languages attach data to every exception they
++        // see go by (the interpreter its frames, IronRuby its exception state), several times per raise.
++        // The ConditionalWeakTable below costs a dependent handle per exception, which every GC has to
++        // scan, and a global lock plus a LINQ scan per lookup. The dictionary is not thread-safe, hence
++        // the lock on it - uncontended in practice.
++        //
++        // The dictionary is reached through Exception's own field where the runtime has it: the Data
++        // property is virtual, and the subclasses a language generates for its own exception classes
++        // override every virtual member to dispatch to the language first (IronRuby's do), which made a
++        // Data lookup cost microseconds. An exception type whose Data is not writable gets the table.
++        public static object GetData(this Exception e, object key) {
++            var data = GetDictionary(e, false);
++            if (data is null) {
++                return _hasTableData ? GetTableData(e, key) : null;
++            }
++            lock (data) {
++                return data[key];
++            }
++        }
++
++        public static void SetData(this Exception e, object key, object value) {
++            var data = GetDictionary(e, true);
++            if (data is null) {
++                SetTableData(e, key, value);
++                return;
++            }
++            lock (data) {
++                data[key] = value;
++            }
++        }
++
++        public static void RemoveData(this Exception e, object key) {
++            var data = GetDictionary(e, false);
++            if (data is null) {
++                if (_hasTableData) {
++                    RemoveTableData(e, key);
++                }
++                return;
++            }
++            lock (data) {
++                data.Remove(key);
++            }
++        }
++
++        // null: no dictionary yet (and create is false), or one that cannot be written to
++        private static System.Collections.IDictionary GetDictionary(Exception e, bool create) {
++#if NET8_0_OR_GREATER
++            if (_dataFieldAvailable) {
++                try {
++                    ref System.Collections.IDictionary field = ref DataField(e);
++                    var dictionary = field;
++                    if (dictionary is null) {
++                        if (!create) {
++                            return null;
++                        }
++                        Interlocked.CompareExchange(ref field, new System.Collections.Specialized.ListDictionary(), null);
++                        dictionary = field;
++                    }
++                    return dictionary.IsReadOnly ? null : dictionary;
++                } catch (MissingFieldException) {
++                    _dataFieldAvailable = false;
++                }
++            }
++#endif
++            var data = e.Data;
++            return (data is null || data.IsReadOnly) ? null : data;
++        }
++
++#if NET8_0_OR_GREATER
++        [UnsafeAccessor(UnsafeAccessorKind.Field, Name = "_data")]
++        private static extern ref System.Collections.IDictionary DataField(Exception e);
++
++        private static bool _dataFieldAvailable = true;
++#endif
++
++        private static volatile bool _hasTableData;
++
++        private static ConditionalWeakTable<Exception, List<KeyValuePair<object, object>>> _exceptionData;
++
++        private static void SetTableData(Exception e, object key, object value) {
++            _hasTableData = true;
++            if (_exceptionData is null) {
++                Interlocked.CompareExchange(ref _exceptionData, new ConditionalWeakTable<Exception, List<KeyValuePair<object, object>>>(), null);
++            }
++
++            lock (_exceptionData) {
++                var data = _exceptionData.GetOrCreateValue(e);
++                int index = data.FindIndex(entry => entry.Key == key);
++                if (index >= 0) {
++                    data[index] = new KeyValuePair<object, object>(key, value);
++                } else {
++                    data.Add(new KeyValuePair<object, object>(key, value));
++                }
++            }
++        }
++
++        private static object GetTableData(Exception e, object key) {
++            if (_exceptionData is null) {
++                return null;
++            }
++
++            lock (_exceptionData) {
++                if (!_exceptionData.TryGetValue(e, out List<KeyValuePair<object, object>> data)) {
++                    return null;
++                }
++                return data.FirstOrDefault(entry => entry.Key == key).Value;
++            }
++        }
++
++        private static void RemoveTableData(Exception e, object key) {
++            if (_exceptionData is null) {
++                return;
++            }
++
++            lock (_exceptionData) {
++                if (!_exceptionData.TryGetValue(e, out List<KeyValuePair<object, object>> data)) {
++                    return;
++                }
++                int index = data.FindIndex(entry => entry.Key == key);
++                if (index >= 0) {
++                    data.RemoveAt(index);
++                }
++            }
++        }
+ #else
+         private static ConditionalWeakTable<Exception, List<KeyValuePair<object, object>>> _exceptionData;
+ 

@@ -1,0 +1,71 @@
+# ruby/spec examples known to fail, which .github/workflows/spec-sweep.yml does not fail on
+# (Util/sweep-check.rb reads this). The state README "Status" describes, as of ruby/spec and
+# mspec at ci.yml's SPEC_REF/MSPEC_REF.
+#
+# One example per line, by the full name mspec prints for it (describe + it), after the suite:
+#
+#   core Kernel#Integer raises a TypeError if to_i returns a value that is not an Integer
+#   flaky core Mutex#lock does not raise deadlock if a fiber's attempt to lock was interrupted
+#
+# A plain line must fail: once it passes the sweep reports it, and the line should go. A
+# "flaky" line may pass or fail, and is only counted. A failure not listed fails the sweep -
+# fix it, or, when it is to stay, add it here under a comment that says why. A move of
+# SPEC_REF can rename examples; the sweep's summary prints new failures in this format.
+
+# ObjectSpace.each_object walks the heap only under -X:ObjectSpace, as JRuby's does under
+# -X+O, and the sweep does not pass it.
+core ObjectSpace.each_object calls the block once for each living, non-immediate object in the Ruby process
+core ObjectSpace.each_object finds an object captured in an at_exit handler
+core ObjectSpace.each_object finds an object captured in finalizer
+core ObjectSpace.each_object finds an object stored in a fiber local
+core ObjectSpace.each_object finds an object stored in a global variable
+core ObjectSpace.each_object finds an object stored in a hash key
+core ObjectSpace.each_object finds an object stored in a hash value
+core ObjectSpace.each_object finds an object stored in a local variable
+core ObjectSpace.each_object finds an object stored in a local variable captured in a Kernel#binding
+core ObjectSpace.each_object finds an object stored in a local variable captured in a Proc#binding
+core ObjectSpace.each_object finds an object stored in a local variable captured in a block explicitly
+core ObjectSpace.each_object finds an object stored in a local variable captured in a block implicitly
+core ObjectSpace.each_object finds an object stored in a local variable captured in by a method defined with a block
+core ObjectSpace.each_object finds an object stored in a local variable set in a binding manually
+core ObjectSpace.each_object finds an object stored in a second-level constant
+core ObjectSpace.each_object finds an object stored in a thread local
+core ObjectSpace.each_object finds an object stored in a top-level constant
+core ObjectSpace.each_object finds an object stored in an array
+core ObjectSpace.each_object finds an object stored in an instance variable
+core ObjectSpace.each_object returns an enumerator if not given a block
+
+# Error wording: these expect CRuby's development wording for a conversion method that returns
+# the wrong type, "can't convert X into Y (X#to_y gives Z)"; CRuby 4.0 says "to", and so does
+# IronRuby (CLAUDE.md, "The one rule"). mspec's raise_consistent_error checks the message only
+# on engines other than CRuby.
+core Array.try_convert sends #to_ary to the argument and raises TypeError if it's not a kind of Array
+core BasicObject#instance_eval raises ArgumentError if returned value is not Integer
+core BasicObject#instance_eval raises ArgumentError if returned value is not String
+core Data#deconstruct_keys raises a TypeError if the conversion with #to_str does not return a String
+core Data#initialize raises TypeError if the conversion with #to_str does not return a String
+core Hash.try_convert sends #to_hash to the argument and raises TypeError if it's not a kind of Hash
+core IO.try_convert raises a TypeError if the object does not return an IO from #to_io
+core Integer.try_convert responds with a different error message when it raises a TypeError, depending on the type of the non-Integer object :to_int returns
+core Integer.try_convert sends #to_int to the argument and raises TypeError if it's not a kind of Integer
+core Kernel#Integer raises a TypeError if to_i returns a value that is not an Integer
+core Kernel#Integer raises a TypeError if to_int returns nil and no to_i exists
+core Kernel#Integer raises a TypeError when to_int returns not-an-Integer object and to_i returns nil
+core Kernel#Rational when passed neither a Numeric nor a String raises TypeError if #to_r does not return Rational
+core Module#define_method raises TypeError when #to_str called on non-String name returns non-String value
+core Module#instance_method raises TypeError when passed non-String name and #to_str returns non-String value
+core Module#module_eval raises a TypeError when the given eval-string can't be converted to string using to_str
+core Module#module_eval raises a TypeError when the given filename can't be converted to string using to_str
+core Process.detach raises TypeError when #to_int returns non-Integer value
+core Queue#initialize raises TypeError if #to_a does not return Array
+core Regexp.compile given a non-String/Regexp raises TypeError if #to_str returns non-String value
+core Regexp.new given a non-String/Regexp raises TypeError if #to_str returns non-String value
+core Regexp.try_convert raises a TypeError if the object does not return an Regexp from #to_regexp
+core String.try_convert sends #to_str to the argument and raises TypeError if it's not a kind of String
+core Struct#deconstruct_keys raises a TypeError if the conversion with #to_int does not return an Integer
+
+language Invoking a method raises TypeError if 'to_proc' doesn't return a Proc
+
+# A Thread#raise that arrives just as a thread resumes a fiber can land in the resuming thread
+# instead of the fiber.
+flaky core Mutex#lock does not raise deadlock if a fiber's attempt to lock was interrupted

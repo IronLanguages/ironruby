@@ -1,0 +1,16 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+#
+# The gem executable.  RubyGems installs this into RbConfig's bindir on CRuby;
+# IronRuby ships it as part of its standard library, and ir.sh puts this
+# directory on RUBYPATH, so `ir -S gem` finds it before any binstub on PATH.
+#
+#--
+# Copyright 2006 by Chad Fowler, Rich Kilmer, Jim Weirich and others.
+# All rights reserved.
+# See LICENSE.txt for permissions.
+#++
+
+require "rubygems/gem_runner"
+
+Gem::GemRunner.new.run ARGV.clone

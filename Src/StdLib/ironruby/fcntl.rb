@@ -14,3 +14,8 @@
 # ****************************************************************************
 
 load_assembly 'IronRuby.Libraries', 'IronRuby.StandardLibrary.FileControl'
+
+module Fcntl
+  # The version of the fcntl gem whose constants this library provides.
+  VERSION = "1.3.0"
+end

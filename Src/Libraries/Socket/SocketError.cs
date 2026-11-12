@@ -13,7 +13,6 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_SYNC_SOCKETS
 
 using System;
 using System.Net.Sockets;
@@ -22,7 +21,7 @@ using IronRuby.Runtime;
 using IronRuby.Builtins;
 
 namespace IronRuby.StandardLibrary.Sockets {
-    [RubyClass("SocketError", BuildConfig = "FEATURE_SYNC_SOCKETS", Extends = typeof(SocketException), Inherits = typeof(SystemException))]
+    [RubyClass("SocketError", Extends = typeof(SocketException), Inherits = typeof(SystemException))]
     [HideMethod("message")] // SocketException overrides Message so we have to hide it here
     public static class SocketErrorOps {
         [RubyConstructor]
@@ -34,7 +33,48 @@ namespace IronRuby.StandardLibrary.Sockets {
         public static Exception/*!*/ Create(MutableString/*!*/ message) {
             return RubyExceptionData.InitializeException(new SocketException(0), message);
         }
+
+        /// <summary>
+        /// .NET reports every socket failure as a SocketException, and because Socket::SocketError
+        /// *is* that CLR type an unhandled one surfaces in Ruby as SocketError.  CRuby raises an
+        /// Errno for anything the kernel reported through errno and keeps SocketError for name
+        /// resolution, so translate the codes that have an Errno class here.  The rest are mapped
+        /// in Src/StdLib/ironruby/socket.rb, where the whole Errno table is available.
+        /// </summary>
+        internal static Exception/*!*/ ToRubyException(Exception/*!*/ e) {
+            return ToRubyException(e, null);
+        }
+
+        /// <param name="detail">What failed, as CRuby words it after the strerror text:
+        /// <c>connect(2) for "localhost" port 80</c>.</param>
+        internal static Exception/*!*/ ToRubyException(Exception/*!*/ e, string detail) {
+            SocketException se = e as SocketException;
+            if (se != null) {
+                switch (se.SocketErrorCode) {
+                    case System.Net.Sockets.SocketError.ConnectionRefused:
+                        return new Errno.ConnectionRefusedError(detail);
+                    case System.Net.Sockets.SocketError.AddressAlreadyInUse:
+                        return new Errno.AddressInUseError(detail);
+                    case System.Net.Sockets.SocketError.ConnectionReset:
+                        return new Errno.ConnectionResetError(detail);
+                    case System.Net.Sockets.SocketError.ConnectionAborted:
+                        return new Errno.ConnectionAbortedError(detail);
+                    case System.Net.Sockets.SocketError.NotConnected:
+                        return new Errno.NotConnectedError(detail);
+                    case System.Net.Sockets.SocketError.HostDown:
+                        return new Errno.HostDownError(detail);
+                    case System.Net.Sockets.SocketError.Shutdown:
+                        return new Errno.PipeError(detail);
+                    case System.Net.Sockets.SocketError.InvalidArgument:
+                        return new InvalidError(detail);
+                }
+                return e;
+            }
+            if (e is ObjectDisposedException) {
+                return RubyExceptions.CreateIOError("closed stream");
+            }
+            return e;
+        }
     }
 }
 
-#endif

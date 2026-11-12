@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -26,11 +22,9 @@ using System.Reflection;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Actions.Calls;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Tests {
     using Ast = Expression;
@@ -158,6 +152,20 @@ namespace IronRuby.Tests {
 
             public void N1(string a) { }
             public void N2(char a) { }
+
+            // MutableString has explicit conversions to both, String is preferred (e.g. Assembly.Load):
+            public void O1(string a) { }
+            public void O2(byte[] a) { }
+
+            // MutableString has an explicit conversion to String and anything converts to Boolean, String is preferred:
+            public void P1(string a) { }
+            public void P2(bool a) { }
+
+            // the BinaryWriter#Write overloads a MutableString converts to, String is preferred to each of the others:
+            public void Q1(bool a) { }
+            public void Q2(byte[] a) { }
+            public void Q3(char a) { }
+            public void Q4(string a) { }
         }
 
         public void OverloadResolution_Numeric1() {
@@ -210,6 +218,25 @@ namespace IronRuby.Tests {
 
                 // N
                 new { Args = new[] { MO(MutableString.CreateAscii("x")) }, Overloads = "N*", Result = "N1" },
+
+                // O
+                new { Args = new[] { MO(MutableString.CreateAscii("x")) }, Overloads = "O*", Result = "O1" },
+                new { Args = new[] { MO("x") }, Overloads = "O*", Result = "O1" },
+                new { Args = new[] { MO(new byte[] { 1 }) }, Overloads = "O*", Result = "O2" },
+
+                // P
+                new { Args = new[] { MO(MutableString.CreateAscii("x")) }, Overloads = "P*", Result = "P1" },
+                new { Args = new[] { MO("x") }, Overloads = "P*", Result = "P1" },
+                new { Args = new[] { MO(true) }, Overloads = "P*", Result = "P2" },
+                new { Args = new[] { MO(1) }, Overloads = "P*", Result = "P2" },
+                new { Args = new[] { MO(c) }, Overloads = "P*", Result = "P2" },
+
+                // Q
+                new { Args = new[] { MO(MutableString.CreateAscii("x")) }, Overloads = "Q*", Result = "Q4" },
+                new { Args = new[] { MO("x") }, Overloads = "Q*", Result = "Q4" },
+                new { Args = new[] { MO(true) }, Overloads = "Q*", Result = "Q1" },
+                new { Args = new[] { MO(new byte[] { 1 }) }, Overloads = "Q*", Result = "Q2" },
+                new { Args = new[] { MO('x') }, Overloads = "Q*", Result = "Q3" },
             };
 
             for (int i = 0; i < cases.Length; i++) {
@@ -253,9 +280,6 @@ namespace IronRuby.Tests {
                 methods.Add(CreateParamsArrayMethod("F0", new[] { typeof(int), typeof(int[]), typeof(string), typeof(int) }, 1, 0));
                 return methods;
             }
-        }
-
-        public void OverloadResolution_ParamArrays1() {
         }
 
         #endregion

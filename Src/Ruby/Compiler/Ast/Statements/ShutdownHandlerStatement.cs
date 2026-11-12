@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using Microsoft.Scripting;
 
@@ -41,10 +37,16 @@ namespace IronRuby.Compiler.Ast {
         }
 
         internal override MSA.Expression/*!*/ Transform(AstGenerator/*!*/ gen) {
-            return Methods.RegisterShutdownHandler.OpCall(_block.Transform(gen));
+            // an END block is registered the first time it is reached, however often that is
+            var registered = new System.Runtime.CompilerServices.StrongBox<bool>();
+            var flag = Ast.Field(Ast.Constant(registered), "Value");
+            return Ast.IfThen(Ast.Not(flag), Ast.Block(
+                Ast.Assign(flag, Ast.Constant(true)),
+                Methods.RegisterShutdownHandler.OpCall(_block.Transform(gen))
+            ));
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             return Ast.Block(Transform(gen), AstUtils.Constant(null));
         }
     }

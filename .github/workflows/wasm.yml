@@ -1,0 +1,105 @@
+name: wasm
+
+# IronRuby for the browser (wasm/, see wasm/README.md): .NET 10 browser-wasm, prism built with
+# the workload's emscripten, the DLR with Build/dlr-patches and Build/dlr-patches/wasm.
+# - every pull request and push: the IL-only build (AOT=0, Mono's interpreter, a few minutes),
+#   booted under Node and in headless Chromium (wasm/test/browser-test.mjs);
+# - nightly and by hand: the Mono AOT build as well, the one the downloads use. Some failures
+#   show only there - a Mono assertion on a delegate whose wrapper was not precompiled is what
+#   Build/dlr-patches/wasm/0004 is for - and it takes about ten minutes, too long for every push.
+on:
+  push:
+    branches: [master, wasm, 'ci/**']
+  pull_request:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      aot:
+        description: Build with Mono AOT too
+        type: boolean
+        default: true
+
+concurrency:
+  group: wasm-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: 1
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+  # the same revisions as ci.yml; move them together
+  PRISM_REF: 30a255539e81842b2b7f12b4fd3c62a7b4d64165
+  DLR_REF: 922753f8ccbf5186c15899116d5a407b6b1723fb
+
+jobs:
+  wasm:
+    name: browser-wasm ${{ matrix.aot == '1' && 'AOT' || 'interpreter' }}
+    # Not ubuntu-latest: the Chromium test's Playwright installs the browser's system packages, and has
+    # none for a release newer than it knows (ubuntu-latest became 26.04: "Playwright does not support
+    # chromium on ubuntu26.04-x64"). Move this and the Playwright version below together.
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        aot: ${{ fromJSON((github.event_name == 'schedule' || inputs.aot) && '["0","1"]' || '["0"]') }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: ironruby
+      # wasm/build.sh makes its patched copy (../dlr-wasm) from ../dlr at DLR_REF
+      - uses: actions/checkout@v7
+        with:
+          repository: IronLanguages/dlr
+          ref: ${{ env.DLR_REF }}
+          path: dlr
+          fetch-depth: 0
+      - uses: actions/checkout@v7
+        with:
+          repository: ruby/prism
+          ref: ${{ env.PRISM_REF }}
+          path: prism
+
+      # wasm/global.json pins the .NET 10 SDK, whose wasm-tools workload the build needs
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: ironruby/wasm/global.json
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: Install the wasm-tools workload
+        working-directory: ironruby/wasm
+        run: dotnet workload install wasm-tools --skip-manifest-update
+
+      - name: Generate prism's sources and the C# loader
+        run: |
+          (cd prism && ruby templates/template.rb)
+          (cd ironruby/Src/Prism && ruby generate.rb)
+
+      - name: Build
+        working-directory: ironruby
+        env:
+          AOT: ${{ matrix.aot }}
+        run: wasm/build.sh
+
+      - name: Boot under Node
+        working-directory: ironruby
+        run: |
+          out=$(node wasm/test/node-run.mjs 'puts "#{RUBY_ENGINE} #{RUBY_VERSION} on #{RUBY_PLATFORM}"' \
+                'puts [1, 2, 3].filter_map { it * 10 if it.odd? }.inspect' 2>&1)
+          echo "$out"
+          echo "$out" | grep -q '^ironruby '
+          echo "$out" | grep -qx '\[10, 30\]'
+
+      - name: Browser test
+        working-directory: ironruby
+        run: |
+          wasm/test/fetch-fixtures.sh
+          mkdir -p "$RUNNER_TEMP/pw" && (cd "$RUNNER_TEMP/pw" && npm init -y >/dev/null && npm install --no-audit --no-fund playwright@1.60.0)
+          (cd "$RUNNER_TEMP/pw" && npx playwright install --with-deps chromium)
+          PLAYWRIGHT_MODULE_DIR="$RUNNER_TEMP/pw/node_modules/" node wasm/test/browser-test.mjs

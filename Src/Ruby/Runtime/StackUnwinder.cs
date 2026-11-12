@@ -84,6 +84,20 @@ namespace IronRuby.Runtime {
     /// <summary>
     /// Redo/Next.
     /// </summary>
+    /// <summary>
+    /// A return in a block that is lexically inside a lambda leaves the lambda (not the method
+    /// around it). Thrown to the call of the lambda, identified by the call's BlockParam.
+    /// </summary>
+    public sealed class LambdaUnwinder : StackUnwinder {
+        // the BlockParam of a Proc#call, or the RubyBlockScope of the lambda body's invocation
+        internal readonly object/*!*/ Target;
+
+        internal LambdaUnwinder(object/*!*/ target, object returnValue)
+            : base(returnValue) {
+            Target = target;
+        }
+    }
+
     public sealed class BlockUnwinder : StackUnwinder {
         [Emitted]
         public readonly bool IsRedo;

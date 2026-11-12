@@ -12,10 +12,7 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_ENCODING
 
-using System;
-using System.Collections.Generic;
 using System.Text;
 
 namespace IronRuby.Runtime {
@@ -71,5 +68,4 @@ namespace IronRuby.Runtime {
         }
     }     
 }
-
-#endif
+

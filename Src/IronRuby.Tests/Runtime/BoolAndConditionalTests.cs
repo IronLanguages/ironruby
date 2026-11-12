@@ -129,9 +129,9 @@ a = ((x = 2.0) and (y = nil) and (z = true))
 puts a,x,y,z
 ");
             }, @"
-nil
+
 2.0
-nil
+
 z
 ");
         }
@@ -243,8 +243,8 @@ puts bar(false)
 ");
             }, @"
 foo
-nil
-nil
+
+
 bar
 ");
         }        
@@ -286,13 +286,13 @@ puts(if nil then 1 elsif nil then 2 end)
 puts(if nil then 1 elsif 1 then 2 end)
 puts(if nil then 1 elsif nil then 2 else 3 end)
 puts(if nil then 1 elsif 1 then 2 else 3 end)
-");
+", 4, 0);
             }, @"
-nil
+
 1
 2
 1
-nil
+
 2
 3
 2
@@ -309,10 +309,10 @@ puts(if nil then end)
 puts(if 1 then end)
 puts(if 1 then 1;11;111 end)
 puts(if nil then 1 else 2;22 end)
-");
+", 5, 0);
             }, @"
-nil
-nil
+
+
 111
 22
 ");
@@ -323,10 +323,10 @@ nil
                 CompilerTest(@"
 puts(unless nil then 1 end)
 puts(unless 1 then 1 end)
-");
+", 1, 0);
             }, @"
 1
-nil
+
 ");
         }
 
@@ -344,7 +344,7 @@ puts x,y,z,u
 1
 foo
 foo
-nil
+
 ");
         }
 

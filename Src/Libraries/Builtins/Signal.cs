@@ -12,76 +12,134 @@
  *
  *
  * ***************************************************************************/
-#if !SILVERLIGHT // Signals dont make much sense in Silverlight as cross-process communication is not allowed
 
+using System;
+using System.Runtime.CompilerServices;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {
 
-    [RubyModule("Signal", BuildConfig="!SILVERLIGHT")]
+    [RubyModule("Signal")]
     public static class Signal {
         #region Private Instance & Singleton Methods
 
         [RubyMethod("list", RubyMethodAttributes.PublicSingleton)]
         public static Hash/*!*/ List(RubyContext/*!*/ context, RubyModule/*!*/ self) {
             Hash result = new Hash(context);
-            result.Add(MutableString.CreateAscii("TERM"), ScriptingRuntimeHelpers.Int32ToObject(15));
-            result.Add(MutableString.CreateAscii("SEGV"), ScriptingRuntimeHelpers.Int32ToObject(11));
-            result.Add(MutableString.CreateAscii("KILL"), ScriptingRuntimeHelpers.Int32ToObject(9));
             result.Add(MutableString.CreateAscii("EXIT"), ScriptingRuntimeHelpers.Int32ToObject(0));
-            result.Add(MutableString.CreateAscii("INT"), ScriptingRuntimeHelpers.Int32ToObject(2));
-            result.Add(MutableString.CreateAscii("FPE"), ScriptingRuntimeHelpers.Int32ToObject(8));
-            result.Add(MutableString.CreateAscii("ABRT"), ScriptingRuntimeHelpers.Int32ToObject(22));
-            result.Add(MutableString.CreateAscii("ILL"), ScriptingRuntimeHelpers.Int32ToObject(4));
+            foreach (var entry in PosixSignals.Numbers) {
+                result.Add(MutableString.CreateAscii(entry.Key), ScriptingRuntimeHelpers.Int32ToObject(entry.Value));
+            }
             return result;
         }
 
-        /// <summary>
-        /// Registers an interrupt handler. The host application is responsible for ensuring
-        /// that the handler will actually be called.
-        /// </summary>
-        [RubyMethod("trap", RubyMethodAttributes.PublicSingleton)]
-        public static object Trap(
-            RubyContext/*!*/ context, 
-            object self, 
-            object signalId, 
-            Proc proc) {
-
-            if ((signalId is MutableString) && ((MutableString)signalId).ConvertToString() == "INT") {
-                context.InterruptSignalHandler = () => proc.Call(null);
-            } else {
-                // TODO: For now, just ignore unknown signals. This should be changed to throw an
-                // exception. We are not doing it yet as it is close to the V1 RTM, and throwing
-                // an exception might cause some app to misbehave whereas it might have happenned
-                // to work if no exception is thrown
-            }
-            return null;
+        [RubyMethod("signame", RubyMethodAttributes.PublicSingleton)]
+        public static MutableString Signame(RubyModule/*!*/ self, [DefaultProtocol]int number) {
+            string name = PosixSignals.ToName(number);
+            return (name != null) ? MutableString.CreateAscii(name) : null;
         }
 
         /// <summary>
-        /// Registers an interrupt handler. The host application is responsible for ensuring
-        /// that the handler will actually be called.
+        /// Installs a handler for a signal and returns the one it replaced. The handler cancels the
+        /// platform's default disposition, so trapping SIGTERM really does stop SIGTERM from ending
+        /// the process.
         /// </summary>
         [RubyMethod("trap", RubyMethodAttributes.PublicSingleton)]
         public static object Trap(
-            RubyContext/*!*/ context, 
-            BlockParam block, 
-            object self, 
+            CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ callStorage,
+            ConversionStorage<MutableString>/*!*/ stringCast,
+            RubyContext/*!*/ context,
+            object self,
+            object signalId,
+            object command) {
+
+            // MRI converts the signal with #to_str (never #to_int), and does so on every call.
+            if (!(signalId is int) && !(signalId is MutableString) && !(signalId is RubySymbol)) {
+                var converted = Protocols.TryCastToString(stringCast, signalId);
+                if (converted != null) {
+                    signalId = converted;
+                }
+            }
+
+            int number = PosixSignals.ToNumber(context, signalId, true);
+
+            // a non-main Ractor's handler runs in the main Ractor, so a block has to be isolated (CRuby's rb_proc_isolate)
+            var handler = command as Proc;
+            if (handler != null && RactorIsolation.IsNonMain(context) && !Shareability.IsShareable(context, handler)) {
+                RubyRactor.Isolate(handler);
+            }
+
+            if (number == SignalExit) {
+                // EXIT is not a signal at all - nothing sends it - so it is the runtime's
+                // shutdown that has to run it, which is what this hands over.
+                object exitCommand = command;
+                context.ExitSignalHandler = PosixSignals.IsDefaultOrIgnore(exitCommand)
+                    ? null
+                    : new Action(() => {
+                        var exitSite = callStorage.GetCallSite("call", 1);
+                        exitSite.Target(exitSite, exitCommand, ScriptingRuntimeHelpers.Int32ToObject(0));
+                    });
+            }
+
+            // MRI runs trap handlers on the main thread at an interrupt check, not on whatever
+            // thread the signal landed on. PosixSignals parks them; this is where the main thread
+            // is named and where the safe point that drains them is hooked up.
+            PosixSignals.MainThread = context.MainThread;
+            RubyUtils.SafePointHandler = PosixSignals.RunPending;
+
+            // MRI takes a block, a Proc, a Method - anything that answers #call - so dispatch
+            // dynamically rather than insisting on a Proc.
+            var site = callStorage.GetCallSite("call", 1);
+            var mainThread = context.MainThread;
+
+            // MRI's default SIGINT disposition raises Interrupt on the main thread. Leaving it to
+            // the platform instead makes `Signal.trap(:INT, :SIG_DFL); Process.kill :INT; sleep`
+            // hang, because .NET's own SIGINT handling swallows it.
+            Action<int> defaultInvoke = (number == SignalInterrupt && mainThread != null)
+                ? new Action<int>(_ => RubyUtils.RaiseAsyncException(mainThread, new Interrupt(String.Empty)))
+                : null;
+
+            // No try/catch around the call: PosixSignals runs handlers on the main thread at a
+            // safe point, so an exception out of one propagates there by itself, which is where
+            // MRI raises it too.
+            object previous = PosixSignals.Trap(number, command, signalNumber =>
+                site.Target(site, command, ScriptingRuntimeHelpers.Int32ToObject(signalNumber)),
+                defaultInvoke
+            );
+
+            if (number == SignalInterrupt) {
+                // The console's Ctrl-C hook (Console.CancelKeyPress) runs InterruptSignalHandler on
+                // .NET's signal thread. Where PosixSignals has a registration of its own for SIGINT,
+                // that one already runs the handler, on the main thread: dispatching it from the hook
+                // too ran a trap(:INT) block twice, once on the wrong thread, and raised a second
+                // Interrupt into a program already unwinding from the first.
+                var proc = command as Proc;
+                context.InterruptSignalHandler = (proc != null && !PosixSignals.IsRegistered(number))
+                    ? new Action(() => proc.Call(null))
+                    : null;
+            }
+            return previous;
+        }
+
+        [RubyMethod("trap", RubyMethodAttributes.PublicSingleton)]
+        public static object Trap(
+            CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ callStorage,
+            ConversionStorage<MutableString>/*!*/ stringCast,
+            RubyContext/*!*/ context,
+            BlockParam block,
+            object self,
             object signalId) {
 
-            if ((signalId is MutableString) && ((MutableString)signalId).ConvertToString() == "INT") {
-                context.InterruptSignalHandler = delegate() { object result; block.Yield(out result); };
-            } else {
-                // TODO: For now, just ignore unknown signals. This should be changed to throw an
-                // exception. We are not doing it yet as it is close to the V1 RTM, and throwing
-                // an exception might cause some app to misbehave whereas it might have happenned
-                // to work if no exception is thrown
+            if (block == null) {
+                throw RubyExceptions.CreateArgumentError("tried to create Proc object without a block");
             }
-            return null;
+            return Trap(callStorage, stringCast, context, self, signalId, block.Proc);
         }
+
+        private const int SignalInterrupt = PosixSignals.SignalInterrupt;
+        private const int SignalExit = 0;
 
         #endregion
     }
 }
-#endif

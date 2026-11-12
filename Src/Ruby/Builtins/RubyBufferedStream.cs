@@ -1,4 +1,4 @@
-﻿/* ****************************************************************************
+/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -18,7 +18,6 @@ using System.Diagnostics;
 using System.IO;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Utils;
-using System.Collections.Generic;
 
 namespace IronRuby.Builtins {
     /// <summary>
@@ -44,6 +43,16 @@ namespace IronRuby.Builtins {
 
         private bool _pushBackPreservesPosition;
 
+        // Whether something was written since the last flush or seek. Writes go straight to the
+        // underlying stream, but MRI would still hold them in its write buffer, and that is what
+        // IO#syswrite and IO#sysseek warn about.
+        private bool _writePending;
+        private bool _writeFlushFailed;
+
+        // IO#timeout: the IO whose timeout bounds a read or a write that has to wait for the
+        // underlying stream; null when it has none.
+        private RubyIO _timeoutOwner;
+
         private const byte CR = (byte)'\r';
         private const byte LF = (byte)'\n';
 
@@ -64,8 +73,48 @@ namespace IronRuby.Builtins {
             _pushBackPreservesPosition = pushBackPreservesPosition;
         }
 
+        public bool WritePending {
+            get { return _writePending; }
+        }
+
+        public bool WriteFlushFailed {
+            get { return _writeFlushFailed; }
+        }
+
         public Stream/*!*/ BaseStream {
             get { return _stream; }
+        }
+
+        internal RubyIO TimeoutOwner {
+            get { return _timeoutOwner; }
+            set { _timeoutOwner = value; }
+        }
+
+        private int BaseRead(byte[]/*!*/ buffer, int offset, int count) {
+            var owner = _timeoutOwner;
+            if (owner == null || count == 0) {
+                return _stream.Read(buffer, offset, count);
+            }
+            owner.WaitForStream(true);
+            try {
+                return _stream.Read(buffer, offset, count);
+            } catch (TimeoutException) {
+                throw owner.CreateTimeoutError();
+            }
+        }
+
+        private void BaseWrite(byte[]/*!*/ buffer, int offset, int count) {
+            var owner = _timeoutOwner;
+            if (owner == null || count == 0) {
+                _stream.Write(buffer, offset, count);
+                return;
+            }
+            owner.WaitForStream(false);
+            try {
+                _stream.Write(buffer, offset, count);
+            } catch (TimeoutException) {
+                throw owner.CreateTimeoutError();
+            }
         }
 
         public bool DataBuffered {
@@ -85,7 +134,8 @@ namespace IronRuby.Builtins {
                 _bufferStart = 0;
             }
 
-            bytesRead = _stream.Read(_buffer, _bufferCount, count);
+            // the buffered bytes start at _bufferStart: the new ones go right after them
+            bytesRead = BaseRead(_buffer, _bufferStart + _bufferCount, count);
             _bufferCount += bytesRead;
             return bytesRead;
         }
@@ -123,7 +173,10 @@ namespace IronRuby.Builtins {
                 // you can't do ungetc(x) at the beginning of the stream.
                 // (see http://redmine.ruby-lang.org/issues/show/1909)
                 if (_pushBackPreservesPosition) {
-                    return _stream.Position - ReadAheadCount;
+                    // MRI counts pushed back bytes as unread, even past the start: after
+                    // getc and ungetc the position is back where it was, and ungetc("xy") at
+                    // the very start reports -2.
+                    return _stream.Position - _bufferCount;
                 } else {
                     return Math.Max(_stream.Position - _bufferCount, 0);
                 }
@@ -160,14 +213,17 @@ namespace IronRuby.Builtins {
             // TODO: we might keep the buffered data if we seek within the buffered data (but not in pushed back data):
             // clear any buffer content (including ungetc):
             _bufferStart = _bufferCount = _pushedBackCount = 0;
+            _writePending = false;
 
             return result;
         }
 
         private void FlushRead() {
-            // unwind cached data:
+            // Unwind cached data. Seek already reckons "current" from the position reads have
+            // reached rather than from the one the underlying stream is at, so this asks to stay
+            // where it is - subtracting the read-ahead here would take it off twice.
             if (ReadAheadCount > 0) {
-                Seek(-ReadAheadCount, SeekOrigin.Current);
+                Seek(0, SeekOrigin.Current);
             }
 
             _bufferStart = _bufferCount = _pushedBackCount = 0;
@@ -175,21 +231,24 @@ namespace IronRuby.Builtins {
 
         public override void Write(byte[]/*!*/ buffer, int offset, int count) {
             FlushRead();
-
-            _stream.Write(buffer, offset, count);
+            BaseWrite(buffer, offset, count);
+            _writePending = true;
         }
 
         public int WriteBytes(MutableString/*!*/ buffer, int offset, int count, bool preserveEndOfLines) {
             // TODO: this is not safe, we are passing an internal pointer to the byte[] content of MutableString to the Stream:
-            return WriteBytes(buffer.SwitchToBytes().GetByteArrayChecked(offset, count), offset, count, preserveEndOfLines);
+            byte[] bytes = buffer.SwitchToBytes().GetByteArrayChecked(ref offset, count);
+            return WriteBytes(bytes, offset, count, preserveEndOfLines);
         }
 
         public int WriteBytes(byte[]/*!*/ buffer, int offset, int count, bool preserveEndOfLines) {
             ContractUtils.RequiresArrayRange(buffer.Length, offset, count, "offset", "count");
             FlushRead();
 
+            // pending once something went out: a write that timed out (IO#timeout) left nothing
             if (preserveEndOfLines) {
-                _stream.Write(buffer, offset, count);
+                BaseWrite(buffer, offset, count);
+                _writePending |= count > 0;
                 return count;
             } else {
                 int bytesWritten = 0;
@@ -200,8 +259,9 @@ namespace IronRuby.Builtins {
                     while (j < end && buffer[j] != LF) {
                         j++;
                     }
-                    _stream.Write(buffer, i, j - i);
+                    BaseWrite(buffer, i, j - i);
                     bytesWritten += j - i;
+                    _writePending = true;
 
                     if (j < end) {
                         _stream.WriteByte(CR);
@@ -247,7 +307,14 @@ namespace IronRuby.Builtins {
 
         // TODO: read in full buffer (underlying FileStream will buffer it anyways)
         public override int ReadByte() {
-            return (_bufferCount > 0) ? ReadBufferByte() : _stream.ReadByte();
+            if (_bufferCount > 0) {
+                return ReadBufferByte();
+            }
+            if (_timeoutOwner != null) {
+                var one = new byte[1];
+                return BaseRead(one, 0, 1) == 1 ? one[0] : -1;
+            }
+            return _stream.ReadByte();
         }
 
         public override int Read(byte[]/*!*/ buffer, int offset, int count) {
@@ -256,7 +323,8 @@ namespace IronRuby.Builtins {
                 Buffer.BlockCopy(_buffer, _bufferStart, buffer, offset, c);
                 ConsumeBuffered(c);
             }
-            return c + _stream.Read(buffer, offset + c, count - c);
+            // what is buffered is answered without waiting for more
+            return c + ((c > 0 && _timeoutOwner != null) ? 0 : BaseRead(buffer, offset + c, count - c));
         }
 
         /// <summary>
@@ -296,7 +364,7 @@ namespace IronRuby.Builtins {
 
                     buffer.EnsureCapacity(end + 3);
                     int byteCount;
-                    bytes = buffer.GetByteArray(out byteCount);
+                    bytes = buffer.GetWritableByteArray(out byteCount);
 
                     if (bytes[end - 1] == CR && PeekByte(0) == LF) {
                         ReadByte();
@@ -329,6 +397,33 @@ namespace IronRuby.Builtins {
             return buffer.GetByteCount() - initialBufferSize;
         }
 
+        /// <summary>
+        /// The bytes that are here already, up to count of them, and only when there are none
+        /// a single read of at most count - which is what IO#readpartial is: it blocks only
+        /// when there is nothing at all to hand back.
+        /// </summary>
+        public int AppendAvailableBytes(MutableString/*!*/ buffer, int count) {
+            ContractUtils.RequiresNotNull(buffer, "buffer");
+            if (count <= 0) {
+                return 0;
+            }
+
+            buffer.SwitchToBytes();
+            if (_bufferCount > 0) {
+                int buffered = Math.Min(_bufferCount, count);
+                buffer.Append(_buffer, _bufferStart, buffered);
+                ConsumeBuffered(buffered);
+                return buffered;
+            }
+
+            var bytes = new byte[count];
+            int read = BaseRead(bytes, 0, count);
+            if (read > 0) {
+                buffer.Append(bytes, 0, read);
+            }
+            return read;
+        }
+
         private void AppendRawBytes(MutableString/*!*/ buffer, int count) {
             Debug.Assert(count > 0);
 
@@ -344,16 +439,71 @@ namespace IronRuby.Builtins {
             if (count == Int32.MaxValue) {
                 const int chunk = 1024;
 
+                // When the stream can tell how much is left the string is sized for all of it up
+                // front (and one byte more, so that the read that finds the end needs no room of
+                // its own): growing it a chunk at a time copied everything read so far on each
+                // doubling, and once more when the excess was trimmed off at the end.
                 int done = buffer.GetByteCount();
+                int expected = GetRemainingLength();
+                bool sized = expected > 0 && expected < Int32.MaxValue - 1 - done;
+                if (sized) {
+                    buffer.EnsureCapacity(done + expected + 1);
+                }
+
                 int bytesRead;
                 do {
-                    buffer.Append(_stream, chunk);
+                    // Read into all the room there is, and a chunk at least when there is none. A
+                    // stream of unknown length is read in pieces of moderate size: a pipe hands
+                    // back what it has anyway, and its stream may allocate as much as is asked for.
+                    int free = buffer.Capacity - done;
+                    AppendFromStream(buffer, sized && free > 0 ? free : Math.Min(Math.Max(free, chunk), MaxUnsizedChunk));
                     bytesRead = buffer.GetByteCount() - done;
                     done += bytesRead;
-                } while (bytesRead == chunk);
-            } else {
-                buffer.Append(_stream, remaining);
+                    // read until the stream really ends: a short read is normal on a pipe,
+                    // where the child may not have written the rest yet
+                } while (bytesRead > 0);
+            } else if (remaining > 0) {
+                // Only for bytes the buffer did not have: a read of none from a socket still waits for
+                // it to become readable, which kept `gets' then `read(n)' of what gets had already
+                // buffered waiting for more data that might never come.
+                AppendFromStream(buffer, remaining);
             }
+        }
+
+        private void AppendFromStream(MutableString/*!*/ buffer, int count) {
+            var owner = _timeoutOwner;
+            if (owner == null) {
+                buffer.Append(_stream, count);
+                return;
+            }
+            owner.WaitForStream(true);
+            try {
+                buffer.Append(_stream, count);
+            } catch (TimeoutException) {
+                throw owner.CreateTimeoutError();
+            }
+        }
+
+        private const int MaxUnsizedChunk = 0x10000;
+
+        /// <summary>
+        /// The number of bytes between the position of the underlying stream and its end, or -1
+        /// if the stream doesn't know (it can't seek, or it is a file like those in /proc that
+        /// reports no length).
+        /// </summary>
+        private int GetRemainingLength() {
+            try {
+                if (_stream.CanSeek) {
+                    long remaining = _stream.Length - _stream.Position;
+                    if (remaining > 0 && remaining < Int32.MaxValue) {
+                        return (int)remaining;
+                    }
+                }
+            } catch (Exception) {
+                // Only a hint: a stream that can't answer (some throw from CanSeek itself, a pipe
+                // throws NotImplementedException) is read the way one of unknown length is.
+            }
+            return -1;
         }
 
         private static int IndexOfCrLf(byte[]/*!*/ array, int i) {
@@ -395,10 +545,27 @@ namespace IronRuby.Builtins {
             if (limit == 0) {
                 return MutableString.CreateEmpty();
             } else if (separator == null) {
-                var result = MutableString.CreateBinary();
-                return AppendBytes(result, limit, preserveEndOfLines) == 0 ? null : result;
+                // The whole of what is left, in the stream's own encoding rather than as bytes.
+                var result = MutableString.CreateBinary(encoding);
+                if (AppendBytes(result, limit, preserveEndOfLines) == 0) {
+                    return null;
+                }
+                if (limit != Int32.MaxValue) {
+                    // A byte limit is relaxed while the last character is incomplete, by 16 bytes
+                    // at most (extra_limit in io.c): gets(nil, 1) on "é" answers "é", not "\xC3".
+                    for (int extra = 16; extra > 0 && EndsWithIncompleteCharacter(encoding, result); extra--) {
+                        if (AppendBytes(result, 1, preserveEndOfLines) == 0) {
+                            break;
+                        }
+                    }
+                }
+                return result;
             } else if (separator.StartsWith('\n') && separator.GetLength() == 1) {
-                return ReadLine(encoding, preserveEndOfLines, limit);
+                // The buffer-scanning reader has no way to stop part way through a line, so a
+                // read with a byte limit goes through the general one.
+                return limit == Int32.MaxValue
+                    ? ReadLine(encoding, preserveEndOfLines, limit)
+                    : ReadLine(separator, encoding, preserveEndOfLines, limit);
             } else if (separator.IsEmpty) {
                 return ReadParagraph(encoding, preserveEndOfLines, limit);
             } else {
@@ -477,10 +644,15 @@ namespace IronRuby.Builtins {
         }
 
         public MutableString ReadParagraph(RubyEncoding/*!*/ encoding, bool preserveEndOfLines, int limit) {
-            // TODO: limit
-
+            // A paragraph starts at its first line that is not empty: MRI swallows the newlines
+            // before it as well as the ones after it.
+            SkipNewlines(preserveEndOfLines);
             var result = ReadLine(MutableString.CreateAscii("\n\n"), encoding, preserveEndOfLines, limit);
+            SkipNewlines(preserveEndOfLines);
+            return result;
+        }
 
+        private void SkipNewlines(bool preserveEndOfLines) {
             int c;
             while ((c = PeekByteNormalizeEoln(preserveEndOfLines)) != -1) {
                 if (c != '\n') {
@@ -488,38 +660,127 @@ namespace IronRuby.Builtins {
                 }
                 ReadByteNormalizeEoln(preserveEndOfLines);
             }
+        }
 
-            return result;
+        /// <summary>
+        /// Whether the bytes end part way through a character, so that a byte limit that lands
+        /// there has to be stretched to the end of that character - which is what MRI does, and
+        /// why a limit of 2 can return three bytes.
+        /// </summary>
+        private static bool EndsWithIncompleteCharacter(RubyEncoding/*!*/ encoding, MutableString/*!*/ str) {
+            // Only UTF-8 is self-synchronising in a way we can read off the bytes; in a
+            // single-byte encoding every byte is a character of its own anyway.
+            if (encoding.StrictEncoding.CodePage != 65001) {
+                return false;
+            }
+
+            int count = str.GetByteCount();
+            int head = count - 1;
+            while (head >= 0 && count - head < 4 && (str.GetByte(head) & 0xC0) == 0x80) {
+                head--;
+            }
+            if (head < 0) {
+                return false;
+            }
+
+            int lead = str.GetByte(head);
+            int length = (lead >= 0xC2 && lead <= 0xDF) ? 2 : (lead >= 0xE0 && lead <= 0xEF) ? 3 : (lead >= 0xF0 && lead <= 0xF4) ? 4 : 1;
+            return count - head < length;
         }
 
         public MutableString ReadLine(MutableString/*!*/ separator, RubyEncoding/*!*/ encoding, bool preserveEndOfLines, int limit) {
-            // TODO: limit
+            byte[] sep = separator.ToByteArray();
+            Debug.Assert(sep.Length > 0 && limit > 0);
 
-            int b = ReadByteNormalizeEoln(preserveEndOfLines);
+            if (!preserveEndOfLines) {
+                return ReadLineNormalizingEoln(sep, encoding, limit);
+            }
+
+            // The line is looked for in the read buffer, which is filled (and grown) until it holds
+            // the separator, the limit, or the rest of the stream - rather than a byte at a time.
+            if (_bufferCount == 0 && LoadBuffer(_buffer != null ? _buffer.Length : _defaultBufferSize) == 0) {
+                return null;
+            }
+
+            // The number of buffered bytes already searched: no separator ends within them.
+            int searched = 0;
+            while (true) {
+                int window = Math.Min(_bufferCount, limit);
+
+                // A separator that ends past the searched bytes may start up to sep.Length - 1 bytes before their end.
+                int from = Math.Max(0, searched - (sep.Length - 1));
+                int index = new ReadOnlySpan<byte>(_buffer, _bufferStart + from, window - from).IndexOf(sep);
+                if (index >= 0) {
+                    int length = from + index + sep.Length;
+                    return ConsumeLine(encoding, length, length, false);
+                }
+
+                if (window == limit) {
+                    var result = ConsumeLine(encoding, limit, limit, false);
+
+                    // MRI relaxes the limit a byte at a time while the last character is
+                    // incomplete, but by 16 bytes at most (extra_limit in io.c).
+                    for (int extra = 16; extra > 0 && EndsWithIncompleteCharacter(encoding, result); extra--) {
+                        int b = ReadByte();
+                        if (b == -1) {
+                            break;
+                        }
+                        result.Append((byte)b);
+                        if (EndsWith(result, sep)) {
+                            break;
+                        }
+                    }
+                    return result;
+                }
+
+                searched = window;
+                if (_bufferCount == _buffer.Length) {
+                    Debug.Assert(_bufferStart == 0);
+                    Array.Resize(ref _buffer, _buffer.Length << 1);
+                }
+
+                // end of stream:
+                if (LoadBuffer(_buffer.Length - _bufferCount) == 0) {
+                    return ConsumeLine(encoding, _bufferCount, _bufferCount, false);
+                }
+            }
+        }
+
+        private MutableString ReadLineNormalizingEoln(byte[]/*!*/ sep, RubyEncoding/*!*/ encoding, int limit) {
+            int b = ReadByteNormalizeEoln(false);
             if (b == -1) {
                 return null;
             }
 
-            int separatorOffset = 0;
-            int separatorLength = separator.GetByteCount();
+            int extraLimit = 16;
             MutableString result = MutableString.CreateBinary(encoding);
 
             do {
                 result.Append((byte)b);
 
-                if (b == separator.GetByte(separatorOffset)) {
-                    if (separatorOffset == separatorLength - 1) {
-                        break;
-                    }
-                    separatorOffset++;
-                } else if (separatorOffset > 0) {
-                    separatorOffset = 0;
+                if (b == sep[sep.Length - 1] && EndsWith(result, sep)) {
+                    break;
                 }
 
-                b = ReadByteNormalizeEoln(preserveEndOfLines);
+                if (result.GetByteCount() >= limit) {
+                    // MRI relaxes the limit a byte at a time while the last character is
+                    // incomplete, but by 16 bytes at most (extra_limit in io.c).
+                    if (extraLimit == 0 || !EndsWithIncompleteCharacter(encoding, result)) {
+                        break;
+                    }
+                    extraLimit--;
+                }
+
+                b = ReadByteNormalizeEoln(false);
             } while (b != -1);
 
             return result;
+        }
+
+        private static bool EndsWith(MutableString/*!*/ str, byte[]/*!*/ suffix) {
+            int start, count;
+            byte[] bytes = str.GetByteArray(out start, out count);
+            return new ReadOnlySpan<byte>(bytes, start, count).EndsWith(suffix);
         }
 
         public override bool CanRead {
@@ -536,7 +797,14 @@ namespace IronRuby.Builtins {
 
         public override void Flush() {
             FlushRead();
-            _stream.Flush();
+            try {
+                _stream.Flush();
+                _writePending = false;
+                _writeFlushFailed = false;
+            } catch {
+                _writeFlushFailed = true;
+                throw;
+            }
         }
 
         public override long Length {

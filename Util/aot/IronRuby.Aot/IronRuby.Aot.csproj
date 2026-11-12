@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Ahead-of-time compilation of Ruby to a saved .NET assembly (see ../README.md). It needs .NET 9+
+       (PersistedAssemblyBuilder), which every framework IronRuby targets has. Its one use in the build is the
+       startup library (IronRuby.Startup.dll, ../build-startup.sh), which the Linux Release build makes for the R2R
+       host.
+
+       It runs IronRuby's front end in-process, and what that produces is saved as IL that calls into the host's
+       IronRuby and DLR: so it references the builds the host is made of, and targets the host's framework,
+       IronRubyAotHostTfm (net10.0 by default, the first of IronRubyTargetFrameworks); the IL it saves then
+       references that framework's assemblies. The references take their nearest framework, as any project's do:
+       net11.0 gets the DLR's net10.0 build, as IronRuby's own net11.0 build does.
+         dotnet build Util/aot/IronRuby.Aot -c Release -p:DlrSourceDir=... -p:IronRubyTargetFrameworks=net11.0 -->
+  <PropertyGroup>
+    <IronRubyAotHostTfm Condition="'$(IronRubyAotHostTfm)' == ''">$([System.String]::Copy('$(IronRubyTargetFrameworks);').Split(';')[0])</IronRubyAotHostTfm>
+    <IronRubyAotHostTfm Condition="'$(IronRubyAotHostTfm)' == ''">net10.0</IronRubyAotHostTfm>
+    <TargetFramework>$(IronRubyAotHostTfm)</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>IronRuby.Aot</AssemblyName>
+    <RootNamespace>IronRuby.Aot</RootNamespace>
+    <!-- a later runtime than the host's runs it too (StartupCommand then retargets the saved IL's framework references) -->
+    <RollForward>Major</RollForward>
+    <Nullable>disable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <NoWarn>CS0105;$(NoWarn);CS1591;CS0618;CS8632;CS0162;CS0168;CS0219;CS0028;CS0414;SYSLIB0050;SYSLIB0051</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../../Src/Ruby/Ruby.csproj" />
+    <ProjectReference Include="../../../Src/Libraries/IronRuby.Libraries.csproj" />
+    <ProjectReference Include="../../../Src/Prism/IronRuby.Prism.csproj" />
+    <ProjectReference Include="$(DlrSourceDir)/Microsoft.Scripting/Microsoft.Scripting.csproj" />
+    <ProjectReference Include="$(DlrSourceDir)/Microsoft.Dynamic/Microsoft.Dynamic.csproj" />
+  </ItemGroup>
+</Project>

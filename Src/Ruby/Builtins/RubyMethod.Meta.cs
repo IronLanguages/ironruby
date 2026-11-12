@@ -13,20 +13,16 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
-using System.Diagnostics;
 using System.Dynamic;
 using System.Reflection;
-using Microsoft.Scripting.Utils;
+using Microsoft.Scripting.Actions.Calls;
 using Microsoft.Scripting.Runtime;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
+using IronRuby.Runtime.Conversions;
 using IronRuby.Compiler;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
@@ -38,7 +34,7 @@ namespace IronRuby.Builtins {
             return new Meta(parameter, BindingRestrictions.Empty, this);
         }
 
-        internal sealed class Meta : RubyMetaObject<RubyMethod> {
+        internal sealed class Meta : RubyMetaObject<RubyMethod>, IConvertibleRubyMetaObject, IInferableInvokable {
             public override RubyContext/*!*/ Context {
                 get { return Value.Info.Context; }
             }
@@ -51,6 +47,36 @@ namespace IronRuby.Builtins {
                 : base(expression, restrictions, value) {
             }
 
+            bool IConvertibleMetaObject.CanConvertTo(Type/*!*/ type, bool @explicit) {
+                return IsConvertibleTo(type, @explicit).IsConvertible;
+            }
+
+            // Conversion to a delegate, like a Proc's: a Method passed where a CLR method takes a delegate
+            // (a Func<int, int> for method(:twice)) becomes one that calls it.
+            // Explicit: convertible to any delegate type.
+            // Implicit: convertible to a delegate type whose parameter count the method accepts.
+            public Convertibility IsConvertibleTo(Type/*!*/ type, bool @explicit) {
+                if (!typeof(Delegate).IsAssignableFrom(type)) {
+                    return Convertibility.NotConvertible;
+                }
+
+                if (@explicit) {
+                    return Convertibility.AlwaysConvertible;
+                }
+
+                MethodInfo invoke;
+                if (!HasValue || (invoke = type.GetMethod("Invoke")) == null) {
+                    return Convertibility.NotConvertible;
+                }
+
+                int delegateArity = invoke.GetParameters().Length;
+                int arity = Value.Info.GetArity();
+                return new Convertibility(
+                    arity >= 0 ? delegateArity == arity : delegateArity >= -arity - 1,
+                    Ast.Equal(Ast.Property(AstUtils.Convert(Expression, typeof(RubyMethod)), "Info"), AstUtils.Constant(Value.Info))
+                );
+            }
+
             public override DynamicMetaObject/*!*/ BindConvert(ConvertBinder/*!*/ binder) {
                 return InteropBinder.TryBindCovertToDelegate(this, binder, Methods.CreateDelegateFromMethod) 
                     ?? base.BindConvert(binder);
@@ -58,6 +84,16 @@ namespace IronRuby.Builtins {
 
             public override DynamicMetaObject/*!*/ BindInvoke(InvokeBinder/*!*/ binder, DynamicMetaObject/*!*/[]/*!*/ args) {
                 return InteropBinder.Invoke.Bind(binder, this, args, Value.BuildInvoke);
+            }
+
+            // Generic inference, as for a Proc: a Method takes whatever the delegate passes it, so it says nothing
+            // about a type parameter the other arguments determine - Array.FindAll(int[], 2.method(:<)) is
+            // FindAll<int>, as with a block (TypeInferer, Build/dlr-patches/0005) (#141).
+            InferenceResult IInferableInvokable.GetInferredType(Type delegateType, Type parameterType) {
+                return new InferenceResult(
+                    typeof(object),
+                    BindingRestrictions.GetTypeRestriction(Expression, typeof(RubyMethod))
+                );
             }
         }
     }

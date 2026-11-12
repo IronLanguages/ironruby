@@ -13,33 +13,42 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Diagnostics;
-using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
+using IronRuby.Compiler;
 using Microsoft.Scripting.Utils;
 using Microsoft.Scripting.Generation;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Builtins {
     using Ast = Expression;
-    using BlockCallTargetUnsplatN = Func<BlockParam, object, object[], RubyArray, object>;
+    using BlockCallTargetUnsplatProcN = Func<BlockParam, object, object[], RubyArray, Proc, object>;
 
     [DebuggerDisplay("{GetDebugView(), nq}")]
-    public partial class RubyMethod {
+    public partial class RubyMethod : IDuplicable {
         private readonly object _target;
         private readonly string/*!*/ _name;
         private readonly RubyMemberInfo/*!*/ _info;
-        private BlockDispatcherUnsplatN _procDispatcher;
+        private BlockDispatcherUnsplatProcN _procDispatcher;
+
+        /// <summary>
+        /// Set for a method that stands in for one the object only answers through
+        /// #method_missing: it reports the name that was asked for, and calls #method_missing
+        /// with that name pushed in front of the arguments. This used to be a subclass, which
+        /// gave it a Ruby class of its own - MRI hands back a plain Method, and ruby/spec checks
+        /// it with #instance_of?.
+        /// </summary>
+        private readonly string _methodMissingName;
+
+        public bool IsMethodMissing {
+            get { return _methodMissingName != null; }
+        }
 
         public object Target {
             get { return _target; }
@@ -62,6 +71,24 @@ namespace IronRuby.Builtins {
             _name = name;
         }
 
+        private RubyMethod(object target, RubyMemberInfo/*!*/ info, string/*!*/ name, string methodMissingName)
+            : this(target, info, name) {
+            _methodMissingName = methodMissingName;
+        }
+
+        /// <summary>
+        /// A Method standing in for a name the object only answers through #method_missing.
+        /// </summary>
+        public static RubyMethod/*!*/ CreateMethodMissing(object target, RubyMemberInfo/*!*/ info, string/*!*/ name) {
+            return new RubyMethod(target, info, name, name);
+        }
+
+        object IDuplicable.Duplicate(RubyContext/*!*/ context, bool copySingletonMembers) {
+            var result = new RubyMethod(_target, _info, _name, _methodMissingName);
+            context.CopyInstanceData(this, result, copySingletonMembers);
+            return result;
+        }
+
         public RubyClass/*!*/ GetTargetClass() {
             return _info.Context.GetClassOf(_target);
         }
@@ -69,44 +96,99 @@ namespace IronRuby.Builtins {
         public virtual Proc/*!*/ ToProc(RubyScope/*!*/ scope) {
             ContractUtils.RequiresNotNull(scope, "scope");
 
-            // TODO: 
-            // This should pass a proc parameter (use BlockDispatcherUnsplatProcN).
-            // MRI 1.9.2 doesn't do so though (see http://redmine.ruby-lang.org/issues/show/3792).
-
             if (_procDispatcher == null) {
-                var site = CallSite<Func<CallSite, object, object, object>>.Create(
+                // the block the proc is called with goes on to the method it wraps, so that
+                // `x.method(:foo).to_proc.call { ... }` reaches a `yield` inside #foo
+                // HasScope, and the scope taken from the proc being called: a method that reads
+                // the caller's scope - attr_reader and the other definers read the visibility
+                // from it - would otherwise see a default one and define private methods, so
+                // `%i(a b).each(&method(:attr_reader))` produced private readers where MRI's
+                // are public.  Reading it off the proc rather than closing over the scope this
+                // #to_proc ran under keeps the dispatcher below cacheable.
+                var site = CallSite<Func<CallSite, RubyScope, object, Proc, object, object>>.Create(
                     // TODO: use InvokeBinder
                     RubyCallAction.Make(
                         scope.RubyContext, "call",
-                        new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasSplattedArgument)
+                        new RubyCallSignature(1, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf |
+                            RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock)
                     )
                 );
 
-                var block = new BlockCallTargetUnsplatN((blockParam, self, args, unsplat) => {
+                var block = new BlockCallTargetUnsplatProcN((blockParam, self, args, unsplat, procArg) => {
                     // block takes no parameters but unsplat => all actual arguments are added to unsplat:
                     Debug.Assert(args.Length == 0);
 
-                    return site.Target(site, this, unsplat);
+                    return site.Target(site, blockParam.Proc.LocalScope, this, procArg, unsplat);
                 });
 
-                _procDispatcher = new BlockDispatcherUnsplatN(0, 
-                    BlockDispatcher.MakeAttributes(BlockSignatureAttributes.HasUnsplatParameter, _info.GetArity()),
-                    null, 0
+                // MRI's proc reports the location of the method it wraps, not of the to_proc call
+                string sourcePath = null;
+                int sourceLine = 0;
+                var rubyInfo = _info as RubyMethodInfo;
+                if (rubyInfo != null) {
+                    sourcePath = rubyInfo.Document.FileName;
+                    sourceLine = rubyInfo.SourceSpan.Start.Line;
+                } else {
+                    var lambdaInfo = _info as RubyLambdaMethodInfo;
+                    if (lambdaInfo != null) {
+                        sourcePath = lambdaInfo.Lambda.Dispatcher.SourcePath;
+                        sourceLine = lambdaInfo.Lambda.Dispatcher.SourceLine;
+                    }
+                }
+
+                _procDispatcher = new BlockDispatcherUnsplatProcN(0, 
+                    BlockDispatcher.MakeAttributes(
+                        BlockSignatureAttributes.HasUnsplatParameter | BlockSignatureAttributes.HasProcParameter,
+                        _info.GetArity()
+                    ),
+                    sourcePath, sourceLine
                 );
 
                 _procDispatcher.SetMethod(block);
+                _procDispatcher.ParameterSignature = _info.GetParameterSignature();
+                _procDispatcher.WrapsMethod = true;
             }
 
-            // TODO: 
-            // MRI: source file/line are that of the to_proc method call:
-            return new Proc(ProcKind.Block, scope.SelfObject, scope, _procDispatcher);
+            // A method binds its arguments strictly and `return` from it returns from the
+            // method, both of which are lambda behaviour, so MRI's Method#to_proc answers
+            // #lambda? with true. Its self is the method's receiver rather than whatever self
+            // the to_proc call happened under, which is what #binding hands back.
+            scope.MarkCaptured();
+            return new Proc(ProcKind.Lambda, _target, scope, _procDispatcher);
         }
 
         #region Dynamic Operations
 
-        internal virtual void BuildInvoke(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args) {
+        internal void BuildInvoke(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args) {
             Assert.NotNull(metaBuilder, args);
             Debug.Assert(args.Target == this);
+
+            // A call to these methods depends on the method, the name it is called by and the arguments (self included), not on
+            // which Method object holds them. Each `instance_method(:m).bind(obj).call` makes a new Method, so a rule that took 
+            // the Method and its receiver as constants was bound and compiled anew for every call of such a site.
+            if (_methodMissingName == null && IsReceiverIndependent(_info)) {
+                var method = Ast.Convert(args.TargetExpression, typeof(RubyMethod));
+                var receiver = Ast.Property(method, TargetProperty);
+
+                // The receiver's CLR type is restricted here: the overload resolver takes self for granted.
+                metaBuilder.AddRestriction(Ast.AndAlso(
+                    Ast.TypeIs(args.TargetExpression, typeof(RubyMethod)),
+                    Ast.AndAlso(
+                        Ast.AndAlso(
+                            Ast.Equal(Ast.Property(method, InfoProperty), AstUtils.Constant(_info, typeof(RubyMemberInfo))),
+                            Ast.Equal(Ast.Property(method, NameProperty), AstUtils.Constant(_name))
+                        ),
+                        Ast.AndAlso(
+                            Ast.Not(Ast.Property(method, IsMethodMissingProperty)),
+                            (_target == null) ? (Expression)Ast.Equal(receiver, AstUtils.Constant(null)) : Ast.TypeEqual(receiver, _target.GetType())
+                        )
+                    )
+                ));
+
+                args.SetTarget(receiver, _target);
+                _info.BuildCall(metaBuilder, args, _name);
+                return;
+            }
 
             // first argument must be this method:
             metaBuilder.AddRestriction(Ast.Equal(args.TargetExpression, AstUtils.Constant(this)));
@@ -114,43 +196,34 @@ namespace IronRuby.Builtins {
             // set the target (becomes self in the called method):
             args.SetTarget(AstUtils.Constant(_target, CompilerHelpers.GetVisibleType(_target)), _target);
 
-            _info.BuildCall(metaBuilder, args, _name);
-        }
+            if (_methodMissingName != null) {
+                // MRI looks method_missing up on the receiver when the Method is called, not when
+                // it was made, so one defined (or stubbed) in the meantime is the one that runs
+                RubyMemberInfo methodMissing;
+                var targetClass = args.TargetClass;
+                using (targetClass.Context.ClassHierarchyLocker()) {
+                    metaBuilder.AddTargetTypeTest(args.Target, targetClass, args.TargetExpression, args.MetaContext,
+                        new[] { Symbols.MethodMissing }
+                    );
+                    methodMissing = targetClass.ResolveMethodForSiteNoLock(Symbols.MethodMissing, VisibilityContext.AllVisible).Info ?? _info;
+                }
 
-        #endregion
-
-        #region Curried
-
-        // TODO: currently used only to curry a method name for method_missing, but could be easily extended to support general argument currying
-        [DebuggerDisplay("{GetCurriedDebugView(), nq}")]
-        public sealed class Curried : RubyMethod {
-            private readonly string/*!*/ _methodNameArg;
-
-            internal Curried(object target, RubyMemberInfo/*!*/ info, string/*!*/ methodNameArg)
-                : base(target, info, "method_missing") {
-                _methodNameArg = methodNameArg;
-            }
-
-            internal override void BuildInvoke(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args) {
-                args.InsertMethodName(_methodNameArg);
-                base.BuildInvoke(metaBuilder, args);
-            }
-
-            public override Proc/*!*/ ToProc(RubyScope/*!*/ scope) {
-                throw new NotSupportedException();
-            }
-
-            private string/*!*/ GetCurriedDebugView() {
-                var result = new StringBuilder();
-                result.Append("missing ");
-                result.Append(GetTargetClass().Name);
-                result.Append('#');
-                result.Append(_methodNameArg);
-
-                result.Append("(?)");
-                return result.ToString();
+                args.InsertMethodName(_methodMissingName);
+                methodMissing.BuildCall(metaBuilder, args, Symbols.MethodMissing);
+            } else {
+                _info.BuildCall(metaBuilder, args, _name);
             }
         }
+
+        private static bool IsReceiverIndependent(RubyMemberInfo/*!*/ info) {
+            Type type = info.GetType();
+            return type == typeof(RubyLibraryMethodInfo) || type == typeof(RubyMethodInfo) || type == typeof(RubyLambdaMethodInfo);
+        }
+
+        private static readonly System.Reflection.PropertyInfo/*!*/ InfoProperty = typeof(RubyMethod).GetProperty("Info");
+        private static readonly System.Reflection.PropertyInfo/*!*/ NameProperty = typeof(RubyMethod).GetProperty("Name");
+        private static readonly System.Reflection.PropertyInfo/*!*/ TargetProperty = typeof(RubyMethod).GetProperty("Target");
+        private static readonly System.Reflection.PropertyInfo/*!*/ IsMethodMissingProperty = typeof(RubyMethod).GetProperty("IsMethodMissing");
 
         #endregion
 
@@ -166,7 +239,7 @@ namespace IronRuby.Builtins {
             result.Append(_name);
 
             // TODO: parameter names?
-            result.Append("()");
+            result.Append((_methodMissingName != null) ? "(?) via method_missing" : "()");
             return result.ToString();            
         }
 

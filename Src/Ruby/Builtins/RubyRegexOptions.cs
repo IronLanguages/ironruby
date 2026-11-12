@@ -30,6 +30,11 @@ namespace IronRuby.Builtins {
         SJIS = 64,
         UTF8 = 128,
 
-        EncodingMask = EUC | SJIS | UTF8 | FIXED
+        EncodingMask = EUC | SJIS | UTF8 | FIXED,
+
+        // Regexp::FIXEDENCODING requested explicitly through Regexp.new's integer options.
+        // The pattern keeps the encoding of the source string instead of being widened to
+        // US-ASCII, but unlike EUC/SJIS/UTF8 it doesn't name a particular encoding.
+        FixedEncoding = 256,
     }
 }

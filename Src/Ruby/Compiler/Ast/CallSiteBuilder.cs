@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
@@ -28,7 +24,6 @@ using Microsoft.Scripting.Utils;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Compiler.Ast {
-    using Ast = MSA.Expression;
 
     /// <summary>
     /// Simple helper for building up method call actions.
@@ -85,10 +80,18 @@ namespace IronRuby.Compiler.Ast {
             return MakeCallSite(SuperCallAction.Make(_gen.Context, new RubyCallSignature(Count - HiddenArgumentCount, flags), lexicalScopeId));
         }
 
+        public bool IsVariableCall { get; set; }
+
         public MSA.Expression/*!*/ MakeCallAction(string/*!*/ name, bool hasImplicitSelf) {
             RubyCallFlags flags = GetSignatureFlags();
             if (hasImplicitSelf) {
                 flags |= RubyCallFlags.HasImplicitSelf;
+            }
+            if (IsVariableCall) {
+                flags |= RubyCallFlags.IsVariableCall;
+            }
+            if (_hasBlock) {
+                flags |= RubyCallFlags.HasSourceBlock;
             }
 
             return MakeCallSite(RubyCallAction.Make(_gen.Context, name, new RubyCallSignature(Count - HiddenArgumentCount, flags)));

@@ -13,20 +13,15 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
+using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
 using IronRuby.Compiler.Ast;
-using IronRuby.Compiler.Generation;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
-using AstUtils = Microsoft.Scripting.Ast.Utils;
 using MethodDeclaration = IronRuby.Compiler.Ast.MethodDefinition;
 
 namespace IronRuby.Runtime.Calls {
@@ -37,35 +32,413 @@ namespace IronRuby.Runtime.Calls {
         private readonly MethodDeclaration/*!*/ _ast;
         private readonly MSA.SymbolDocumentInfo _document;
         private readonly RubyEncoding/*!*/ _encoding;
+        // the Coverage measurement the body was defined under: it is compiled only when first called
+        private readonly LineCoverage _coverage;
 
         private Delegate _delegate;
+        private RubyModule _delegateModule;
+        private ConditionalWeakTable<RubyModule, Delegate> _moduleVariants;
 
-        internal RubyMethodBody(MethodDeclaration/*!*/ ast, MSA.SymbolDocumentInfo document, RubyEncoding/*!*/ encoding) {
+        internal RubyMethodBody(MethodDeclaration/*!*/ ast, MSA.SymbolDocumentInfo document, RubyEncoding/*!*/ encoding, LineCoverage coverage) {
             Assert.NotNull(ast, encoding);
 
             _ast = ast;
             _document = document;
             _encoding = encoding;
+            _coverage = coverage;
+        }
+
+        // Set for a body compiled ahead of time (Util/aot): builds the delegate for a declaring
+        // scope and module, in place of transforming the AST - which then carries only the
+        // method's header (name, parameters, location), not its body.
+        private readonly Func<RubyScope, RubyModule, Delegate> _precompiled;
+
+        // A precompiled method the JIT may specialize: its def's source, which the JIT's AST is parsed from (see Compile).
+        private readonly string _jitSource;
+
+        // The label the precompiled body's frames carry, which the compiler worked out from the lexical nesting (see Compile).
+        private readonly string _precompiledLabel;
+
+        internal RubyMethodBody(MethodDeclaration/*!*/ header, MSA.SymbolDocumentInfo document, RubyEncoding/*!*/ encoding,
+            Func<RubyScope, RubyModule, Delegate>/*!*/ precompiled, string jitSource, string label)
+            : this(header, document, encoding, (LineCoverage)null) {
+            _precompiled = precompiled;
+            _jitSource = jitSource;
+            _precompiledLabel = label;
+        }
+
+        /// <summary>
+        /// Set by Module#ruby2_keywords. It lives on the body rather than on the method info so
+        /// that it is shared with every alias of the method, which is what MRI does - marking a
+        /// method marks the aliases made of it, before or after.
+        /// </summary>
+        private bool _ruby2Keywords;
+
+        // What Method#== compares: the body itself, or the body of the method this one was made the same as
+        // (RubyMethodInfo.MakeEquivalentTo).
+        private RubyMethodBody _equivalenceKey;
+
+        internal RubyMethodBody/*!*/ EquivalenceKey {
+            get { return _equivalenceKey ?? this; }
+            set { _equivalenceKey = value; }
+        }
+
+        public bool Ruby2Keywords {
+            get { return _ruby2Keywords; }
+            set { _ruby2Keywords = value; }
         }
 
         public MethodDeclaration Ast { get { return _ast; } }
+
+        /// <summary>
+        /// The Coverage measurement this `def' was compiled under, null if it is not measured.
+        /// </summary>
+        internal LineCoverage Coverage { get { return _coverage; } }
+
+        // Set once the call of this method with a block it ignores has been warned about (or would
+        // have been, had warnings been on): MRI warns once per method definition.
+        internal bool UnusedBlockReported { get; set; }
         public MSA.SymbolDocumentInfo Document { get { return _document; } }
         public bool HasTarget { get { return _ast.Target != null; } }
         public string/*!*/ Name { get { return _ast.Name; } }
 
+        // The lexical modules the first compilation was made for, when they run through the
+        // singleton class of a plain object; null otherwise. See GetDelegate.
+        private RubyModule[] _singletonLexicalModules;
+        private List<KeyValuePair<RubyModule[], Delegate>> _lexicalVariants;
+
         internal Delegate GetDelegate(RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
-            if (_delegate == null) {
+            Delegate primary = _delegate;
+            if (primary == null) {
                 lock (this) {
-                    if (_delegate == null) {
-                        // TODO: remove options
-                        AstGenerator gen = new AstGenerator(declaringScope.RubyContext, new RubyCompilerOptions(), _document, _encoding, false);
-                        MSA.LambdaExpression lambda = _ast.TransformBody(gen, declaringScope, declaringModule);
-                        _delegate = RubyScriptCode.CompileLambda(lambda, declaringScope.RubyContext);
+                    primary = _delegate;
+                    if (primary == null) {
+                        _singletonLexicalModules = GetObjectSingletonLexicalModules(declaringScope);
+                        _delegateModule = declaringModule;
+                        _delegate = primary = Compile(declaringScope, declaringModule);
+                        WatchLightCompilation(primary);
                     }
                 }
             }
 
-            return _delegate;
+            // The declaring module is baked in as well, and `super' looks up from it. A `def' run
+            // for more than one module - `Class.new { def initialize; super; end }' made twice,
+            // class_eval in a loop - gets a compilation per module.
+            if (declaringModule != _delegateModule && _singletonLexicalModules == null) {
+                lock (this) {
+                    if (_moduleVariants == null) {
+                        _moduleVariants = new ConditionalWeakTable<RubyModule, Delegate>();
+                    }
+                    Delegate result;
+                    if (!_moduleVariants.TryGetValue(declaringModule, out result)) {
+                        result = Compile(declaringScope, declaringModule);
+                        _moduleVariants.Add(declaringModule, result);
+                    }
+                    return result;
+                }
+            }
+
+            // The declaring scope is baked into the compiled body, which is shared by every
+            // execution of the `def'. For `class << obj' run once per obj (in a loop, a method)
+            // each run has its own singleton class, and constants inside the method have to be
+            // looked up there, so such a body is compiled once per lexical module chain.
+            if (_singletonLexicalModules != null) {
+                var modules = GetLexicalModules(declaringScope);
+                if (!SameModules(modules, _singletonLexicalModules)) {
+                    lock (this) {
+                        if (_lexicalVariants == null) {
+                            _lexicalVariants = new List<KeyValuePair<RubyModule[], Delegate>>();
+                        }
+                        foreach (var variant in _lexicalVariants) {
+                            if (SameModules(modules, variant.Key)) {
+                                return variant.Value;
+                            }
+                        }
+                        var result = Compile(declaringScope, declaringModule);
+                        _lexicalVariants.Add(new KeyValuePair<RubyModule[], Delegate>(modules, result));
+                        return result;
+                    }
+                }
+            }
+
+            return primary;
+        }
+
+        #region Compiled-body forwarding
+
+        // The primary delegate starts out as the light compiler's interpreted LightLambda, which goes
+        // on standing in front of the IL it compiles after a few dozen calls: every call through it is
+        // one more delegate hop plus a cast of the compiled delegate. Precompiled dispatchers made
+        // while the body was interpreted are recorded here and pointed at the compiled delegate when
+        // it arrives; later binds get it from GetDelegate. Rules already built keep the LightLambda,
+        // which forwards correctly - just not as cheaply.
+        private Delegate _interpretedDelegate;
+        private List<MethodDispatcher> _interpretedDispatchers;
+        private Delegate _compiledFrom, _compiledTo;
+
+        private void WatchLightCompilation(Delegate/*!*/ primary) {
+            var light = primary.Target as Microsoft.Scripting.Interpreter.LightLambda;
+            if (light != null) {
+                _interpretedDelegate = primary;
+                light.Compile += (sender, e) => OnLightCompiled(primary, e.Compiled);
+            }
+        }
+
+        private void OnLightCompiled(Delegate/*!*/ interpreted, Delegate/*!*/ compiled) {
+            List<MethodDispatcher> dispatchers;
+            lock (this) {
+                if (_delegate != interpreted || compiled.GetType() != interpreted.GetType()) {
+                    return;
+                }
+                _delegate = compiled;
+                _interpretedDelegate = null;
+                _compiledFrom = interpreted;
+                _compiledTo = compiled;
+                dispatchers = _interpretedDispatchers;
+                _interpretedDispatchers = null;
+            }
+            if (dispatchers != null) {
+                foreach (var dispatcher in dispatchers) {
+                    dispatcher.SetMethod(compiled);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Called for each dispatcher made over <paramref name="method"/>, a delegate GetDelegate returned.
+        /// </summary>
+        internal void RegisterDispatcher(MethodDispatcher/*!*/ dispatcher, Delegate/*!*/ method) {
+            Delegate compiled;
+            lock (this) {
+                if (method == _interpretedDelegate) {
+                    if (_interpretedDispatchers == null) {
+                        _interpretedDispatchers = new List<MethodDispatcher>();
+                    }
+                    _interpretedDispatchers.Add(dispatcher);
+                    return;
+                }
+                if (method != _compiledFrom) {
+                    return;
+                }
+                compiled = _compiledTo;
+            }
+            // compiled between GetDelegate and here:
+            dispatcher.SetMethod(compiled);
+        }
+
+        #endregion
+
+        private Delegate _moduleFunctionDelegate;
+
+        // The refinements that were active where the body was last defined for a module, which is
+        // what the method sees - not what its declaring scope has activated since.  The declaring
+        // scope is baked into the compiled body and shared by every method defined in that scope, so
+        // it cannot carry this; the box the compiled body hands each RubyMethodScope does.  Keyed like
+        // the compilations are, by declaring module.
+        private ConditionalWeakTable<RubyModule, StrongBox<RefinementActivation>> _definitionRefinements;
+
+        // A compilation made while nothing had been refined carries no box: its scopes see no
+        // refinements, which is right for a `def' that ran before any refinement existed.
+        private bool _compiledWithoutDefinitionRefinements;
+
+        // A `def' of this body ran while nothing had been refined (so it recorded nothing): a
+        // compilation for its module made after something has been must still see no refinements.
+        private bool _definedWithoutRefinements;
+
+        /// <summary>
+        /// A `def' of this body ran before anything was refined: no refinement is active where it was written.
+        /// </summary>
+        internal void SetDefinedWithoutRefinements() {
+            _definedWithoutRefinements = true;
+        }
+
+        /// <summary>
+        /// Records the refinements active at a `def' of this body for <paramref name="declaringModule"/>.
+        /// </summary>
+        internal void SetDefinitionRefinements(RubyModule/*!*/ declaringModule, RefinementActivation/*!*/ refinements) {
+            lock (this) {
+                if (_compiledWithoutDefinitionRefinements && !refinements.IsEmpty) {
+                    // The same `def' ran again after a refinement came into existence: drop the
+                    // compilations that cannot see it (callers re-bind: the def replaces the method).
+                    _compiledWithoutDefinitionRefinements = false;
+                    _delegate = null;
+                    _delegateModule = null;
+                    _moduleVariants = null;
+                    _singletonLexicalModules = null;
+                    _lexicalVariants = null;
+                    _moduleFunctionDelegate = null;
+                    _interpretedDelegate = null;
+                    _interpretedDispatchers = null;
+                    _compiledFrom = _compiledTo = null;
+                }
+
+                StrongBox<RefinementActivation> record;
+                if (_definitionRefinements != null && _definitionRefinements.TryGetValue(declaringModule, out record)) {
+                    if (!ReferenceEquals(record.Value, refinements)) {
+                        // The `def' ran again where other refinements are active, and the compiled body is shared: the
+                        // calls of it still running answer the new record from now on, the way new calls do. A scope
+                        // that memoized the old answer recomputes it, as it does after a `using', so that it agrees
+                        // with the rules that read the record (RubyCallAction.Resolve).
+                        declaringModule.Context.RefinementVersion++;
+                    }
+                } else {
+                    // nothing has been compiled against a record that did not exist
+                    record = GetDefinitionRefinementsNoLock(declaringModule);
+                }
+                record.Value = refinements;
+            }
+        }
+
+        private StrongBox<RefinementActivation>/*!*/ GetDefinitionRefinementsNoLock(RubyModule/*!*/ declaringModule) {
+            if (_definitionRefinements == null) {
+                _definitionRefinements = new ConditionalWeakTable<RubyModule, StrongBox<RefinementActivation>>();
+            }
+            return _definitionRefinements.GetValue(declaringModule, (_) => new StrongBox<RefinementActivation>());
+        }
+
+        /// <summary>
+        /// The body compiled for the singleton copy Module#module_function makes, which differs
+        /// from the instance method only in the label its frames carry.
+        /// </summary>
+        internal Delegate/*!*/ GetModuleFunctionDelegate(RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
+            if (_moduleFunctionDelegate == null) {
+                lock (this) {
+                    if (_moduleFunctionDelegate == null) {
+                        _moduleFunctionDelegate = Compile(declaringScope, declaringModule);
+                    }
+                }
+            }
+            return _moduleFunctionDelegate;
+        }
+
+        private Delegate/*!*/ Compile(RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
+            bool timed = PhaseTimer.Enter(_precompiled != null ? PhaseTimer.Precompiled : PhaseTimer.DefCompile);
+            try {
+                return CompileNoTiming(declaringScope, declaringModule);
+            } finally {
+                PhaseTimer.Exit(timed);
+            }
+        }
+
+        private Delegate/*!*/ CompileNoTiming(RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
+            if (_precompiled != null) {
+                // The frame label of the compiled body was worked out from the lexical nesting. A def run for another module
+                // - the singleton copy module_function makes (or the instance one), a def in class_eval or in a block - is
+                // compiled from its source, as it is without the library, so that its frames are labelled after the module
+                // the runtime gives it ("FileUtils.mkdir_p" or "FileUtils#mkdir_p").
+                if (_precompiledLabel != null && _precompiledLabel != MethodDeclaration.QualifyFrameLabel(_ast.Name, declaringModule)) {
+                    var source = Precompiled.PrecompiledCode.ParseDefinition(declaringScope.RubyContext, _ast, _encoding,
+                        _document != null ? _document.FileName : null);
+                    if (source != null) {
+                        return CompileFromSyntaxTree(source, declaringScope, declaringModule);
+                    }
+                }
+                var compiled = _precompiled(declaringScope, declaringModule);
+                // -X:JIT, as below: from the def's AST, which the library keeps the source of for the methods it may specialize
+                var jitContext = declaringScope.RubyContext;
+                if (_jitSource != null && jitContext.RubyOptions.Jit) {
+                    var ast = Precompiled.PrecompiledCode.ParseJitSource(jitContext, _jitSource, _ast, _document != null ? _document.FileName : null);
+                    if (ast != null) {
+                        compiled = IronRuby.Runtime.Jit.JitStub.Wrap(compiled, ast, jitContext, declaringModule, declaringScope, null);
+                    }
+                }
+                return compiled;
+            }
+
+            return CompileFromSyntaxTree(_ast, declaringScope, declaringModule);
+        }
+
+        /// <summary>
+        /// The definition-time refinement record a compilation of the body for <paramref name="declaringModule"/>
+        /// is made against; null when it is compiled as if nothing were refined.
+        /// </summary>
+        private StrongBox<RefinementActivation> GetDefinitionRefinements(RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
+            // Only a method defined where something is `using'd pays for the definition-time refinement
+            // record (a scope field written on every call): no call in any other body can see a
+            // refinement, so it is compiled as if nothing were refined.  Should the same `def' run
+            // again where a refinement is active, SetDefinitionRefinements drops this compilation.
+            StrongBox<RefinementActivation> definitionRefinements = null;
+            if (declaringScope.RubyContext.HasRefinements) {
+                lock (this) {
+                    definitionRefinements = GetDefinitionRefinementsNoLock(declaringModule);
+                    // With nothing recorded the scopes follow the declaring scope - what an imported refinement
+                    // method's copy needs (RubyModule.ImportMethod) - but a `def' that ran before anything was
+                    // refined saw nothing, whatever that scope `using's afterwards.
+                    if (definitionRefinements.Value == null && _definedWithoutRefinements && !declaringModule.IsRefinement) {
+                        definitionRefinements.Value = RefinementActivation.Empty;
+                    }
+                    if (definitionRefinements.Value != null && definitionRefinements.Value.IsEmpty) {
+                        definitionRefinements = null;
+                        _compiledWithoutDefinitionRefinements = true;
+                    }
+                }
+            } else {
+                _compiledWithoutDefinitionRefinements = true;
+            }
+            return definitionRefinements;
+        }
+
+        private Delegate/*!*/ CompileFromSyntaxTree(MethodDeclaration/*!*/ ast, RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
+            // TODO: remove options
+            AstGenerator gen = new AstGenerator(declaringScope.RubyContext, new RubyCompilerOptions(), _document, _encoding, false);
+            gen.Coverage = _coverage;
+            if (_coverage != null && (_coverage.State.Modes & CoverageModes.Methods) != 0) {
+                gen.MethodCoverage = _coverage.FindMethod(this, declaringModule);
+            }
+
+            StrongBox<RefinementActivation> definitionRefinements = GetDefinitionRefinements(declaringScope, declaringModule);
+
+            MSA.LambdaExpression lambda;
+            bool timed = PhaseTimer.Enter(PhaseTimer.DefTransform);
+            try {
+                lambda = ast.TransformBody(gen, declaringScope, declaringModule, definitionRefinements);
+            } finally {
+                PhaseTimer.Exit(timed);
+            }
+            var result = RubyScriptCode.CompileLambda(lambda, declaringScope.RubyContext);
+
+            // -X:JIT: hand the generic body to the method JIT, which may put a profiling
+            // trampoline of the same delegate type in front of it. Off by default, and this is
+            // the only place the rest of the runtime knows about it. A body that counts its lines
+            // for Coverage keeps them: a typed body has no line counters.
+            var context = declaringScope.RubyContext;
+            if (context.RubyOptions.Jit && _coverage == null) {
+                result = IronRuby.Runtime.Jit.JitStub.Wrap(result, ast, context, declaringModule, declaringScope, definitionRefinements, lambda.Name);
+            }
+            return result;
+        }
+
+        private static RubyModule/*!*/[]/*!*/ GetLexicalModules(RubyScope/*!*/ scope) {
+            var result = new List<RubyModule>();
+            for (RubyScope s = scope; s != null; s = s.Parent) {
+                if (s.Module != null) {
+                    result.Add(s.Module);
+                }
+            }
+            return result.ToArray();
+        }
+
+        private static RubyModule[] GetObjectSingletonLexicalModules(RubyScope/*!*/ scope) {
+            var modules = GetLexicalModules(scope);
+            foreach (var module in modules) {
+                var cls = module as RubyClass;
+                if (cls != null && cls.IsSingletonClass && !(cls.SingletonClassOf is RubyModule)) {
+                    return modules;
+                }
+            }
+            return null;
+        }
+
+        private static bool SameModules(RubyModule/*!*/[]/*!*/ a, RubyModule/*!*/[]/*!*/ b) {
+            if (a.Length != b.Length) {
+                return false;
+            }
+            for (int i = 0; i < a.Length; i++) {
+                if (a[i] != b[i]) {
+                    return false;
+                }
+            }
+            return true;
         }
     }
 }

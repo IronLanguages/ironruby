@@ -13,14 +13,9 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
-using System.Dynamic;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
 
@@ -58,7 +53,7 @@ namespace IronRuby.Compiler.Ast {
             _right = right;
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             string setterName = _memberName + "=";
 
             MSA.Expression transformedLeftTarget = _leftTarget.TransformRead(gen);
@@ -66,12 +61,12 @@ namespace IronRuby.Compiler.Ast {
 
             MSA.Expression leftTemp = gen.CurrentScope.DefineHiddenVariable(String.Empty, transformedLeftTarget.Type);
 
-            bool leftIsSelf = _leftTarget.NodeType == NodeTypes.SelfReference;
+            bool leftIsSelf = _leftTarget is SelfReference;
 
             // lhs &&= rhs  -->  left.member && (left.member = rhs)
             // lhs ||= rhs  -->  left.member || (left.member = rhs)
             if (Operation == Symbols.And || Operation == Symbols.Or) {
-                MSA.Expression leftMemberRead = MethodCall.TransformRead(this, gen, false, _memberName, Ast.Assign(leftTemp, transformedLeftTarget), null, null, null, null);
+                MSA.Expression leftMemberRead = MethodCall.TransformRead(this, gen, leftIsSelf, _memberName, Ast.Assign(leftTemp, transformedLeftTarget), null, null, null, null);
                 MSA.Expression transformedWrite = MethodCall.TransformRead(this, gen, leftIsSelf, setterName, leftTemp, null, null, null, transformedRight);
 
                 if (Operation == Symbols.And) {
@@ -81,7 +76,7 @@ namespace IronRuby.Compiler.Ast {
                 }
             } else {
                 // left.member= left.member().op(right)
-                MSA.Expression leftMemberRead = MethodCall.TransformRead(this, gen, false, _memberName, leftTemp, null, null, null, null);
+                MSA.Expression leftMemberRead = MethodCall.TransformRead(this, gen, leftIsSelf, _memberName, leftTemp, null, null, null, null);
                 MSA.Expression operationCall = MethodCall.TransformRead(this, gen, false, Operation, leftMemberRead, null, null, transformedRight, null);
                 MSA.Expression transformedWrite = MethodCall.TransformRead(this, gen, leftIsSelf, setterName, Ast.Assign(leftTemp, transformedLeftTarget), null, null, null, operationCall);
                 return transformedWrite;

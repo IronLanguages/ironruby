@@ -13,15 +13,10 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Threading;
 using System.Runtime.CompilerServices;
@@ -51,9 +46,9 @@ namespace IronRuby.Compiler.Ast {
         private readonly bool _debugCompiler;
         private readonly bool _debugMode;
         private readonly bool _traceEnabled;
+        private readonly bool _traceable;
         private readonly bool _savingToDisk;
 
-        private IList<MSA.Expression> _fileInitializers; // lazy
         private MSA.Expression _sourcePathConstant; // lazy
 
         internal AstGenerator(RubyContext/*!*/ context, RubyCompilerOptions/*!*/ options, MSA.SymbolDocumentInfo document, RubyEncoding/*!*/ encoding,
@@ -65,16 +60,13 @@ namespace IronRuby.Compiler.Ast {
             _debugMode = context.DomainManager.Configuration.DebugMode;
             _traceEnabled = context.RubyOptions.EnableTracing;
             _document = document;
+            _traceable = !TracePoint.IsCoreLibraryPath(SourcePath);
             _sequencePointClearance = (document != null) ? Ast.ClearDebugInfo(document) : null;
             _encoding = encoding;
             _profiler = context.RubyOptions.Profile ? Profiler.Instance : null;
             _savingToDisk = context.RubyOptions.SavePath != null;
             _printInteractiveResult = printInteractiveResult;
-#if FEATURE_REFEMIT && FEATURE_FILESYSTEM
             _debugCompiler = Snippets.Shared.SaveSnippets;
-#else
-            _debugCompiler = false;
-#endif
         }
 
         public RubyCompilerOptions/*!*/ CompilerOptions { 
@@ -89,20 +81,64 @@ namespace IronRuby.Compiler.Ast {
             get { return _profiler; }
         }
 
-        public bool DebugCompiler {
-            get { return _debugCompiler; }
-        }
-
         public bool TraceEnabled {
             get { return _traceEnabled; }
+        }
+
+        /// <summary>
+        /// False for the Ruby half of the core library: TracePoint does not see into it, as MRI does
+        /// not see into its C core.
+        /// </summary>
+        public bool Traceable {
+            get { return _traceable; }
+        }
+
+        /// <summary>
+        /// -X:OSR - whether a loop may count its own back edges and swap itself for a
+        /// type-specialized copy once it is hot. Off unless asked for, and off wherever the
+        /// loop has to keep running the tree it was built from: TracePoint and coverage want
+        /// an event per line, a saved assembly cannot carry the site, and eval'd code is
+        /// never around long enough to be worth a compilation.
+        /// </summary>
+        public bool CanReplaceLoops {
+            get {
+                return _context.RubyOptions.Osr && !_traceEnabled && !_savingToDisk
+                    && !_compilerOptions.IsEval && Coverage == null;
+            }
         }
 
         public bool SavingToDisk {
             get { return _savingToDisk; }
         }
 
+        private int _isCoreLibrary;
+
+        /// <summary>
+        /// The code is the core library written in Ruby (RubyStackTraceBuilder.IsInternalFile): it
+        /// stands in for CRuby's C code, which Ractor isolation does not apply to, so its variable
+        /// and constant sites are marked to go unchecked (RactorIsolation).
+        /// </summary>
+        internal bool IsCoreLibrary {
+            get {
+                if (_isCoreLibrary == 0) {
+                    _isCoreLibrary = RubyStackTraceBuilder.IsInternalFile(SourcePath) ? 1 : -1;
+                }
+                return _isCoreLibrary > 0;
+            }
+        }
+
+        // The file name of code that has no path (see RubyContext.GetSourceDocument).
+        internal const string PathlessSourceName = "(eval)";
+
         public string SourcePath {
-            get { return _document != null ? _document.FileName : "(eval)"; }
+            get {
+                if (_document == null) {
+                    return PathlessSourceName;
+                }
+                string path = _document.FileName;
+                RubyUtils.DecodeEvalLineOffset(ref path);
+                return path;
+            }
         }
 
         public MSA.SymbolDocumentInfo Document {
@@ -128,19 +164,6 @@ namespace IronRuby.Compiler.Ast {
 
         internal RubyContext/*!*/ Context {
             get { return _context; }
-        }
-
-        internal void AddFileInitializer(MSA.Expression/*!*/ expression) {
-            if (_fileInitializers == null) {
-                _fileInitializers = new List<MSA.Expression>();
-            }
-            _fileInitializers.Add(expression);
-        }
-
-        internal IList<MSA.Expression>/*!*/ FileInitializers {
-            get {
-                return (IList<MSA.Expression>)_fileInitializers ?? AstFactory.EmptyExpressions;
-            }
         }
 
         #region Lexical Scopes
@@ -177,6 +200,14 @@ namespace IronRuby.Compiler.Ast {
                 get { return _parentLoop; }
                 set { _parentLoop = value; }
             }
+
+            /// <summary>
+            /// The variable of the frame's line record for the loop's statements, once the interpreter has compiled the loop
+            /// (see SourceLineMarker), and the variable scope it belongs to: statements of another scope - a class body
+            /// written in the loop - are not the loop's frame's.
+            /// </summary>
+            public MSA.Expression LoopLineVariable;
+            public ScopeBuilder LoopLineScope;
 
             public LoopScope(MSA.Expression/*!*/ redoVariable, MSA.Expression/*!*/ resultVariable, MSA.LabelTarget/*!*/ breakLabel, MSA.LabelTarget/*!*/ continueLabel) {
                 Assert.NotNull(redoVariable, resultVariable, breakLabel, continueLabel);
@@ -218,6 +249,14 @@ namespace IronRuby.Compiler.Ast {
             private readonly MSA.Expression/*!*/ _selfVariable;
             private readonly MSA.ParameterExpression/*!*/ _runtimeScopeVariable;
             private VariableScope _parentVariableScope;
+
+            // The line of the last statement given a TracePoint :line hook in this scope's code.
+            internal int LastTracedLine;
+
+            // The scope's code is a lambda of its own in a compiled frame of its own (CompiledFrameExpression): a method's, a
+            // block's or a file's. Not a module body's, whose lambda is invoked in place - the DLR compiles it into the method
+            // of the code around it - while its frame record has a name of its own.
+            internal bool HasOwnCompiledFrame;
 
             public ScopeBuilder/*!*/ Builder {
                 get { return _builder; }
@@ -303,6 +342,27 @@ namespace IronRuby.Compiler.Ast {
                 get { return _redoLabel; }
             }
 
+            // A block nested in this one has a return statement: if this block runs as a lambda,
+            // that return leaves it, so its body catches the LambdaUnwinder.
+            public bool HasNestedReturn;
+
+            // A block literal (or lambda) is nested in this one: its Proc captures this block's scope.
+            public bool HasNestedBlock;
+
+            // The lexical depth of the block's own scope (LexicalScope.Depth): a local defined at a
+            // smaller depth belongs to an enclosing scope.
+            internal int LexicalDepth;
+
+            // The enclosing scopes' locals the block uses (BlockDispatcher.OuterVariableNames), and
+            // for each how often its scope assigns it.
+            internal List<string> OuterVariables;
+            internal List<LocalAssignmentCount> OuterVariableAssignments;
+            internal List<string> AssignedOuterVariables;
+
+            // The module body the block is in, if any: a module body starts a new local scope
+            // without leaving the blocks around it.
+            internal ModuleScope EnclosingModule;
+
             public BlockScope(ScopeBuilder/*!*/ builder, MSA.Expression/*!*/ selfVariable, MSA.ParameterExpression/*!*/ runtimeScopeVariable,
                 MSA.Expression/*!*/ bfcVariable, MSA.LabelTarget/*!*/ redoLabel)
                 : base(builder, selfVariable, runtimeScopeVariable) {
@@ -337,10 +397,22 @@ namespace IronRuby.Compiler.Ast {
                 get { return _methodName; }
             }
 
+            /// <summary>
+            /// The name this method's frame carries in a backtrace: the same as MethodName, but
+            /// qualified with the owner ("M::C#foo") once the owner is known - which is at
+            /// definition time, when the body is compiled. Blocks inside the method read it to
+            /// build their own "block in ..." labels.
+            /// </summary>
+            public string FrameLabel { get; set; }
+
             // null for code that is evaluated outside a method scope, used by super-call
             public Parameters Parameters {
                 get { return _parameters; }
             }
+
+            // Where an explicit `return' goes once it has reported TracePoint :return itself, past
+            // the hook that reports the implicit return at `end'. Null until a `return' needs it.
+            internal MSA.LabelTarget ExplicitReturnLabel { get; set; }
 
             public MethodScope(
                 ScopeBuilder/*!*/ builder,
@@ -358,21 +430,86 @@ namespace IronRuby.Compiler.Ast {
         }
 
         public sealed class ModuleScope : VariableScope {
-            private readonly bool _isSingleton;
             private ModuleScope _parentModule;
+
+            // The label of the body's frame, and the block the definition is written in - blocks
+            // inside the body count their nesting from the body, not from the enclosing method.
+            public string FrameLabel { get; set; }
+            public BlockScope OuterBlock { get; set; }
+
+            public LoopScope OuterLoop { get; set; }
+
+            // The body is a lambda of its own, so it cannot jump to a label outside it: `break' out of
+            // the loop the definition is written in, `return' from a `class << self' inside a method, a
+            // return a block call propagates. Such a jump leaves the body with a number saying which
+            // one it was and the value it carried, and the code after the call makes it again - from
+            // the enclosing frame, where it may have to escape another body the same way.
+            private MSA.LabelTarget _returnLabel;
+            private MSA.ParameterExpression _escapeCode;
+            private MSA.ParameterExpression _escapeValue;
+            private List<Func<AstGenerator, MSA.Expression, MSA.Expression>> _escapes;
+
+            public ScopeBuilder OuterLocals { get; set; }
+
+            internal MSA.Expression/*!*/ Escape(MSA.Expression/*!*/ value, Func<AstGenerator, MSA.Expression, MSA.Expression>/*!*/ outerJump) {
+                if (_escapes == null) {
+                    _escapes = new List<Func<AstGenerator, MSA.Expression, MSA.Expression>>();
+                    _escapeCode = OuterLocals.DefineHiddenVariable("#escape", typeof(int));
+                    _escapeValue = OuterLocals.DefineHiddenVariable("#escape-value", typeof(object));
+                }
+                _escapes.Add(outerJump);
+                if (value.Type == typeof(void)) {
+                    value = Ast.Block(value, AstUtils.Constant(null, typeof(object)));
+                }
+                return Ast.Block(
+                    Ast.Assign(_escapeValue, AstUtils.Box(value)),
+                    Ast.Assign(_escapeCode, AstUtils.Constant(_escapes.Count)),
+                    Ast.Return(ReturnLabel, AstUtils.Constant(null, typeof(object))),
+                    AstUtils.Empty()
+                );
+            }
+
+            // Before the call: nothing has escaped yet.
+            internal MSA.Expression/*!*/ ResetEscapes() {
+                return _escapes != null ? (MSA.Expression)Ast.Assign(_escapeCode, AstUtils.Constant(0)) : AstUtils.Empty();
+            }
+
+            // After the call, in the enclosing frame: make the jump that escaped.
+            internal MSA.Expression/*!*/ MakeEscapedJumps(AstGenerator/*!*/ gen) {
+                if (_escapes == null) {
+                    return AstUtils.Empty();
+                }
+                var jumps = new List<MSA.Expression>();
+                for (int i = 0; i < _escapes.Count; i++) {
+                    jumps.Add(AstUtils.IfThen(
+                        Ast.Equal(_escapeCode, AstUtils.Constant(i + 1)),
+                        _escapes[i](gen, _escapeValue)
+                    ));
+                }
+                jumps.Add(AstUtils.Empty());
+                return Ast.Block(jumps);
+            }
+
+            internal MSA.LabelTarget/*!*/ ReturnLabel {
+                get {
+                    if (_returnLabel == null) {
+                        _returnLabel = MSA.Expression.Label(typeof(object));
+                    }
+                    return _returnLabel;
+                }
+            }
+
+            internal MSA.Expression/*!*/ AddReturnTarget(MSA.Expression/*!*/ expression) {
+                return _returnLabel != null ? Ast.Label(_returnLabel, expression) : expression;
+            }
 
             public ModuleScope ParentModule {
                 get { return _parentModule; }
                 set { _parentModule = value; }
             }
 
-            public bool IsSingleton {
-                get { return _isSingleton; }
-            }
-
-            public ModuleScope(ScopeBuilder/*!*/ builder, MSA.Expression/*!*/ selfVariable, MSA.ParameterExpression/*!*/ runtimeScopeVariable, bool isSingleton)
+            public ModuleScope(ScopeBuilder/*!*/ builder, MSA.Expression/*!*/ selfVariable, MSA.ParameterExpression/*!*/ runtimeScopeVariable)
                 : base(builder, selfVariable, runtimeScopeVariable) {
-                _isSingleton = isSingleton;
             }
         }
 
@@ -423,6 +560,16 @@ namespace IronRuby.Compiler.Ast {
         // runtime scope variable of the current variable scope:
         public MSA.ParameterExpression/*!*/ CurrentScopeVariable {
             get { return _currentVariableScope.RuntimeScopeVariable; }
+        }
+
+        /// <summary>
+        /// The index of the current frame's record in PrecompiledFrames, an int: the frame's own once compiled
+        /// (CompiledFrameExpression), -1 where it has none or it is not known - interpreted, saved ahead of time, a module body.
+        /// </summary>
+        internal MSA.Expression/*!*/ CurrentCompiledFrameDepth {
+            get {
+                return _currentVariableScope.HasOwnCompiledFrame ? (MSA.Expression)new CompiledFrameDepthExpression() : AstUtils.Constant(-1);
+            }
         }
 
         // inner-most scope builder:
@@ -483,17 +630,91 @@ namespace IronRuby.Compiler.Ast {
             Assert.NotNull(redoLabel);
 
             BlockScope block = new BlockScope(locals, selfVariable, runtimeScopeVariable, bfcVariable, redoLabel);
+            if (_currentBlock != null) {
+                _currentBlock.HasNestedBlock = true;
+            }
             block.Parent = _currentElement;
             block.ParentRescue = _currentRescue;
             block.ParentLoop = _currentLoop;
             block.ParentBlock = _currentBlock;
             block.ParentVariableScope = _currentVariableScope;
+            block.EnclosingModule = _currentModule;
             
             _currentElement = block;
             _currentRescue = null;
             _currentLoop = null;
             _currentBlock = block;
             _currentVariableScope = block;
+        }
+
+        /// <summary>
+        /// Records a use of a local defined at <paramref name="definitionDepth"/> in every block of the
+        /// current frame the local is from outside of (-1, a local of the eval's runtime scope, is
+        /// outside of all of them). The block chain ends at a method or module body.
+        /// </summary>
+        internal void NoteLocalVariableUse(string/*!*/ name, int definitionDepth, bool isAssignment, LocalAssignmentCount assignments) {
+            if (_currentVariableScope is ModuleScope) {
+                return;
+            }
+            for (var block = _currentBlock;
+                block != null && block.EnclosingModule == _currentModule && block.LexicalDepth > definitionDepth;
+                block = block.ParentBlock) {
+                var names = block.OuterVariables ??= new List<string>();
+                if (!names.Contains(name)) {
+                    names.Add(name);
+                    (block.OuterVariableAssignments ??= new List<LocalAssignmentCount>()).Add(assignments);
+                }
+                if (isAssignment) {
+                    var assigned = block.AssignedOuterVariables ??= new List<string>();
+                    if (!assigned.Contains(name)) {
+                        assigned.Add(name);
+                    }
+                }
+            }
+        }
+
+        // Set while parameters are bound, which the scope counts as one assignment each (CountParameterAssignments).
+        internal bool BindingParameters;
+
+        /// <summary>
+        /// The assignments the code makes of the local in slot <paramref name="closureIndex"/> of the
+        /// scope at <paramref name="definitionDepth"/>, counted as they are compiled: CRuby's lvar_states,
+        /// by which a shareable proc refuses an outer variable that "may be reassigned". Null for a
+        /// local of the eval's runtime scope.
+        /// </summary>
+        internal LocalAssignmentCount GetLocalAssignments(int definitionDepth, int closureIndex) {
+            if (definitionDepth < 0 || closureIndex < 0) {
+                return null;
+            }
+            var scope = CurrentScope;
+            while (scope != null && scope.LexicalDepth > definitionDepth) {
+                scope = scope.Parent;
+            }
+            return (scope != null && scope.LexicalDepth == definitionDepth) ? scope.GetLocalAssignments(closureIndex) : null;
+        }
+
+        internal void NoteLocalAssignment(LocalAssignmentCount assignments) {
+            if (assignments != null && !BindingParameters) {
+                assignments.Count++;
+            }
+        }
+
+        /// <summary>Each parameter of <paramref name="parameters"/> is assigned once, by the call.</summary>
+        internal void CountParameterAssignments(Parameters/*!*/ parameters) {
+            foreach (var lvalue in parameters.Mandatory) {
+                CountParameterAssignment(lvalue as LocalVariable);
+            }
+            foreach (var optional in parameters.Optional) {
+                CountParameterAssignment(optional.Left as LocalVariable);
+            }
+            CountParameterAssignment(parameters.Unsplat as LocalVariable);
+            CountParameterAssignment(parameters.Block);
+        }
+
+        private void CountParameterAssignment(LocalVariable parameter) {
+            if (parameter != null) {
+                NoteLocalAssignment(GetLocalAssignments(parameter.DefinitionLexicalDepth, parameter.ClosureIndex));
+            }
         }
 
         public void LeaveBlockDefinition() {
@@ -556,10 +777,13 @@ namespace IronRuby.Compiler.Ast {
             ScopeBuilder/*!*/ locals,
             MSA.Expression/*!*/ selfVariable,
             MSA.ParameterExpression/*!*/ runtimeScopeVariable, 
-            bool isSingleton) {
+            string frameLabel) {
             Assert.NotNull(locals, selfVariable, runtimeScopeVariable);
 
-            ModuleScope module = new ModuleScope(locals, selfVariable, runtimeScopeVariable, isSingleton);
+            ModuleScope module = new ModuleScope(locals, selfVariable, runtimeScopeVariable);
+            module.FrameLabel = frameLabel;
+            module.OuterBlock = _currentBlock;
+            module.OuterLoop = _currentLoop;
 
             module.Parent = _currentElement;
             module.ParentVariableScope = _currentVariableScope;
@@ -579,26 +803,47 @@ namespace IronRuby.Compiler.Ast {
             _currentModule = oldModule.ParentModule;
         }
 
-        public void EnterFileInitializer(
-            ScopeBuilder/*!*/ locals,
-            MSA.Expression/*!*/ selfVariable,
-            MSA.ParameterExpression/*!*/ runtimeScopeVariable) {
-
-            VariableScope scope = new VariableScope(locals, selfVariable, runtimeScopeVariable);
-
-            scope.Parent = _currentElement;
-            scope.ParentVariableScope = _currentVariableScope;
-
-            _currentElement = scope;
-            _currentVariableScope = scope;
+        /// <summary>
+        /// The label a top-level frame carries in a backtrace. An eval keeps the anonymous
+        /// name: MRI reports the enclosing frame's label there rather than one of its own.
+        /// </summary>
+        /// <summary>
+        /// The class or module body the code being compiled is directly in - with no method
+        /// definition in between - or null.
+        /// </summary>
+        internal ModuleScope GetEnclosingModuleFrame() {
+            for (var element = _currentElement; element != null; element = element.Parent) {
+                if (element is ModuleScope) {
+                    return (ModuleScope)element;
+                }
+                if (element is MethodScope) {
+                    return null;
+                }
+            }
+            return null;
         }
 
-        public void LeaveFileInitializer() {
-            Debug.Assert(_currentElement == _currentVariableScope);
-            VariableScope oldScope = _currentVariableScope;
+        internal static string/*!*/ FormatBlockLabel(string/*!*/ label, int levels) {
+            return levels == 0 ? label : levels == 1 ? "block in " + label : "block (" + levels + " levels) in " + label;
+        }
 
-            _currentElement = oldScope.Parent;
-            _currentVariableScope = oldScope.ParentVariableScope;
+        internal string/*!*/ TopLevelFrameLabel {
+            get {
+                switch (CompilerOptions.FactoryKind) {
+                    // Hosted code (ScriptEngine.Execute, ScriptSource.Execute) is labelled as the main script, as
+                    // RubyScope.FrameLabel already does for its scope (issue 158): it used to get "#", which put
+                    // "block in #" and an unlabelled top-level frame into its backtraces.
+                    case TopScopeFactoryKind.Main:
+                    case TopScopeFactoryKind.Hosted: return "<main>";
+                    case TopScopeFactoryKind.File:
+                    case TopScopeFactoryKind.WrappedFile: return "<top (required)>";
+                    default:
+                        if (CompilerOptions.EvalFrameBaseLabel != null) {
+                            return FormatBlockLabel(CompilerOptions.EvalFrameBaseLabel, CompilerOptions.EvalFrameBlockLevels);
+                        }
+                        return RubyStackTraceBuilder.TopLevelMethodName;
+                }
+            }
         }
 
         public void EnterSourceUnit(
@@ -704,6 +949,12 @@ namespace IronRuby.Compiler.Ast {
 
             Assert.NotNull(statements);
 
+            // Every body nested in another - a block's, a loop's, a branch's - comes through here, and the
+            // nesting can be deeper than a thread's stack goes (see StackGuard).
+            if (!StackGuard.IsSufficient) {
+                return StackGuard.RunOnFreshStack(() => TransformStatements(prologue, statements, epilogue, resultOperation));
+            }
+
             int count = statements.Count + (prologue != null ? 1 : 0) + (epilogue != null ? 1 : 0);
 
             if (count == 0) {
@@ -726,9 +977,11 @@ namespace IronRuby.Compiler.Ast {
                 }
 
                 if (resultOperation.IsIgnore) {
-                    return statements.First.Transform(this);
+                    var trace = TraceLine(statements, 0);
+                    return Traced(trace, statements.First.Transform(this));
                 } else {
-                    return statements.First.TransformResult(this, resultOperation);
+                    var trace = TraceLine(statements, 0);
+                    return Traced(trace, statements.First.TransformResult(this, resultOperation));
                 }
 
             } else {
@@ -739,15 +992,18 @@ namespace IronRuby.Compiler.Ast {
                 }
 
                 // transform all but the last statement if it is an expression stmt:
-                foreach (var statement in statements.AllButLast) {
-                    result.Add(statement.Transform(this));
+                int last = statements.Count - 1;
+                for (int i = 0; i < last; i++) {
+                    var trace = TraceLine(statements, i);
+                    result.Add(Traced(trace, statements[i].Transform(this)));
                 }
 
                 if (statements.Count > 0) {
+                    var trace = TraceLine(statements, last);
                     if (resultOperation.IsIgnore) {
-                        result.Add(statements.Last.Transform(this));
+                        result.Add(Traced(trace, statements.Last.Transform(this)));
                     } else {
-                        result.Add(statements.Last.TransformResult(this, resultOperation));
+                        result.Add(Traced(trace, statements.Last.TransformResult(this, resultOperation)));
                     }
                 }
 
@@ -769,23 +1025,94 @@ namespace IronRuby.Compiler.Ast {
         }
 
         private MSA.Expression/*!*/ TransformStatementsToExpression(Statements statements, bool toBoolean, bool positive) {
+            // (see TransformStatements)
+            if (!StackGuard.IsSufficient) {
+                return StackGuard.RunOnFreshStack(() => TransformStatementsToExpression(statements, toBoolean, positive));
+            }
 
             if (statements == null || statements.Count == 0) {
                 return toBoolean ? AstUtils.Constant(!positive) : AstUtils.Constant(null);
             }
 
-            var last = toBoolean ? statements.Last.TransformCondition(this, positive) : statements.Last.TransformReadStep(this);
+            int lastIndex = statements.Count - 1;
             if (statements.Count == 1) {
-                return last;
+                var trace = TraceLine(statements, 0);
+                return Traced(trace, toBoolean ? statements.Last.TransformCondition(this, positive) : statements.Last.TransformReadStep(this));
             }
+
+            // the last statement is transformed first (as it always has been), but its hook is
+            // claimed after the others', in source order
+            var last = toBoolean ? statements.Last.TransformCondition(this, positive) : statements.Last.TransformReadStep(this);
 
             var result = new AstBlock();
-            foreach (var statement in statements.AllButLast) {
-                result.Add(statement.Transform(this));
+            for (int i = 0; i < lastIndex; i++) {
+                var trace = TraceLine(statements, i);
+                result.Add(Traced(trace, statements[i].Transform(this)));
             }
-            result.Add(last);
+            result.Add(Traced(TraceLine(statements, lastIndex), last));
 
             return result;
+        }
+
+        /// <summary>
+        /// The TracePoint :line hook for a statement if it is the first statement on its line (MRI
+        /// reports a line once however many statements it holds), or null. Claimed before the
+        /// statement is transformed, so that statements nested in it come second.
+        /// </summary>
+        private MSA.Expression TraceLine(Statements/*!*/ statements, int index) {
+            if (IsTransparentStatement(statements[index])) {
+                return null;
+            }
+            return TraceLine(statements.GetStartLine(index));
+        }
+
+        /// <summary>
+        /// The :line hook for a line, or null if the line has had its hook in the current scope.
+        /// </summary>
+        internal MSA.Expression TraceLine(int line) {
+            var scope = _currentVariableScope;
+            if (!_traceable || scope == null || line <= 0 || line == scope.LastTracedLine) {
+                return null;
+            }
+            scope.LastTracedLine = line;
+
+            var coverage = Coverage;
+            if (coverage != null && coverage.IsCounted(line)) {
+                // normally marked already (CoverageState.LineCollector); this catches what it misses
+                coverage.MarkLine(line);
+            } else {
+                coverage = null;
+            }
+            return new TraceLineExpression(scope.RuntimeScopeVariable, SourcePath, line, coverage);
+        }
+
+        internal void SetLastTracedLine(int line) {
+            if (_currentVariableScope != null) {
+                _currentVariableScope.LastTracedLine = line;
+            }
+        }
+
+        /// <summary>
+        /// A begin/end block around statements has no :line event of its own (as in MRI); the
+        /// first statement in it has.
+        /// </summary>
+        internal static bool IsTransparentStatement(Expression/*!*/ statement) {
+            var body = statement as Body;
+            return body != null && body.Statements.Count > 0;
+        }
+
+        /// <summary>
+        /// Where the :line hooks count for the Coverage library, if the code is measured.
+        /// </summary>
+        internal LineCoverage Coverage { get; set; }
+
+        /// <summary>
+        /// The call counter of the method body being compiled, if :methods coverage measures it.
+        /// </summary>
+        internal MethodCoverage MethodCoverage { get; set; }
+
+        private static MSA.Expression/*!*/ Traced(MSA.Expression trace, MSA.Expression/*!*/ transformed) {
+            return trace != null ? Ast.Block(trace, transformed) : transformed;
         }
 
         internal AstExpressions/*!*/ TransformMapletsToExpressions(IList<Maplet>/*!*/ maplets) {
@@ -805,16 +1132,16 @@ namespace IronRuby.Compiler.Ast {
             return result;
         }
 
-        public MSA.Expression/*!*/ TransformToHashConstructor(IList<Maplet>/*!*/ maplets) {
-            return MakeHashOpCall(TransformMapletsToExpressions(maplets));
-        }
-
         internal MSA.Expression/*!*/ MakeHashOpCall(IEnumerable<MSA.Expression>/*!*/ expressions) {
             return Methods.MakeHash.OpCall(CurrentScopeVariable, AstUtils.NewArrayHelper(typeof(object), expressions));
         }
 
+        internal MSA.Expression/*!*/ MakeKeywordArgumentsHashOpCall(IEnumerable<MSA.Expression>/*!*/ expressions) {
+            return Methods.MakeKeywordArgumentsHash.OpCall(CurrentScopeVariable, AstUtils.NewArrayHelper(typeof(object), expressions));
+        }
+
         internal static bool CanAssign(Type/*!*/ to, Type/*!*/ from) {
-            return to.IsAssignableFrom(from) && (to.IsValueType() == from.IsValueType());
+            return to.IsAssignableFrom(from) && (to.IsValueType == from.IsValueType);
         }
 
         internal MSA.Expression/*!*/ AddReturnTarget(MSA.Expression/*!*/ expression) {
@@ -825,7 +1152,27 @@ namespace IronRuby.Compiler.Ast {
             get { return CurrentFrame.ReturnLabel; }
         }
 
+        /// <summary>
+        /// The class or module body a jump to the current loop - or, if there is none, the current
+        /// block or method frame - has to escape first, or null if the target is inside the body.
+        /// </summary>
+        internal ModuleScope GetModuleBodyToEscape(bool toLoop) {
+            var module = GetEnclosingModuleFrame();
+            if (module == null) {
+                return null;
+            }
+            if (toLoop) {
+                return CurrentLoop == module.OuterLoop ? module : null;
+            }
+            return CurrentBlock == module.OuterBlock ? module : null;
+        }
+
         internal MSA.Expression/*!*/ Return(MSA.Expression/*!*/ expression) {
+            var module = GetModuleBodyToEscape(false);
+            if (module != null) {
+                return module.Escape(expression, (gen, value) => gen.Return(value));
+            }
+
             MSA.LabelTarget returnLabel = ReturnLabel;
             if (returnLabel.Type != typeof(void) && expression.Type == typeof(void)) {
                 expression = Ast.Block(expression, AstUtils.Constant(null, typeof(object)));
@@ -843,11 +1190,16 @@ namespace IronRuby.Compiler.Ast {
         }
 
         internal MSA.Expression/*!*/ AddDebugInfo(MSA.Expression/*!*/ expression, SourceSpan location) {
+            var loop = _currentLoop;
+            return AddDebugInfo(expression, location, (loop != null && loop.LoopLineScope == CurrentScope) ? loop.LoopLineVariable : null);
+        }
+
+        /// <param name="loopLineVariable">The line record variable of the loop the statement is in (see LoopScope.LoopLineVariable).</param>
+        internal MSA.Expression/*!*/ AddDebugInfo(MSA.Expression/*!*/ expression, SourceSpan location, MSA.Expression loopLineVariable) {
             if (_document != null) {
                 // TODO: should we add clearance for non-goto expressions?
-                // return AstUtils.AddDebugInfo(expression, _document, location.Start, location.End);
                 var sequencePoint = Ast.DebugInfo(_document, location.Start.Line, location.Start.Column, location.End.Line, location.End.Column);
-                return Ast.Block(sequencePoint, expression);
+                return Ast.Block(sequencePoint, SourceLineMarker.Create(location.Start.Line, loopLineVariable, CurrentScope.EnsureDepth > 0), expression);
             } else {
                 return expression;
             }
@@ -863,14 +1215,17 @@ namespace IronRuby.Compiler.Ast {
 
         internal MSA.Expression/*!*/ TryCatchAny(MSA.Expression/*!*/ tryBody, MSA.Expression/*!*/ catchBody) {
             var variable = CurrentScope.DefineHiddenVariable("#value", tryBody.Type);
+            var exception = Ast.Parameter(typeof(Exception), "#exception");
 
             return
                 Ast.Block(
                     Ast.TryCatch(
                         Ast.Assign(variable, tryBody),
-                        Ast.Catch(typeof(Exception), 
+                        // an exception makes defined? nil, but throw/break/return still unwind through it
+                        Ast.Catch(exception, Ast.Block(
+                            Ast.IfThen(Ast.TypeIs(exception, typeof(StackUnwinder)), Ast.Rethrow()),
                             Ast.Assign(variable, catchBody)
-                        )
+                        ))
                     ),
                     variable
                 );

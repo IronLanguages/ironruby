@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -20,16 +20,14 @@ using System.Runtime.InteropServices;
 using IronRuby.Compiler;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
-using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
-using Microsoft.Scripting.Generation;
-using Microsoft.Scripting;
-using System.Diagnostics;
 
 namespace IronRuby.Builtins {
 
+    // MRI undefines Module.allocate (object.c: rb_undef_method(rb_singleton_class(rb_cModule),
+    // "allocate")), so a module comes only from Module.new; ClassOps defines Class.allocate again.
     [RubyClass("Module", Extends = typeof(RubyModule), Inherits = typeof(Object), Restrictions = ModuleRestrictions.Builtin | ModuleRestrictions.NoUnderlyingType)]
+    [UndefineMethod("allocate", IsStatic = true)]
     public static class ModuleOps {
 
         #region initialize, initialize_copy
@@ -41,7 +39,7 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateTypeError("already initialized class");
             }
 
-            return (block != null) ? RubyUtils.EvaluateInModule(self, block, null) : null;
+            return (block != null) ? RubyUtils.EvaluateInModule(self, block, new object[] { self }) : null;
         }
 
         [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
@@ -51,11 +49,20 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateTypeError("already initialized class");
             }
             
+            if (self.IsFrozen) {
+                throw RubyExceptions.CreateObjectFrozenError(self.Context, self);
+            }
+
             // self could be a meta-module:
             RubyClass selfClass = self.Context.GetClassOf(self);
             RubyClass otherClass = self.Context.GetClassOf(other);
             if (otherClass != selfClass) {
                 throw RubyExceptions.CreateTypeError("initialize_copy should take same class object");
+            }
+
+            // a module that already exists is left as it is; only #dup's and #clone's copy is filled in (#138)
+            if (!self.TakeUninitializedModuleCopy()) {
+                return self;
             }
 
             self.InitializeModuleCopy((RubyModule)other);
@@ -70,6 +77,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("extend_object", RubyMethodAttributes.PrivateInstance)]
         public static object ExtendObject(RubyModule/*!*/ self, object extendedObject) {
             // include self into extendedObject's singleton
+            RubyUtils.RequireDefinableSingleton(extendedObject);
             self.Context.GetOrCreateSingletonClass(extendedObject).IncludeModules(self);
             return extendedObject;
         }
@@ -79,11 +87,22 @@ namespace IronRuby.Builtins {
             // extendedObject has been extended by self, i.e. self has been included into extendedObject's singleton class
         }
 
-        [RubyMethod("include", RubyMethodAttributes.PrivateInstance)]
+        // public since Ruby 2.1
+        [RubyMethod("include")]
         public static RubyModule/*!*/ Include(
             CallSiteStorage<Func<CallSite, RubyModule, RubyModule, object>>/*!*/ appendFeaturesStorage,
             CallSiteStorage<Func<CallSite, RubyModule, RubyModule, object>>/*!*/ includedStorage,
             RubyModule/*!*/ self, [NotNullItems]params RubyModule/*!*/[]/*!*/ modules) {
+
+            if (modules.Length == 0) {
+                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 0, expected 1+)");
+            }
+
+            foreach (var module in modules) {
+                if (module.IsRefinement) {
+                    throw RubyExceptions.CreateTypeError("Cannot include refinement");
+                }
+            }
 
             RubyUtils.RequireMixins(self, modules);
 
@@ -114,56 +133,250 @@ namespace IronRuby.Builtins {
 
         #endregion
 
+        #region prepend, prepended, prepend_features
+
+        [RubyMethod("prepend")]
+        public static RubyModule/*!*/ Prepend(
+            CallSiteStorage<Func<CallSite, RubyModule, RubyModule, object>>/*!*/ prependFeaturesStorage,
+            CallSiteStorage<Func<CallSite, RubyModule, RubyModule, object>>/*!*/ prependedStorage,
+            RubyModule/*!*/ self, params object[]/*!*/ args) {
+
+            if (args.Length == 0) {
+                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 0, expected 1+)");
+            }
+
+            // reported by name rather than by the generic conversion failure, the way MRI does it:
+            var modules = new RubyModule[args.Length];
+            for (int i = 0; i < args.Length; i++) {
+                modules[i] = args[i] as RubyModule;
+                if (modules[i] == null && args[i] != null) {
+                    throw RubyExceptions.CreateTypeError("wrong argument type {0} (expected Module)",
+                        self.Context.GetClassDisplayName(args[i])
+                    );
+                }
+            }
+
+            foreach (var module in modules) {
+                if (module != null && module.IsRefinement) {
+                    throw RubyExceptions.CreateTypeError("Cannot prepend refinement");
+                }
+            }
+
+            RubyUtils.RequirePrepends(self, modules);
+
+            var prependFeatures = prependFeaturesStorage.GetCallSite("prepend_features", 1);
+            var prepended = prependedStorage.GetCallSite("prepended", 1);
+
+            // Module#prepend_features inserts the module in front of the receiver;
+            // ancestors after `prepend a, b': [a, b, self, ...]
+            for (int i = modules.Length - 1; i >= 0; i--) {
+                prependFeatures.Target(prependFeatures, modules[i], self);
+                prepended.Target(prepended, modules[i], self);
+            }
+
+            return self;
+        }
+
+        [RubyMethod("prepended", RubyMethodAttributes.PrivateInstance)]
+        public static void Prepended(RubyModule/*!*/ self, RubyModule/*!*/ owner) {
+            // self has been prepended to owner
+        }
+
+        // thread-safe:
+        [RubyMethod("prepend_features", RubyMethodAttributes.PrivateInstance)]
+        public static RubyModule/*!*/ PrependFeatures(RubyModule/*!*/ self, [NotNull]RubyModule/*!*/ owner) {
+            owner.PrependModules(self);
+            return self;
+        }
+
+        #endregion
+
+        #region refine, using, refinements, used_modules, used_refinements
+
+        [RubyMethod("refine", RubyMethodAttributes.PrivateInstance)]
+        public static RubyModule/*!*/ Refine(BlockParam block, RubyModule/*!*/ self, object target) {
+            RubyModule refinedModule = target as RubyModule;
+            if (refinedModule == null) {
+                throw RubyExceptions.CreateTypeError("wrong argument type {0} (expected Class or Module)",
+                    self.Context.GetClassDisplayName(target)
+                );
+            }
+            if (block == null) {
+                throw RubyExceptions.CreateArgumentError("no block given");
+            }
+
+            RubyModule refinement = self.GetOrCreateRefinement(refinedModule);
+
+            // The block runs with self set to the refinement, like module_eval, so `def' inside it defines
+            // a method on the refinement rather than on the refined class; and the enclosing module's
+            // refinements are active inside it.
+            RubyUtils.EvaluateRefinementBlock(self, refinement, block);
+            return refinement;
+        }
+
+        /// <summary>
+        /// Module#using activates a module's refinements for the rest of the *caller's lexical scope*.
+        /// The RubyScope the library binder hands us is that scope, and its parent chain is the lexical
+        /// nesting, so recording the activation on it is all the scoping there is.
+        /// </summary>
+        [RubyMethod("using", RubyMethodAttributes.PrivateInstance)]
+        public static RubyModule/*!*/ Using(RubyScope/*!*/ scope, RubyModule/*!*/ self, object module) {
+            // MRI refuses it anywhere inside a method body, blocks and module bodies included
+            if (scope.GetInnerMostMethodScope() != null) {
+                throw RubyExceptions.CreateRuntimeError("Module#using is not permitted in methods");
+            }
+            ActivateRefinements(scope, module);
+            return self;
+        }
+
+        internal static void ActivateRefinements(RubyScope/*!*/ scope, object module) {
+            RubyModule refiner = module as RubyModule;
+            if (refiner == null) {
+                throw RubyExceptions.CreateTypeError("wrong argument type {0} (expected Module)",
+                    scope.RubyContext.GetClassDisplayName(module)
+                );
+            }
+
+            // A CLR namespace brings in its extension methods where it is used, as C#'s `using System.Linq;'
+            // does, and a static class those it declares (C#'s `using static').
+            string ns;
+            Type staticClass;
+            if (RubyModule.IsClrExtensionSource(refiner, out ns, out staticClass)) {
+                if (refiner.Context != scope.RubyContext) {
+                    throw RubyExceptions.CreateTypeError("Cannot use '{0}' defined in a foreign runtime #{1}", refiner.Name, refiner.Context.RuntimeId);
+                }
+                scope.RubyContext.ActivateScopedExtensions(ns ?? staticClass.Namespace ?? String.Empty);
+                scope.ActivateRefinements(refiner, true);
+                return;
+            }
+
+            if (refiner.IsClass) {
+                throw RubyExceptions.CreateTypeError("wrong argument type Class (expected Module)");
+            }
+
+            // `using' is a no-op for a module that refines nothing, exactly as in CRuby.
+            scope.ActivateRefinements(refiner, true);
+        }
+
+        [RubyMethod("refinements")]
+        public static RubyArray/*!*/ GetRefinements(RubyModule/*!*/ self) {
+            var refinements = new List<RubyModule>();
+            self.GetOwnRefinements(refinements);
+            var result = new RubyArray(refinements.Count);
+            foreach (RubyModule m in refinements) {
+                result.Add(m);
+            }
+            return result;
+        }
+
+        [RubyMethod("used_modules", RubyMethodAttributes.PublicSingleton)]
+        public static RubyArray/*!*/ GetUsedModules(RubyScope/*!*/ scope, RubyModule/*!*/ self) {
+            var modules = new List<RubyModule>();
+            scope.GetActiveRefinements().GetUsedModules(modules);
+            var result = new RubyArray(modules.Count);
+            foreach (RubyModule m in modules) {
+                result.Add(m);
+            }
+            return result;
+        }
+
+        [RubyMethod("used_refinements", RubyMethodAttributes.PublicSingleton)]
+        public static RubyArray/*!*/ GetUsedRefinements(RubyScope/*!*/ scope, RubyModule/*!*/ self) {
+            var refinements = new List<RubyModule>();
+            scope.GetActiveRefinements().GetUsedRefinements(refinements);
+            var result = new RubyArray(refinements.Count);
+            foreach (RubyModule m in refinements) {
+                result.Add(m);
+            }
+            return result;
+        }
+
+        #endregion
+
         #region private, protected, public, private_class_method, public_class_method, module_function
+
+        /// <summary>
+        /// The names a visibility modifier was given. Since Ruby 3.0 a single Array argument is
+        /// the list of names - `private [:a, :b]` - so it is spread here; everything else is
+        /// converted with the usual symbol-or-string protocol.
+        /// </summary>
+        internal static string/*!*/[]/*!*/ ToMethodNames(ConversionStorage<string>/*!*/ stringCast, object[]/*!*/ argv) {
+            object[] names = argv;
+            if (argv.Length == 1 && argv[0] is System.Collections.IList list) {
+                names = new object[list.Count];
+                for (int i = 0; i < list.Count; i++) {
+                    names[i] = list[i];
+                }
+            }
+
+            var result = new string[names.Length];
+            for (int i = 0; i < names.Length; i++) {
+                result[i] = Protocols.CastToSymbol(stringCast, names[i]);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// What a visibility modifier answers since Ruby 3.1: nil with no arguments, the single
+        /// argument as it was passed, or an Array of the arguments. Not the module.
+        /// </summary>
+        internal static object VisibilityResult(object[]/*!*/ argv) {
+            switch (argv.Length) {
+                case 0: return null;
+                case 1: return argv[0];
+                default: return new RubyArray(argv);
+            }
+        }
 
         // thread-safe:
         [RubyMethod("private", RubyMethodAttributes.PrivateInstance)]
-        public static RubyModule/*!*/ SetPrivateVisibility(RubyScope/*!*/ scope, RubyModule/*!*/ self,
-            [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ methodNames) {
+        public static object SetPrivateVisibility(ConversionStorage<string>/*!*/ stringCast,
+            RubyScope/*!*/ scope, RubyModule/*!*/ self, params object[]/*!*/ methodNames) {
 
             // overwrites methods to instance:
-            SetMethodAttributes(scope, self, methodNames, RubyMethodAttributes.PrivateInstance);
-            return self;
+            SetMethodAttributes(scope, self, ToMethodNames(stringCast, methodNames), RubyMethodAttributes.PrivateInstance);
+            return VisibilityResult(methodNames);
         }
 
         // thread-safe:
         [RubyMethod("protected", RubyMethodAttributes.PrivateInstance)]
-        public static RubyModule/*!*/ SetProtectedVisibility(RubyScope/*!*/ scope, RubyModule/*!*/ self,
-            [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ methodNames) {
+        public static object SetProtectedVisibility(ConversionStorage<string>/*!*/ stringCast,
+            RubyScope/*!*/ scope, RubyModule/*!*/ self, params object[]/*!*/ methodNames) {
             // overwrites methods to instance:
-            SetMethodAttributes(scope, self, methodNames, RubyMethodAttributes.ProtectedInstance);
-            return self;
+            SetMethodAttributes(scope, self, ToMethodNames(stringCast, methodNames), RubyMethodAttributes.ProtectedInstance);
+            return VisibilityResult(methodNames);
         }
 
         // thread-safe:
         [RubyMethod("public", RubyMethodAttributes.PrivateInstance)]
-        public static RubyModule/*!*/ SetPublicVisibility(RubyScope/*!*/ scope, RubyModule/*!*/ self,
-            [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ methodNames) {
+        public static object SetPublicVisibility(ConversionStorage<string>/*!*/ stringCast,
+            RubyScope/*!*/ scope, RubyModule/*!*/ self, params object[]/*!*/ methodNames) {
             // overwrites methods to instance:
-            SetMethodAttributes(scope, self, methodNames, RubyMethodAttributes.PublicInstance);
-            return self;
+            SetMethodAttributes(scope, self, ToMethodNames(stringCast, methodNames), RubyMethodAttributes.PublicInstance);
+            return VisibilityResult(methodNames);
         }
 
         // thread-safe:
         [RubyMethodAttribute("private_class_method")]
-        public static RubyModule/*!*/ MakeClassMethodsPrivate(RubyModule/*!*/ self,
-            [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ methodNames) {
-            SetMethodAttributes(self.GetOrCreateSingletonClass(), methodNames, RubyMethodAttributes.Private);
+        public static RubyModule/*!*/ MakeClassMethodsPrivate(ConversionStorage<string>/*!*/ stringCast,
+            RubyModule/*!*/ self, params object[]/*!*/ methodNames) {
+            SetMethodAttributes(self.GetOrCreateSingletonClass(), ToMethodNames(stringCast, methodNames), RubyMethodAttributes.Private);
+            // unlike #private/#public, the _class_method pair answers the module
             return self;
         }
 
         // thread-safe:
         [RubyMethodAttribute("public_class_method")]
-        public static RubyModule/*!*/ MakeClassMethodsPublic(RubyModule/*!*/ self,
-            [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ methodNames) {
-            SetMethodAttributes(self.GetOrCreateSingletonClass(), methodNames, RubyMethodAttributes.Public);
+        public static RubyModule/*!*/ MakeClassMethodsPublic(ConversionStorage<string>/*!*/ stringCast,
+            RubyModule/*!*/ self, params object[]/*!*/ methodNames) {
+            SetMethodAttributes(self.GetOrCreateSingletonClass(), ToMethodNames(stringCast, methodNames), RubyMethodAttributes.Public);
             return self;
         }
 
         // thread-safe:
         [RubyMethod("module_function", RubyMethodAttributes.PrivateInstance)]
-        public static RubyModule/*!*/ CopyMethodsToModuleSingleton(RubyScope/*!*/ scope, RubyModule/*!*/ self,
-            [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ methodNames) {
+        public static object CopyMethodsToModuleSingleton(ConversionStorage<string>/*!*/ stringCast,
+            RubyScope/*!*/ scope, RubyModule/*!*/ self, params object[]/*!*/ methodNames) {
 
             // This is an important restriction for correct super calls in module functions (see RubyOps.DefineMethod). 
             // MRI has it wrong. It checks just here and not in method definition.
@@ -172,13 +385,13 @@ namespace IronRuby.Builtins {
             }
             
             // overwrites visibility to public:
-            SetMethodAttributes(scope, self, methodNames, RubyMethodAttributes.ModuleFunction);
-            return self;
+            SetMethodAttributes(scope, self, ToMethodNames(stringCast, methodNames), RubyMethodAttributes.ModuleFunction);
+            return VisibilityResult(methodNames);
         }
 
         internal static void SetMethodAttributes(RubyScope/*!*/ scope, RubyModule/*!*/ module, string/*!*/[]/*!*/ methodNames, RubyMethodAttributes attributes) {
             if (methodNames.Length == 0) {
-                scope.GetMethodAttributesDefinitionScope().MethodAttributes = attributes;
+                scope.GetVisibilityScope().MethodAttributes = attributes;
             } else {
                 SetMethodAttributes(module, methodNames, attributes);
             }
@@ -193,6 +406,7 @@ namespace IronRuby.Builtins {
 
             foreach (string methodName in methodNames) {
                 RubyMemberInfo method;
+                bool copiedIntoModule;
 
                 // we need to define new methods one by one since the method_added events can define a new method that might be used here:
                 using (context.ClassHierarchyLocker()) {
@@ -201,12 +415,17 @@ namespace IronRuby.Builtins {
                         options |= MethodLookup.ReturnForwarder;
                     }
 
-                    method = module.ResolveMethodNoLock(methodName, VisibilityContext.AllVisible, options).Info;
+                    var resolved = module.ResolveMethodNoLock(methodName, VisibilityContext.AllVisible, options);
+                    method = resolved.Info;
                     if (method == null) {
                         throw RubyExceptions.CreateUndefinedMethodError(module, methodName);
                     }
 
                     // MRI only adds method to the target module if visibility differs:
+                    // The module it was found in, rather than the module the method reports - a
+                    // method copied here by an earlier visibility change resolves as a forwarder
+                    // that still names the module it came from.
+                    copiedIntoModule = method.Visibility != instanceVisibility && resolved.Owner != module;
                     if (method.Visibility != instanceVisibility) {
                         module.SetVisibilityNoEventNoLock(context, methodName, method, instanceVisibility);
                     }
@@ -216,7 +435,12 @@ namespace IronRuby.Builtins {
                     }
                 }
 
-                if (method.Visibility != instanceVisibility) {
+                // #method_added is about a method appearing in this module, not about its
+                // visibility: `private :foo' on a method the module already has does not call it,
+                // and on an inherited one it calls it once - for the copy that lands here - and
+                // not again when the visibility is changed back. module_function copies the
+                // method onto the singleton, and that is a #singleton_method_added.
+                if (copiedIntoModule && !isModuleFunction) {
                     module.MethodAdded(methodName);
                 }
 
@@ -231,18 +455,63 @@ namespace IronRuby.Builtins {
         #region define_method (thread-safe)
 
         // thread-safe:
-        [RubyMethod("define_method", RubyMethodAttributes.PrivateInstance)]
-        public static RubyMethod/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self, 
+        /// <summary>
+        /// Records the ruby2_keywords flag on a method, and answers whether the method is one the
+        /// flag can mean anything for - a Ruby method whose parameters are a bare rest. The
+        /// prelude's Module#ruby2_keywords does the argument checking and the warning; this is
+        /// the part that has to reach the method body, which is where the flag lives so that
+        /// every alias of the method shares it.
+        /// </summary>
+        [RubyMethod("__ir_mark_ruby2_keywords__", RubyMethodAttributes.PrivateInstance)]
+        public static bool MarkRuby2Keywords(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
+            var info = self.ResolveMethod(methodName, VisibilityContext.AllVisible).Info;
+
+            var method = info as RubyMethodInfo;
+            if (method != null) {
+                return method.TrySetRuby2Keywords();
+            }
+
+            // define_method makes one of these out of a block; the flag lives on the block.
+            var lambda = info as RubyLambdaMethodInfo;
+            return lambda != null && lambda.TrySetRuby2Keywords();
+        }
+
+        /// <summary>
+        /// Makes one method the same as another to Method#== (see RubyMethodInfo.MakeEquivalentTo): the prelude's way of
+        /// writing a core method MRI defines under two names, each with frames of its own name.
+        /// </summary>
+        [RubyMethod("__ir_same_method__", RubyMethodAttributes.PrivateInstance)]
+        public static void MakeSameMethod(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ methodName,
+            [DefaultProtocol, NotNull]string/*!*/ sameAs) {
+            var method = self.ResolveMethod(methodName, VisibilityContext.AllVisible).Info as RubyMethodInfo;
+            var other = self.ResolveMethod(sameAs, VisibilityContext.AllVisible).Info as RubyMethodInfo;
+            if (method != null && other != null) {
+                method.MakeEquivalentTo(other);
+            }
+        }
+
+        // Anything that is not a Proc, Method or UnboundMethod: MRI names the three acceptable
+        // types rather than reporting a failed conversion to one of them.
+        [RubyMethod("define_method")]
+        public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self,
+            [DefaultProtocol, NotNull]string/*!*/ methodName, object method) {
+            throw RubyExceptions.CreateTypeError("wrong argument type {0} (expected Proc/Method/UnboundMethod)",
+                scope.RubyContext.GetClassDisplayName(method));
+        }
+
+        // thread-safe:
+        [RubyMethod("define_method")]
+        public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self, 
             [DefaultProtocol, NotNull]string/*!*/ methodName, [NotNull]RubyMethod/*!*/ method) {
 
-            DefineMethod(scope, self, methodName, method.Info,  method.GetTargetClass());
-            return method;
+            DefineMethod(scope, self, methodName, method.Info,  method.GetTargetClass(), method.Name);
+            return scope.RubyContext.CreateSymbol(methodName, RubyEncoding.UTF8);
         }
 
         // thread-safe:
         // Defines method using mangled CLR name and aliases that method with the actual CLR name.
-        [RubyMethod("define_method", RubyMethodAttributes.PrivateInstance)]
-        public static RubyMethod/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self,
+        [RubyMethod("define_method")]
+        public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self,
             [NotNull]ClrName/*!*/ methodName, [NotNull]RubyMethod/*!*/ method) {
             var result = DefineMethod(scope, self, methodName.MangledName, method);
             if (methodName.HasMangledName) {
@@ -252,18 +521,18 @@ namespace IronRuby.Builtins {
         }
 
         // thread-safe:
-        [RubyMethod("define_method", RubyMethodAttributes.PrivateInstance)]
-        public static UnboundMethod/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self, 
+        [RubyMethod("define_method")]
+        public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self, 
             [DefaultProtocol, NotNull]string/*!*/ methodName, [NotNull]UnboundMethod/*!*/ method) {
 
-            DefineMethod(scope, self, methodName, method.Info, method.TargetConstraint);
-            return method;
+            DefineMethod(scope, self, methodName, method.Info, method.TargetConstraint, method.Name);
+            return scope.RubyContext.CreateSymbol(methodName, RubyEncoding.UTF8);
         }
 
         // thread-safe:
         // Defines method using mangled CLR name and aliases that method with the actual CLR name.
-        [RubyMethod("define_method", RubyMethodAttributes.PrivateInstance)]
-        public static UnboundMethod/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self,
+        [RubyMethod("define_method")]
+        public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self,
             [NotNull]ClrName/*!*/ methodName, [NotNull]UnboundMethod/*!*/ method) {
             var result = DefineMethod(scope, self, methodName.MangledName, method);
             if (methodName.HasMangledName) {
@@ -272,27 +541,48 @@ namespace IronRuby.Builtins {
             return result;
         }
 
-        private static void DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self, string/*!*/ methodName, RubyMemberInfo/*!*/ info,
-            RubyModule/*!*/ targetConstraint) {
+        internal static void DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self, string/*!*/ methodName, RubyMemberInfo/*!*/ info,
+            RubyModule/*!*/ targetConstraint, string sourceName = null) {
 
-            var visibility = GetDefinedMethodVisibility(scope, self, methodName);
+            bool isModuleFunction;
+            var visibility = GetDefinedMethodVisibility(scope, self, methodName, out isModuleFunction);
             using (self.Context.ClassHierarchyLocker()) {
-                // MRI 1.8 does the check when the method is called, 1.9 checks it upfront as we do:
-                if (!self.HasAncestorNoLock(targetConstraint)) {
+                // MRI 1.8 does the check when the method is called, 1.9 checks it upfront as we do.
+                // Since Ruby 3.0 (Feature #15608) a method whose owner is a module rather than a class may be
+                // bound to any receiver, so only a class constraint is enforced.
+                // The constraint is the *owner* of the method, not the receiver #instance_method
+                // was sent to: Object.instance_method(:class) is owned by Kernel and so binds
+                // anywhere, even though it was fetched through Object.
+                var owner = info.DeclaringModule;
+                if (owner != null && (!owner.IsClass || owner.IsSingletonClass)) {
+                    targetConstraint = owner;
+                }
+                if (targetConstraint.IsClass && !self.HasAncestorNoLock(targetConstraint)) {
+                    if (targetConstraint.IsSingletonClass) {
+                        throw RubyExceptions.CreateTypeError("can't bind singleton method to a different class");
+                    }
                     throw RubyExceptions.CreateTypeError(
                         "bind argument must be a subclass of {0}", targetConstraint.GetName(scope.RubyContext)
                     );
                 }
 
-                self.SetDefinedMethodNoEventNoLock(self.Context, methodName, info, visibility);
+                self.SetDefinedMethodNoEventNoLock(self.Context, methodName, info, visibility, sourceName);
+
+                if (isModuleFunction) {
+                    self.SetModuleFunctionNoEventNoLock(self.Context, methodName, info);
+                }
             }
 
             self.MethodAdded(methodName);
+
+            if (isModuleFunction) {
+                self.GetOrCreateSingletonClass().MethodAdded(methodName);
+            }
         }
 
         // thread-safe:
-        [RubyMethod("define_method", RubyMethodAttributes.PrivateInstance)]
-        public static Proc/*!*/ DefineMethod(RubyScope/*!*/ scope, [NotNull]BlockParam/*!*/ block, 
+        [RubyMethod("define_method")]
+        public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, [NotNull]BlockParam/*!*/ block, 
             RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
 
             return DefineMethod(scope, self, methodName, block.Proc);
@@ -300,8 +590,8 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         // Defines method using mangled CLR name and aliases that method with the actual CLR name.
-        [RubyMethod("define_method", RubyMethodAttributes.PrivateInstance)]
-        public static Proc/*!*/ DefineMethod(RubyScope/*!*/ scope, [NotNull]BlockParam/*!*/ block,
+        [RubyMethod("define_method")]
+        public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, [NotNull]BlockParam/*!*/ block,
             RubyModule/*!*/ self, [NotNull]ClrName/*!*/ methodName) {
 
             var result = DefineMethod(scope, block, self, methodName.MangledName);
@@ -312,19 +602,28 @@ namespace IronRuby.Builtins {
         }
 
         // thread-safe:
-        [RubyMethod("define_method", RubyMethodAttributes.PrivateInstance)]
-        public static Proc/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self, 
+        [RubyMethod("define_method")]
+        public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self, 
             [DefaultProtocol, NotNull]string/*!*/ methodName, [NotNull]Proc/*!*/ block) {
 
-            var visibility = GetDefinedMethodVisibility(scope, self, methodName);
+            bool isModuleFunction;
+            var visibility = GetDefinedMethodVisibility(scope, self, methodName, out isModuleFunction);
             var info = Proc.ToLambdaMethodInfo(block, methodName, visibility, self);
             self.AddMethod(scope.RubyContext, methodName, info);
-            return info.Lambda;
+
+            if (isModuleFunction) {
+                using (self.Context.ClassHierarchyLocker()) {
+                    self.SetModuleFunctionNoEventNoLock(scope.RubyContext, methodName, info);
+                }
+                self.GetOrCreateSingletonClass().MethodAdded(methodName);
+            }
+
+            return scope.RubyContext.CreateSymbol(methodName, RubyEncoding.UTF8);
         }
 
         // thread-safe:
-        [RubyMethod("define_method", RubyMethodAttributes.PrivateInstance)]
-        public static Proc/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self,
+        [RubyMethod("define_method")]
+        public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self,
             [NotNull]ClrName/*!*/ methodName, [NotNull]Proc/*!*/ block) {
 
             var result = DefineMethod(scope, self, methodName.MangledName, block);
@@ -334,20 +633,31 @@ namespace IronRuby.Builtins {
             return result;
         }
 
-        private static RubyMethodVisibility GetDefinedMethodVisibility(RubyScope/*!*/ scope, RubyModule/*!*/ module, string/*!*/ methodName) {
-            // MRI: Special names are private.
-            // MRI: Doesn't create a singleton method if module_function is used in the scope, however the private visibility is applied (bug?)
-            // MRI 1.8: uses the current scope's visibility only if the target module is the same as the scope's module (bug?)
-            // MFI 1.9: always uses public visibility (bug?)
+        /// <summary>
+        /// The visibility #define_method gives the method it defines, and whether #module_function
+        /// is in effect for it.
+        ///
+        /// The enclosing visibility modifier counts only when #define_method is defining on the
+        /// scope's own module: `other.define_method(...)` inside a `private` or `module_function`
+        /// body still defines a plain public method on `other`.  Special names (#initialize and
+        /// friends) are private whatever the modifier says - and so is the instance half of a
+        /// module function, whose singleton half is the public one.
+        /// </summary>
+        private static RubyMethodVisibility GetDefinedMethodVisibility(RubyScope/*!*/ scope, RubyModule/*!*/ module, string/*!*/ methodName,
+            out bool isModuleFunction) {
+
+            isModuleFunction = false;
+
             RubyMethodVisibility visibility;
-            if (scope.RubyContext.RubyOptions.Compatibility < RubyCompatibility.Ruby19) {
-                var attributesScope = scope.GetMethodAttributesDefinitionScope();
-                if (attributesScope.GetInnerMostModuleForMethodLookup() == module) {
-                    bool isModuleFunction = (attributesScope.MethodAttributes & RubyMethodAttributes.ModuleFunction) == RubyMethodAttributes.ModuleFunction;
-                    visibility = (isModuleFunction) ? RubyMethodVisibility.Private : attributesScope.Visibility;
-                } else {
-                    visibility = RubyMethodVisibility.Public;
-                }
+            var attributesScope = scope.GetMethodAttributesDefinitionScope();
+            // the same module `def` in this scope would define into - GetInnerMostModuleForMethodLookup
+            // is not it: inside a `Module.new { }` block it walks past the block to Object
+            if (attributesScope.GetMethodDefinitionOwner() == module) {
+                // Class has no #module_function, but a module's sets the default of the class body it is
+                // called from (RubyScope.GetVisibilityScope), and MRI's define_method then makes both
+                // halves on the class, as `def' does (#133).
+                isModuleFunction = (attributesScope.MethodAttributes & RubyMethodAttributes.ModuleFunction) == RubyMethodAttributes.ModuleFunction;
+                visibility = isModuleFunction ? RubyMethodVisibility.Private : attributesScope.Visibility;
             } else {
                 visibility = RubyMethodVisibility.Public;
             }
@@ -378,80 +688,136 @@ namespace IronRuby.Builtins {
 
         #region attr, attr_{reader|writer|accessor} (thread-safe)
 
-        private static void DefineAccessor(RubyScope/*!*/ scope, RubyModule/*!*/ self, string/*!*/ name, bool readable, bool writable) {
+        /// <summary>
+        /// Defines the accessor(s) and appends their names to <paramref name="definedNames"/>,
+        /// which is what Ruby 3.0's attr/attr_reader/attr_writer/attr_accessor return.
+        /// </summary>
+        private static void DefineAccessor(RubyScope/*!*/ scope, RubyModule/*!*/ self, string/*!*/ name, bool readable, bool writable,
+            RubyArray definedNames = null) {
             // MRI: ignores ModuleFunction scope flag (doesn't create singleton methods):
 
             if (!Tokenizer.IsVariableName(name)) {
-                throw RubyExceptions.CreateNameError("invalid attribute name `{0}'", name);
+                throw RubyExceptions.CreateNameError("invalid attribute name '{0}'", name);
             }
 
             var varName = "@" + name;
             var attributesScope = scope.GetMethodAttributesDefinitionScope();
 
+            // The empty scope stands for "there is no Ruby frame here": it is what a conversion
+            // site hands a library method, which is how `attr_reader` is reached by
+            // `%i(a b).each(&method(:attr_reader))` - the &-conversion calls Method#to_proc
+            // through a site with no scope of its own.  Its attributes are private, because
+            // top-level `def` is, and taking them left reline's Reline::Core readers private
+            // where MRI's are public.  MRI reads the visibility only off a class or module
+            // body; anywhere else attr_reader defines public methods.
+            //
+            // The same holds for a frame whose self is some other object: MRI's rb_attr takes the
+            // scope's visibility only when the caller's self is the module itself
+            // (rb_vm_cref_in_context). importmap-rails does
+            // `Rails::Application.send(:attr_accessor, :importmap)` at the top level of a file,
+            // where the default is private, and Rails then calls `app.importmap = ...`.
+            var visibility = (attributesScope.IsEmpty || !ReferenceEquals(attributesScope.SelfObject, self))
+                ? RubyMethodVisibility.Public : attributesScope.Visibility;
+
+            if (definedNames != null) {
+                var context = scope.RubyContext;
+                if (readable) {
+                    definedNames.Add(context.CreateSymbol(name, RubyEncoding.UTF8));
+                }
+                if (writable) {
+                    definedNames.Add(context.CreateSymbol(name + "=", RubyEncoding.UTF8));
+                }
+            }
+
             if (readable) {
-                var flags = (RubyMemberFlags)RubyUtils.GetSpecialMethodVisibility(attributesScope.Visibility, name);
+                var flags = (RubyMemberFlags)RubyUtils.GetSpecialMethodVisibility(visibility, name);
                 self.AddMethod(scope.RubyContext, name, new RubyAttributeReaderInfo(flags, self, varName));
             }
             
             if (writable) {
-                self.AddMethod(scope.RubyContext, name + "=", new RubyAttributeWriterInfo((RubyMemberFlags)attributesScope.Visibility, self, varName));
+                self.AddMethod(scope.RubyContext, name + "=", new RubyAttributeWriterInfo((RubyMemberFlags)visibility, self, varName));
             }
         }
 
         // thread-safe:
-        [RubyMethod("attr", RubyMethodAttributes.PrivateInstance)]
-        public static void Attr(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name, [Optional]bool writable) {
-            DefineAccessor(scope, self, name, true, writable);
+        [RubyMethod("attr")]
+        public static RubyArray/*!*/ Attr(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name) {
+            var result = new RubyArray();
+            DefineAccessor(scope, self, name, true, false, result);
+            return result;
         }
 
         // thread-safe:
-        [RubyMethod("attr", RubyMethodAttributes.PrivateInstance)]
-        public static void Attr(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ names) {
+        [RubyMethod("attr")]
+        public static RubyArray/*!*/ Attr(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name, bool writable) {
+            scope.RubyContext.ReportWarning("optional boolean argument is obsoleted", true);
+            var result = new RubyArray();
+            DefineAccessor(scope, self, name, true, writable, result);
+            return result;
+        }
+
+        // thread-safe:
+        [RubyMethod("attr")]
+        public static RubyArray/*!*/ Attr(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ names) {
+            var result = new RubyArray();
             foreach (string name in names) {
-                DefineAccessor(scope, self, name, true, false);
+                DefineAccessor(scope, self, name, true, false, result);
             }
+            return result;
         }
 
         // thread-safe:
-        [RubyMethod("attr_accessor", RubyMethodAttributes.PrivateInstance)]
-        public static void AttrAccessor(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name) {
-            DefineAccessor(scope, self, name, true, true);
+        [RubyMethod("attr_accessor")]
+        public static RubyArray/*!*/ AttrAccessor(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name) {
+            var result = new RubyArray();
+            DefineAccessor(scope, self, name, true, true, result);
+            return result;
         }
 
         // thread-safe:
-        [RubyMethod("attr_accessor", RubyMethodAttributes.PrivateInstance)]
-        public static void AttrAccessor(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ names) {
+        [RubyMethod("attr_accessor")]
+        public static RubyArray/*!*/ AttrAccessor(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ names) {
+            var result = new RubyArray();
             foreach (string name in names) {
-                DefineAccessor(scope, self, name, true, true);
+                DefineAccessor(scope, self, name, true, true, result);
             }
+            return result;
         }
 
         // thread-safe:
-        [RubyMethod("attr_reader", RubyMethodAttributes.PrivateInstance)]
-        public static void AttrReader(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name) {
-            DefineAccessor(scope, self, name, true, false);
+        [RubyMethod("attr_reader")]
+        public static RubyArray/*!*/ AttrReader(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name) {
+            var result = new RubyArray();
+            DefineAccessor(scope, self, name, true, false, result);
+            return result;
         }
 
         // thread-safe:
-        [RubyMethod("attr_reader", RubyMethodAttributes.PrivateInstance)]
-        public static void AttrReader(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ names) {
+        [RubyMethod("attr_reader")]
+        public static RubyArray/*!*/ AttrReader(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ names) {
+            var result = new RubyArray();
             foreach (string name in names) {
-                DefineAccessor(scope, self, name, true, false);
+                DefineAccessor(scope, self, name, true, false, result);
             }
+            return result;
         }
 
         // thread-safe:
-        [RubyMethod("attr_writer", RubyMethodAttributes.PrivateInstance)]
-        public static void AttrWriter(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name) {
-            DefineAccessor(scope, self, name, false, true);
+        [RubyMethod("attr_writer")]
+        public static RubyArray/*!*/ AttrWriter(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name) {
+            var result = new RubyArray();
+            DefineAccessor(scope, self, name, false, true, result);
+            return result;
         }
 
         // thread-safe:
-        [RubyMethod("attr_writer", RubyMethodAttributes.PrivateInstance)]
-        public static void AttrWriter(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ names) {
+        [RubyMethod("attr_writer")]
+        public static RubyArray/*!*/ AttrWriter(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ names) {
+            var result = new RubyArray();
             foreach (string name in names) {
-                DefineAccessor(scope, self, name, false, true);
+                DefineAccessor(scope, self, name, false, true, result);
             }
+            return result;
         }
 
         #endregion
@@ -459,17 +825,55 @@ namespace IronRuby.Builtins {
         #region alias_method, remove_method, undef_method
 
         // thread-safe:
-        [RubyMethod("alias_method", RubyMethodAttributes.PrivateInstance)]
-        public static RubyModule/*!*/ AliasMethod(RubyContext/*!*/ context, RubyModule/*!*/ self,
-            [DefaultProtocol, NotNull]string/*!*/ newName, [DefaultProtocol, NotNull]string/*!*/ oldName) {
+        // public since Ruby 3.0; returns the new method's name as a Symbol, like define_method
+        [RubyMethod("alias_method")]
+        public static object AliasMethod(ConversionStorage<MutableString>/*!*/ toStr, RubyModule/*!*/ self,
+            object newName, [DefaultProtocol, NotNull]string/*!*/ oldName) {
 
+            string name;
+            var symbol = newName as RubySymbol;
+            if (symbol != null) {
+                name = symbol.ToString();
+            } else {
+                var str = newName as MutableString ?? (newName != null ? Protocols.TryCastToString(toStr, newName) : null);
+                if (str == null) {
+                    throw RubyOps.CreateNotSymbolNorStringError(toStr.Context, newName);
+                }
+                // A String name is interned as a Symbol, so one with bytes invalid in its encoding
+                // raises EncodingError the way String#to_sym does.
+                MutableStringOps.ToSymbol(toStr.Context, str);
+                name = str.ConvertToString();
+            }
+            return AddMethodAlias(toStr.Context, self, name, oldName);
+        }
+
+        private static object AddMethodAlias(RubyContext/*!*/ context, RubyModule/*!*/ self, string/*!*/ newName, string/*!*/ oldName) {
             self.AddMethodAlias(newName, oldName);
-            return self;
+            return context.CreateSymbol(newName, RubyEncoding.UTF8);
+        }
+
+        /// <summary>
+        /// MRI checks frozen-ness before it looks the method up, so undef_method/remove_method on a
+        /// frozen module raise FrozenError even when the name does not exist.
+        /// </summary>
+        private static void RequireMutable(RubyModule/*!*/ self) {
+            if (!self.IsFrozen) {
+                return;
+            }
+            var cls = self as RubyClass;
+            if (cls != null && cls.IsSingletonClass) {
+                throw RubyExceptions.CreateObjectFrozenError(self.Context, cls.SingletonClassOf);
+            }
+            throw RubyExceptions.CreateObjectFrozenError(self.Context, self);
         }
 
         // thread-safe:
-        [RubyMethod("remove_method", RubyMethodAttributes.PrivateInstance)]
+        // public since Ruby 3.0
+        [RubyMethod("remove_method")]
         public static RubyModule/*!*/ RemoveMethod(RubyModule/*!*/ self, [DefaultProtocol, NotNullItems]params string[]/*!*/ methodNames) {
+            if (methodNames.Length != 0) {
+                RequireMutable(self);
+            }
             foreach (var methodName in methodNames) {
                 // MRI: reports a warning and allows removal
                 if (self.IsBasicObjectClass && methodName == Symbols.Initialize) {
@@ -477,15 +881,22 @@ namespace IronRuby.Builtins {
                 }
 
                 if (!self.RemoveMethod(methodName)) {
-                    throw RubyExceptions.CreateUndefinedMethodError(self, methodName);
+                    // MRI's wording for remove_method differs from undef_method's:
+                    //   "method 'x' not defined in C"
+                    throw RubyExceptions.CreateNameError("method '{0}' not defined in {1}",
+                        methodName, RubyExceptions.GetModuleErrorName(self));
                 }
             }
             return self;
         }
 
         // thread-safe:
-        [RubyMethod("undef_method", RubyMethodAttributes.PrivateInstance)]
+        // public since Ruby 3.0
+        [RubyMethod("undef_method")]
         public static RubyModule/*!*/ UndefineMethod(RubyModule/*!*/ self, [DefaultProtocol, NotNullItems]params string[]/*!*/ methodNames) {
+            if (methodNames.Length != 0) {
+                RequireMutable(self);
+            }
             foreach (var methodName in methodNames) {
                 if (!self.ResolveMethod(methodName, VisibilityContext.AllVisible).Found) {
                     throw RubyExceptions.CreateUndefinedMethodError(self, methodName);
@@ -518,7 +929,18 @@ namespace IronRuby.Builtins {
             if (ReferenceEquals(self, module)) {
                 return ScriptingRuntimeHelpers.False;
             }
-            return self.HasAncestor(module) ? ScriptingRuntimeHelpers.True : null;
+
+            if (self.Context != module.Context) {
+                return null;
+            }
+
+            using (self.Context.ClassHierarchyLocker()) {
+                if (self.HasAncestorNoLock(module)) {
+                    return ScriptingRuntimeHelpers.True;
+                }
+                // related the other way round is `false', unrelated is `nil':
+                return module.HasAncestorNoLock(self) ? ScriptingRuntimeHelpers.False : null;
+            }
         }
 
         // thread-safe:
@@ -540,9 +962,20 @@ namespace IronRuby.Builtins {
         [RubyMethod(">")]
         public static object IsNotSubclassOrIncluded(RubyModule/*!*/ self, [NotNull]RubyModule/*!*/ module) {
             if (ReferenceEquals(self, module)) {
-                return false;
+                return ScriptingRuntimeHelpers.False;
             }
-            return module.HasAncestor(self) ? ScriptingRuntimeHelpers.True : null;
+
+            if (self.Context != module.Context) {
+                return null;
+            }
+
+            using (self.Context.ClassHierarchyLocker()) {
+                if (module.HasAncestorNoLock(self)) {
+                    return ScriptingRuntimeHelpers.True;
+                }
+                // related the other way round is `false', unrelated is `nil':
+                return self.HasAncestorNoLock(module) ? ScriptingRuntimeHelpers.False : null;
+            }
         }
 
         // thread-safe:
@@ -603,7 +1036,10 @@ namespace IronRuby.Builtins {
 
             using (self.Context.ClassHierarchyLocker()) {
                 self.ForEachAncestor(true, delegate(RubyModule/*!*/ module) {
-                    if (!module.IsSingletonClass) {
+                    // MRI lists singleton classes too: Object.new.singleton_class.ancestors starts
+                    // with the singleton class itself, and String.singleton_class.ancestors walks
+                    // #<Class:String>, #<Class:Object>, #<Class:BasicObject> before reaching Class.
+                    if (!module.IsDummySingletonClass) {
                         ancestors.Add(module);
                     }
                     return false;
@@ -643,28 +1079,76 @@ namespace IronRuby.Builtins {
 
         #region (module|class)_(eval|exec)
 
+        /// <summary>
+        /// Module#module_eval / #class_eval. MRI takes either a block or a string with an optional
+        /// filename and line, never both, and its arity errors name whichever of the two shapes
+        /// was being used. The arguments are taken as a list and checked here for that reason:
+        /// overload resolution can only report the union of the two, "expected 0..3".
+        /// </summary>
+        /// <remarks>
+        /// MRI defines module_eval and class_eval (and the _exec pair) as two methods, and a backtrace
+        /// names the one that was called; a library method's frame is labelled by the CLR method, so
+        /// each name gets one of its own.
+        /// </remarks>
         [RubyMethod("module_eval")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static object ModuleEval(ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
+            RubyScope/*!*/ scope, BlockParam block, RubyModule/*!*/ self, params object[]/*!*/ args) {
+            return Evaluate(toStr, toInt, scope, block, self, args);
+        }
+
         [RubyMethod("class_eval")]
-        public static object Evaluate(RubyScope/*!*/ scope, BlockParam block, RubyModule/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ code,
-            [Optional, NotNull]MutableString file, [DefaultParameterValue(1)]int line) {
+        [SameRubyMethod("ModuleEval")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static object ClassEval(ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
+            RubyScope/*!*/ scope, BlockParam block, RubyModule/*!*/ self, params object[]/*!*/ args) {
+            return Evaluate(toStr, toInt, scope, block, self, args);
+        }
+
+        private static object Evaluate(ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
+            RubyScope/*!*/ scope, BlockParam block, RubyModule/*!*/ self, object[]/*!*/ args) {
 
             if (block != null) {
-                throw RubyExceptions.CreateArgumentError("wrong number of arguments");
-            } 
-            
+                if (args.Length != 0) {
+                    throw RubyExceptions.CreateArgumentError("wrong number of arguments (given {0}, expected 0)", args.Length);
+                }
+
+                // The module is passed to the block as its single argument, so
+                // `Struct.new(:a) { |c| ... }` and `String.class_eval { |m| ... }` see it rather
+                // than nil. module_exec/class_exec pass the caller's arguments instead.
+                return RubyUtils.EvaluateInModule(self, block, new object[] { self });
+            }
+
+            if (args.Length == 0 || args.Length > 3) {
+                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given {0}, expected 1..3)", args.Length);
+            }
+
+            var code = Protocols.CastToString(toStr, args[0]);
+            var file = (args.Length > 1) ? Protocols.CastToString(toStr, args[1]) : null;
+            var line = (args.Length > 2) ? Protocols.CastToFixnum(toInt, args[2]) : 1;
+
             return RubyUtils.Evaluate(code, scope, self, self, file, line);
         }
 
-        [RubyMethod("module_eval")]
-        [RubyMethod("class_eval")]
-        public static object Evaluate([NotNull]BlockParam/*!*/ block, RubyModule/*!*/ self) {
-            return RubyUtils.EvaluateInModule(self, block, null);
+        [RubyMethod("module_exec")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [ReceivesKeywords]
+        public static object ModuleExec(BlockParam block, RubyModule/*!*/ self, params object[]/*!*/ args) {
+            return Execute(block, self, args);
         }
 
-        // This method is not available in 1.8 so far, but since the usual workaround is very inefficient it is useful to have it in 1.8 as well.
-        [RubyMethod("module_exec")]
         [RubyMethod("class_exec")]
-        public static object Execute([NotNull]BlockParam/*!*/ block, RubyModule/*!*/ self, params object[]/*!*/ args) {
+        [SameRubyMethod("ModuleExec")]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [ReceivesKeywords]
+        public static object ClassExec(BlockParam block, RubyModule/*!*/ self, params object[]/*!*/ args) {
+            return Execute(block, self, args);
+        }
+
+        private static object Execute(BlockParam block, RubyModule/*!*/ self, object[]/*!*/ args) {
+            if (block == null) {
+                throw RubyExceptions.CreateLocalJumpError("no block given");
+            }
             return RubyUtils.EvaluateInModule(self, block, args);
         }
 
@@ -674,18 +1158,26 @@ namespace IronRuby.Builtins {
 
         // not thread-safe
         [RubyMethod("class_variables")]
-        public static RubyArray/*!*/ ClassVariables(RubyModule/*!*/ self) {
+        public static RubyArray/*!*/ ClassVariables(RubyModule/*!*/ self, [DefaultParameterValue(true)]bool inherit) {
             var result = new RubyArray();
-            self.EnumerateClassVariables((module, name, value) => {
-                result.Add(self.Context.StringifyIdentifier(name));
-                return false;
-            });
+            var seen = new HashSet<string>();
+            using (self.Context.ClassHierarchyLocker()) {
+                self.ForEachClassVariable(inherit, (module, name, value) => {
+                    if (name != null && seen.Add(name)) {
+                        result.Add(self.Context.StringifyIdentifier(name));
+                    }
+                    return false;
+                });
+            }
             return result;
         }
 
         // not thread-safe:
         [RubyMethod("class_variable_defined?")]
         public static bool IsClassVariableDefined(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ variableName) {
+            if (self.Context.RactorsStarted) {
+                RactorIsolation.CheckClassVariable(self, variableName);
+            }
             object value;
             if (self.TryResolveClassVariable(variableName, out value) == null) {
                 RubyUtils.CheckClassVariableName(variableName);
@@ -695,30 +1187,44 @@ namespace IronRuby.Builtins {
         }
 
         // not thread-safe:
-        [RubyMethod("class_variable_get", RubyMethodAttributes.PrivateInstance)]
-        public static object GetClassVariable(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ variableName) {
+        [RubyMethod("class_variable_get")]
+        public static object GetClassVariable(ConversionStorage<string>/*!*/ stringCast, RubyModule/*!*/ self, object nameArg) {
+            string variableName = Protocols.CastToSymbol(stringCast, nameArg);
+            if (self.Context.RactorsStarted) {
+                RactorIsolation.CheckClassVariable(self, variableName);
+            }
             object value;
             if (self.TryResolveClassVariable(variableName, out value) == null) {
-                RubyUtils.CheckClassVariableName(variableName);
-                throw RubyExceptions.CreateNameError("uninitialized class variable {0} in {1}", variableName, self.Name);
+                RubyUtils.CheckClassVariableName(self.Context, self, variableName, nameArg);
+                throw RubyExceptions.WithNameAndReceiver(self.Context,
+                    RubyExceptions.CreateNameError("uninitialized class variable {0} in {1}", variableName, self.Name),
+                    variableName, self);
             }
             return value;
         }
 
         // not thread-safe:
-        [RubyMethod("class_variable_set", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("class_variable_set")]
         public static object ClassVariableSet(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ variableName, object value) {
             RubyUtils.CheckClassVariableName(variableName);
-            self.SetClassVariable(variableName, value);
+            if (self.Context.RactorsStarted) {
+                RactorIsolation.CheckClassVariable(self, variableName);
+            }
+            // an ancestor that already has the variable keeps it, as for @@x = value
+            object oldValue;
+            (self.TryResolveClassVariable(variableName, out oldValue) ?? self).SetClassVariable(variableName, value);
             return value;
         }
 
         // not thread-safe:
-        [RubyMethod("remove_class_variable", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("remove_class_variable")]
         public static object RemoveClassVariable(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ variableName) {
             object value;
             if (!self.TryGetClassVariable(variableName, out value)) {
-                RubyUtils.CheckClassVariableName(variableName);
+                // MRI words a bad name differently here than class_variable_get and friends do
+                if (!Tokenizer.IsClassVariableName(variableName)) {
+                    throw RubyExceptions.CreateNameError("wrong class variable name {0}", variableName);
+                }
                 throw RubyExceptions.CreateNameError("class variable {0} not defined for {1}", variableName, self.Name);
             }
             self.RemoveClassVariable(variableName);
@@ -731,8 +1237,20 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         [RubyMethod("constants", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray/*!*/ GetGlobalConstants(RubyModule/*!*/ self, [DefaultParameterValue(true)]bool inherited) {
-            return GetDefinedConstants(self.Context.ObjectClass, inherited);
+        public static RubyArray/*!*/ GetGlobalConstants(RubyModule/*!*/ self) {
+            // MRI's rb_mod_s_constants: only Module itself lists the lexical scope; a subclass of
+            // Module (Ruby::Box, say) lists its own constants, as Module#constants does.
+            if (self != self.Context.ModuleClass) {
+                return GetDefinedConstants(self, true);
+            }
+            return GetDefinedConstants(self.Context.ObjectClass, true);
+        }
+
+        // Module.constants lists the lexically visible constants only when called without arguments;
+        // with an argument MRI dispatches to Module#constants on the receiver itself.
+        [RubyMethod("constants", RubyMethodAttributes.PublicSingleton)]
+        public static RubyArray/*!*/ GetGlobalConstants(RubyModule/*!*/ self, bool inherited) {
+            return GetDefinedConstants(self, inherited);
         }
 
         // thread-safe:
@@ -751,9 +1269,10 @@ namespace IronRuby.Builtins {
                             return hideGlobalConstants && module.IsObjectClass;
                         }
 
-                        if (!visited.ContainsKey(name)) {
+                        // private constants are left out, and do not hide an ancestor's public one (as in MRI):
+                        if (!visited.ContainsKey(name) && !module.IsPrivateConstant(name)) {
                             if (Tokenizer.IsConstantName(name)) {
-                                result.Add(self.Context.StringifyIdentifier(name));
+                                result.Add(self.Context.CreateSymbol(name, module.GetConstantEncoding(name)));
                             }
                             visited.Add(name, true);
                         }
@@ -764,8 +1283,8 @@ namespace IronRuby.Builtins {
             } else {
                 using (self.Context.ClassHierarchyLocker()) {
                     self.EnumerateConstants((module, name, value) => {
-                        if (Tokenizer.IsConstantName(name)) {
-                            result.Add(self.Context.StringifyIdentifier(name));
+                        if (Tokenizer.IsConstantName(name) && !module.IsPrivateConstant(name)) {
+                            result.Add(self.Context.CreateSymbol(name, module.GetConstantEncoding(name)));
                         }
                         return false;
                     });
@@ -776,42 +1295,404 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         [RubyMethod("const_defined?")]
-        public static bool IsConstantDefined(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ constantName) {
-            RubyUtils.CheckConstantName(constantName);
-            object constant;
+        public static bool IsConstantDefined(ConversionStorage<MutableString>/*!*/ stringCast, RubyModule/*!*/ self, object constantName) {
+            return IsConstantDefined(stringCast, self, constantName, true);
+        }
 
-            // MRI checks declared constans only and don't trigger autoload:
-            return self.TryGetConstant(null, constantName, out constant);
+        [RubyMethod("const_defined?")]
+        public static bool IsConstantDefined(ConversionStorage<MutableString>/*!*/ stringCast, RubyModule/*!*/ self, object constantName,
+            bool inherit) {
+
+            var path = new ConstantPath(stringCast, constantName);
+            var context = self.Context;
+            RubyModule owner = path.IsTopLevel ? context.ObjectClass : self;
+
+            // MRI searches Object for the first segment only (rb_const_defined vs
+            // rb_const_defined_from), and only for a module: a class already has Object among its
+            // ancestors, unless it is BasicObject - which is exactly the class MRI does not want
+            // answering for Object's constants.
+            bool lookupObject = inherit && !path.IsTopLevel && !owner.IsClass;
+
+            object value = null;
+            for (int i = 0; i < path.Count; i++) {
+                owner = path.Enter(i, owner, value);
+                string name = path[i];
+
+                // Passing null as the autoload scope so that a registered autoload answers true
+                // without running: MRI reports the constant as defined but does not trigger it here.
+                bool found = inherit
+                    ? owner.TryResolveConstant(null, name, out value) && (i == 0 || IsVisibleFromScope(owner, name))
+                    : owner.TryGetConstant(null, name, out value);
+                found = found && !IsHiddenConstant(owner, name, inherit);
+
+                if (!found && lookupObject && !owner.IsObjectClass) {
+                    found = context.ObjectClass.TryResolveConstant(null, name, out value) && !IsHiddenConstant(context.ObjectClass, name, true);
+                }
+                lookupObject = false;
+
+                if (!found) {
+                    return false;
+                }
+            }
+            return true;
         }
 
         // thread-safe:
         [RubyMethod("const_get")]
-        public static object GetConstantValue(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ constantName) {
-            return RubyUtils.GetConstant(scope.GlobalScope, self, constantName, true);
+        public static object GetConstantValue(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
+            RubyModule/*!*/ self, object constantName) {
+            return GetConstantValue(stringCast, scope, self, constantName, true);
+        }
+
+        // thread-safe:
+        [RubyMethod("const_get")]
+        public static object GetConstantValue(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
+            RubyModule/*!*/ self, object constantName, bool inherit) {
+
+            var path = new ConstantPath(stringCast, constantName);
+            var context = self.Context;
+            RubyModule owner = path.IsTopLevel ? context.ObjectClass : self;
+
+            // MRI searches Object for the first segment only (rb_const_get vs rb_const_get_from).
+            bool lookupObject = inherit && !path.IsTopLevel;
+
+            object value = null;
+            for (int i = 0; i < path.Count; i++) {
+                owner = path.Enter(i, owner, value);
+                string name = path[i];
+
+                if (IsHiddenConstant(owner, name, inherit)) {
+                    value = ConstantMissing(owner, name);
+                } else if (inherit && (i == 0 || IsVisibleFromScope(owner, name))) {
+                    value = RubyUtils.GetConstant(scope.GlobalScope, owner, name, lookupObject);
+                } else if (!inherit && owner.TryGetConstant(scope.GlobalScope, name, out value)) {
+                    if (owner.IsDeprecatedConstant(name)) {
+                        context.ReportConstantDeprecation(owner, name);
+                    }
+                } else {
+                    value = ConstantMissing(owner, name);
+                }
+                lookupObject = false;
+            }
+            return value;
         }
 
         // thread-safe:
         [RubyMethod("const_set")]
-        public static object SetConstantValue(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ constantName, object value) {
+        public static object SetConstantValue(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ constantName, object value) {
             RubyUtils.CheckConstantName(constantName);
-            RubyUtils.SetConstant(self, constantName, value);
+            string sourcePath;
+            int sourceLine;
+            RubyUtils.TryGetCallerSourceLocation(scope, out sourcePath, out sourceLine);
+            RubyUtils.SetConstant(self, constantName, value, sourcePath, sourceLine);
             return value;
         }
 
         // thread-safe:
         [RubyMethod("remove_const", RubyMethodAttributes.PrivateInstance)]
         public static object RemoveConstant(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ constantName) {
+            bool deprecated = self.IsDeprecatedConstant(constantName);
+
             object value;
-            if (!self.TryRemoveConstant(constantName, out value)) {
-                RubyUtils.CheckConstantName(constantName);
+            if (self.IsHiddenConstant(constantName) || !self.TryRemoveConstant(constantName, out value)) {
+                if (!Tokenizer.IsConstantName(constantName)) {
+                    throw RubyExceptions.CreateNameError("'{0}' is not allowed as a constant variable name", constantName);
+                }
                 throw RubyExceptions.CreateNameError("constant {0}::{1} not defined", self.Name, constantName);
             }
-            return value;
+
+            if (deprecated) {
+                self.Context.ReportConstantDeprecation(self, constantName);
+            }
+            // a pending autoload has no value yet
+            return RubyModule.IsAutoload(value) ? null : value;
         }
 
+        // public since Ruby 3.0
+        [RubyMethod("private_constant")]
+        public static RubyModule/*!*/ PrivateConstant(ConversionStorage<string>/*!*/ stringCast, RubyModule/*!*/ self,
+            [NotNull]params object[]/*!*/ constantNames) {
+            foreach (var name in ConstantNamesToChange(stringCast, self, "private_constant", constantNames)) {
+                self.SetConstantVisibility(name, true);
+            }
+            return self;
+        }
+
+        /// <summary>
+        /// IronRuby's Ruby code (the prelude, and the libraries it implements in Ruby) keeps state MRI keeps in C in
+        /// constants of its own: this makes them private and hides them from constant reflection, so that
+        /// const_defined?, const_get and the rest answer as MRI's do. See <see cref="RubyModule.HideConstant"/>.
+        /// </summary>
+        [RubyMethod("__hide_constant__", RubyMethodAttributes.PrivateInstance)]
+        public static RubyModule/*!*/ HideConstant(ConversionStorage<string>/*!*/ stringCast, RubyModule/*!*/ self,
+            [NotNull]params object[]/*!*/ constantNames) {
+            foreach (var name in ConstantNamesToChange(stringCast, self, "__hide_constant__", constantNames)) {
+                self.HideConstant(name);
+            }
+            return self;
+        }
+
+        private static bool IsHiddenConstant(RubyModule/*!*/ owner, string/*!*/ name, bool inherit) {
+            // the common case, a name no module hid, without the lock:
+            if (!owner.Context.MayBeHiddenConstant(name)) {
+                return false;
+            }
+            if (!inherit) {
+                return owner.IsHiddenConstant(name);
+            }
+            using (owner.Context.ClassHierarchyLocker()) {
+                return owner.IsHiddenConstantInAncestors(name);
+            }
+        }
+
+        // public since Ruby 3.0
+        [RubyMethod("public_constant")]
+        public static RubyModule/*!*/ PublicConstant(ConversionStorage<string>/*!*/ stringCast, RubyModule/*!*/ self,
+            [NotNull]params object[]/*!*/ constantNames) {
+            foreach (var name in ConstantNamesToChange(stringCast, self, "public_constant", constantNames)) {
+                self.SetConstantVisibility(name, false);
+            }
+            return self;
+        }
+
+        // public since Ruby 3.0
+        [RubyMethod("deprecate_constant")]
+        public static RubyModule/*!*/ DeprecateConstant(ConversionStorage<string>/*!*/ stringCast, RubyModule/*!*/ self,
+            [NotNull]params object[]/*!*/ constantNames) {
+            foreach (var name in ConstantNamesToChange(stringCast, self, "deprecate_constant", constantNames)) {
+                self.SetConstantDeprecated(name);
+            }
+            return self;
+        }
+
+        /// <summary>
+        /// MRI's set_const_visibility / rb_mod_deprecate_constant: a frozen module refuses first,
+        /// even with no names; no names at all is a -W warning; a name that is not one of the
+        /// module's constants - a lower-case one included - is "constant M::x not defined",
+        /// which the RubyModule setters raise.
+        /// </summary>
+        private static string/*!*/[]/*!*/ ConstantNamesToChange(ConversionStorage<string>/*!*/ stringCast, RubyModule/*!*/ self,
+            string/*!*/ methodName, object[]/*!*/ constantNames) {
+            RequireMutable(self);
+            if (constantNames.Length == 0) {
+                self.Context.ReportWarning(methodName + " with no argument is just ignored", true);
+            }
+            var names = new string[constantNames.Length];
+            for (int i = 0; i < names.Length; i++) {
+                names[i] = Protocols.CastToSymbol(stringCast, constantNames[i]);
+                // a hidden constant is not there, except to __hide_constant__ itself (a prelude loaded again)
+                if (methodName != "__hide_constant__" && self.IsHiddenConstant(names[i])) {
+                    throw RubyExceptions.CreateNameError(String.Format("constant {0}::{1} not defined",
+                        self.Name, names[i]));
+                }
+            }
+            return names;
+        }
+
+        // MRI's rb_mod_const_missing pops its own frame: the NameError is raised where the constant was named
         [RubyMethod("const_missing")]
+        [RubyStackTraceHidden]
         public static object ConstantMissing(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name) {
             return self.Context.ResolveMissingConstant(self, name);
+        }
+
+        /// <summary>
+        /// Splits a constant name given to const_get/const_source_location into its path segments.
+        /// A Symbol must be a plain constant name; a String may be a scoped path ("A::B") and may be
+        /// rooted at Object ("::A::B"), in which case <paramref name="isTopLevel"/> is set.
+        /// </summary>
+        /// <summary>
+        /// A constant name given to const_get, const_defined? or const_source_location: a Symbol
+        /// is a single constant name, a String may be a scoped path ("A::B"), rooted at Object
+        /// ("::A::B"). MRI's loop (rb_mod_const_get) checks the path as it walks it, so the
+        /// errors come in its order: a malformed path ("A::", "A:B", "") is a wrong constant name
+        /// naming the whole path, a segment that is not a constant name ("A::b") names just that
+        /// segment, and either is only raised once the segments before it have been looked up.
+        /// </summary>
+        private sealed class ConstantPath {
+            private readonly string/*!*/ _name;
+            // the first segment, and all of them once there is more than one: a plain name - const_get(:Foo), the common
+            // case - takes no list
+            private string _first;
+            private List<string> _segments;
+            // the segment before whose lookup the whole path is reported as malformed, or -1
+            private readonly int _malformedAt = -1;
+
+            public bool IsTopLevel { get; }
+            public int Count => (_segments != null) ? _segments.Count : 1;
+            public string/*!*/ this[int index] => (_segments != null) ? _segments[index] : _first;
+
+            private void Add(string/*!*/ segment) {
+                if (_first == null) {
+                    _first = segment;
+                } else {
+                    (_segments ??= new List<string> { _first }).Add(segment);
+                }
+            }
+
+            public ConstantPath(ConversionStorage<MutableString>/*!*/ stringCast, object name) {
+                var symbol = name as RubySymbol;
+                if (symbol != null) {
+                    _name = _first = symbol.ToString();
+                    return;
+                }
+
+                _name = (name as MutableString ?? Protocols.CastToString(stringCast, name)).ToString();
+                int p = 0, end = _name.Length;
+                if (end > 2 && _name.StartsWith("::", StringComparison.Ordinal)) {
+                    IsTopLevel = true;
+                    p = 2;
+                }
+                if (p == end) {
+                    _malformedAt = 0;
+                }
+                while (p < end) {
+                    int start = p;
+                    while (p < end && _name[p] != ':') {
+                        p++;
+                    }
+                    Add(_name.Substring(start, p - start));
+                    if (start == p || p < end && (p + 2 >= end || _name[p + 1] != ':')) {
+                        _malformedAt = Count - 1;
+                        break;
+                    }
+                    p += 2;
+                }
+            }
+
+            /// <summary>
+            /// Checks segment <paramref name="index"/> before it is looked up and returns the
+            /// module to look it up in: <paramref name="owner"/> for the first segment, the value
+            /// the previous segment named for the others.
+            /// </summary>
+            public RubyModule/*!*/ Enter(int index, RubyModule/*!*/ owner, object previous) {
+                if (index == _malformedAt) {
+                    throw RubyExceptions.CreateNameError(String.Format("wrong constant name {0}", _name));
+                }
+                if (index > 0) {
+                    owner = previous as RubyModule;
+                    if (owner == null) {
+                        throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", _name);
+                    }
+                }
+                if (!Tokenizer.IsConstantName(this[index])) {
+                    throw RubyExceptions.CreateNameError(String.Format("wrong constant name {0}", this[index]));
+                }
+                return owner;
+            }
+        }
+
+        /// <summary>
+        /// A segment after the first of a scoped name is looked up with rb_const_get_from: in the
+        /// module and its ancestors, but only as far as Object - so "C::String" is not String even
+        /// though Object is an ancestor of C. True if <paramref name="name"/> is found before that.
+        /// </summary>
+        private static bool IsVisibleFromScope(RubyModule/*!*/ owner, string/*!*/ name) {
+            if (owner.IsObjectClass) {
+                return true;
+            }
+            bool found = false;
+            using (owner.Context.ClassHierarchyLocker()) {
+                owner.ForEachConstant(true, (module, constantName, value) =>
+                    // a null name announces the next module: stop on reaching Object
+                    constantName == null ? module.IsObjectClass : (found = constantName == name)
+                );
+            }
+            return found;
+        }
+
+        // thread-safe:
+        [RubyMethod("const_source_location")]
+        public static object GetConstantSourceLocation(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
+            RubyModule/*!*/ self, object constantName) {
+            return GetConstantSourceLocation(stringCast, scope, self, constantName, true);
+        }
+
+        // thread-safe:
+        [RubyMethod("const_source_location")]
+        public static object GetConstantSourceLocation(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
+            RubyModule/*!*/ self, object constantName, bool inherit) {
+
+            var path = new ConstantPath(stringCast, constantName);
+            var context = self.Context;
+
+            RubyModule owner = path.IsTopLevel ? context.ObjectClass : self;
+            bool lookupObject = inherit && !path.IsTopLevel;
+
+            // Resolve everything but the last segment; only the last one's location is reported.
+            object value = null;
+            int last = path.Count - 1;
+            for (int i = 0; i < last; i++) {
+                owner = path.Enter(i, owner, value);
+                bool found = inherit
+                    ? owner.TryResolveConstant(scope.GlobalScope, path[i], out value) && (i == 0 || IsVisibleFromScope(owner, path[i]))
+                    : owner.TryGetConstant(scope.GlobalScope, path[i], out value);
+
+                if (!found && lookupObject && !owner.IsObjectClass) {
+                    found = context.ObjectClass.TryResolveConstant(scope.GlobalScope, path[i], out value);
+                }
+                lookupObject = false;
+
+                if (!found) {
+                    return null;
+                }
+                inherit = true;
+            }
+
+            owner = path.Enter(last, owner, value);
+            string lastName = path[last];
+            if (last > 0 && !IsVisibleFromScope(owner, lastName)) {
+                return null;
+            }
+            RubyModule definingModule = FindConstantOwner(context, scope, owner, lastName, inherit, lookupObject);
+            if (definingModule == null || definingModule.IsHiddenConstant(lastName)) {
+                return null;
+            }
+
+            string sourcePath;
+            int sourceLine;
+            var result = new RubyArray();
+            if (definingModule.TryGetConstantLocation(lastName, out sourcePath, out sourceLine)) {
+                result.Add(context.EncodePath(sourcePath));
+                result.Add(sourceLine);
+            }
+            return result;
+        }
+
+        // Returns the module in the lookup path of <paramref name="owner"/> that defines the constant, or null.
+        private static RubyModule FindConstantOwner(RubyContext/*!*/ context, RubyScope/*!*/ scope, RubyModule/*!*/ owner,
+            string/*!*/ name, bool inherit, bool lookupObject) {
+
+            RubyModule result = null;
+            using (context.ClassHierarchyLocker()) {
+                owner.ForEachConstant(inherit, (module, constantName, value) => {
+                    if (constantName == name) {
+                        result = module;
+                        return true;
+                    }
+                    return false;
+                });
+            }
+
+            if (result == null && lookupObject && !owner.IsObjectClass) {
+                // A Module's lookup path ends at Object for reads (MRI searches Object last for modules too).
+                using (context.ClassHierarchyLocker()) {
+                    context.ObjectClass.ForEachConstant(true, (module, constantName, value) => {
+                        if (constantName == name) {
+                            result = module;
+                            return true;
+                        }
+                        return false;
+                    });
+                }
+            }
+
+            return result;
+        }
+
+        [RubyMethod("const_added", RubyMethodAttributes.PrivateInstance | RubyMethodAttributes.Empty)]
+        public static void ConstantAdded(RubyModule/*!*/ self, object name) {
+            // nop
         }
 
         #endregion
@@ -820,24 +1701,46 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         [RubyMethod("autoload")]
-        public static void SetAutoloadedConstant(RubyModule/*!*/ self,
-            [DefaultProtocol, NotNull]string/*!*/ constantName, [DefaultProtocol, NotNull]MutableString/*!*/ path) {
+        public static void SetAutoloadedConstant(ConversionStorage<MutableString>/*!*/ toPath, RubyScope/*!*/ scope, RubyModule/*!*/ self,
+            [DefaultProtocol, NotNull]string/*!*/ constantName, object pathArg) {
 
             RubyUtils.CheckConstantName(constantName);
+            MutableString path = Protocols.CastToPath(toPath, pathArg);
             if (path.IsEmpty) {
                 throw RubyExceptions.CreateArgumentError("empty file name");
             }
 
             self.SetAutoloadedConstant(constantName, path);
+
+            string sourcePath;
+            int sourceLine;
+            if (RubyUtils.TryGetCallerSourceLocation(scope, out sourcePath, out sourceLine)) {
+                self.SetConstantLocation(constantName, sourcePath, sourceLine);
+            }
+
+            self.ConstantAdded(constantName);
         }
 
         // thread-safe:
         [RubyMethod("autoload?")]
         public static MutableString GetAutoloadedConstantPath(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ constantName) {
-            return self.GetAutoloadedConstantPath(constantName);
+            return self.GetAutoloadedConstantPath(constantName, true);
+        }
+
+        // thread-safe:
+        [RubyMethod("autoload?")]
+        public static MutableString GetAutoloadedConstantPath(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ constantName,
+            bool inherit) {
+            return self.GetAutoloadedConstantPath(constantName, inherit);
         }
 
         #endregion
+
+        /// <summary>Ruby 2.1's Module#singleton_class?.</summary>
+        [RubyMethod("singleton_class?")]
+        public static bool IsSingletonClass(RubyModule/*!*/ self) {
+            return self.IsSingletonClass && !self.IsDummySingletonClass;
+        }
 
         #region {private_|protected_|public_|}instance_methods (thread-safe)
 
@@ -889,24 +1792,67 @@ namespace IronRuby.Builtins {
             return GetMethods(self, inherited, RubyMethodAttributes.PublicInstance);
         }
 
+        // thread-safe:
+        // Names that this module (not its ancestors) undefines with undef_method.
+        [RubyMethod("undefined_instance_methods")]
+        public static RubyArray/*!*/ GetUndefinedInstanceMethods(RubyModule/*!*/ self) {
+            var result = new RubyArray();
+            using (self.Context.ClassHierarchyLocker()) {
+                self.EnumerateMethods((module, name, member) => {
+                    if (member.IsUndefined) {
+                        result.Add(self.Context.StringifyIdentifier(name));
+                    }
+                    return false;
+                });
+            }
+            return result;
+        }
+
         internal static RubyArray/*!*/ GetMethods(RubyModule/*!*/ self, bool inherited, RubyMethodAttributes attributes) {
             return GetMethods(self, inherited, attributes, null);
         }
 
         internal static RubyArray/*!*/ GetMethods(RubyModule/*!*/ self, bool inherited, RubyMethodAttributes attributes,
             IEnumerable<string> foreignMembers) {
+            return GetMethods(self, inherited, attributes, foreignMembers, false);
+        }
+
+        // objectMethods: see RubyModule.ForEachMember
+        internal static RubyArray/*!*/ GetMethods(RubyModule/*!*/ self, bool inherited, RubyMethodAttributes attributes,
+            IEnumerable<string> foreignMembers, bool objectMethods) {
 
             var result = new RubyArray();
+            // A CLR member is listed under its mangled name, which a Ruby method further up the ancestors (Enumerable#count
+            // behind List#Count) can share. Calls go to the first one, so only that one is listed.
+            var listed = new HashSet<string>();
             using (self.Context.ClassHierarchyLocker()) {
-                self.ForEachMember(inherited, attributes, foreignMembers, (name, module, member) => {
+                self.ForEachMember(inherited, attributes, foreignMembers, objectMethods, (name, module, member) => {
+                    // (a foreign object's dynamic member is listed whatever its class is)
+                    if (RubyModule.IsUnlisted(module, name, member) && !(foreignMembers is ICollection<string> foreign && foreign.Contains(name))) {
+                        return;
+                    }
                     if (member.IsInteropMember && (module.Restrictions & ModuleRestrictions.NoNameMapping) == 0 && RubyUtils.HasMangledName(name)) {
                         if (Tokenizer.IsMethodName(name) || Tokenizer.IsOperatorName(name)) {
-                            result.Add(new ClrName(name));
+                            var clrName = new ClrName(name);
+                            if (listed.Add(clrName.MangledName)) {
+                                result.Add(clrName);
+                            }
                         }
-                    } else {
+                    } else if (listed.Add(name)) {
                         result.Add(self.Context.StringifyIdentifier(name));
                     }
                 });
+            }
+
+            // A refinement's superclass is, in effect, the class it refines: what that class has
+            // is listed after the refinement's own methods.
+            if (inherited && self.IsRefinement) {
+                var seen = new HashSet<object>(result);
+                foreach (object name in GetMethods(self.RefinedModule, true, attributes, foreignMembers, objectMethods)) {
+                    if (seen.Add(name)) {
+                        result.Add(name);
+                    }
+                }
             }
             return result;
         }
@@ -915,32 +1861,51 @@ namespace IronRuby.Builtins {
 
         #region {private_|protected_|public_|}method_defined? (thread-safe)
 
+        // The visibility a method_defined? query sees for the name, or None if it has no definition. It is
+        // the visibility at the name's entry point - the forwarder's, for a `public :m' re-exporting an
+        // inherited m - and, as in MRI (check_definition_visibility), a not-implemented method has none.
+        // inherit = false counts only a definition in the module itself, not in a prepended module.
+        private static RubyMethodVisibility GetDefinitionVisibility(ConversionStorage<string>/*!*/ stringCast, RubyModule/*!*/ self,
+            object name, bool inherit) {
+
+            // MRI raises TypeError for anything that is not a Symbol or a String; the
+            // [DefaultProtocol]string binding quietly turned an Integer into its digits.
+            string methodName = Protocols.CastToSymbol(stringCast, name);
+            var method = inherit ? self.GetMethodLookup(methodName) : self.GetOwnMethodLookup(methodName);
+            if (!method.Found) {
+                return RubyMethodVisibility.None;
+            }
+            var libraryMethod = method.Info as RubyLibraryMethodInfo;
+            return (libraryMethod != null && libraryMethod.IsNotImplemented) ? RubyMethodVisibility.None : method.Visibility;
+        }
+
         // thread-safe:
         [RubyMethod("method_defined?")]
-        public static bool MethodDefined(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
-            RubyMemberInfo method = self.ResolveMethod(methodName, VisibilityContext.AllVisible).Info;
-            return method != null && method.Visibility != RubyMethodVisibility.Private;
+        public static bool MethodDefined(ConversionStorage<string>/*!*/ stringCast, RubyModule/*!*/ self, object name,
+            [DefaultParameterValue(true)]bool inherit) {
+            var visibility = GetDefinitionVisibility(stringCast, self, name, inherit);
+            return visibility == RubyMethodVisibility.Public || visibility == RubyMethodVisibility.Protected;
         }
 
         // thread-safe:
         [RubyMethod("private_method_defined?")]
-        public static bool PrivateMethodDefined(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
-            RubyMemberInfo method = self.ResolveMethod(methodName, VisibilityContext.AllVisible).Info;
-            return method != null && method.Visibility == RubyMethodVisibility.Private;
+        public static bool PrivateMethodDefined(ConversionStorage<string>/*!*/ stringCast, RubyModule/*!*/ self, object name,
+            [DefaultParameterValue(true)]bool inherit) {
+            return GetDefinitionVisibility(stringCast, self, name, inherit) == RubyMethodVisibility.Private;
         }
 
         // thread-safe:
         [RubyMethod("protected_method_defined?")]
-        public static bool ProtectedMethodDefined(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
-            RubyMemberInfo method = self.ResolveMethod(methodName, VisibilityContext.AllVisible).Info;
-            return method != null && method.Visibility == RubyMethodVisibility.Protected;
+        public static bool ProtectedMethodDefined(ConversionStorage<string>/*!*/ stringCast, RubyModule/*!*/ self, object name,
+            [DefaultParameterValue(true)]bool inherit) {
+            return GetDefinitionVisibility(stringCast, self, name, inherit) == RubyMethodVisibility.Protected;
         }
 
         // thread-safe:
         [RubyMethod("public_method_defined?")]
-        public static bool PublicMethodDefined(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
-            RubyMemberInfo method = self.ResolveMethod(methodName, VisibilityContext.AllVisible).Info;
-            return method != null && method.Visibility == RubyMethodVisibility.Public;
+        public static bool PublicMethodDefined(ConversionStorage<string>/*!*/ stringCast, RubyModule/*!*/ self, object name,
+            [DefaultParameterValue(true)]bool inherit) {
+            return GetDefinitionVisibility(stringCast, self, name, inherit) == RubyMethodVisibility.Public;
         }
 
         #endregion
@@ -949,8 +1914,12 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         [RubyMethod("instance_method")]
-        public static UnboundMethod/*!*/ GetInstanceMethod(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
-            RubyMemberInfo method = self.ResolveMethod(methodName, VisibilityContext.AllVisible).Info;
+        public static UnboundMethod/*!*/ GetInstanceMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self,
+            [DefaultProtocol, NotNull]string/*!*/ methodName) {
+
+            // A refinement active where this is called is active for it too: MRI answers the
+            // refined method, whose #owner is the refinement.
+            RubyMemberInfo method = self.ResolveMethodWithRefinements(methodName, VisibilityContext.AllVisible, scope).Info;
             if (method == null) {
                 throw RubyExceptions.CreateUndefinedMethodError(self, methodName);
             }
@@ -964,23 +1933,80 @@ namespace IronRuby.Builtins {
             return new UnboundMethod(constraint, methodName, method);
         }
 
+        // thread-safe:
+        [RubyMethod("public_instance_method")]
+        public static UnboundMethod/*!*/ GetPublicInstanceMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self,
+            [DefaultProtocol, NotNull]string/*!*/ methodName) {
+
+            RubyMemberInfo method = self.ResolveMethodWithRefinements(methodName, VisibilityContext.AllVisible, scope).Info;
+            if (method == null) {
+                throw RubyExceptions.CreateUndefinedMethodError(self, methodName);
+            }
+            if (method.Visibility != RubyMethodVisibility.Public) {
+                // the method is there, just not public - which is what MRI says
+                throw RubyExceptions.CreateNameError("method '{0}' for {1} '{2}' is {3}", methodName,
+                    self.IsClass ? "class" : "module", self.GetDisplayName(scope.RubyContext, false),
+                    method.Visibility == RubyMethodVisibility.Private ? "private" : "protected");
+            }
+
+            return GetInstanceMethod(scope, self, methodName);
+        }
+
         #endregion
 
         #region to_s, name, freeze
 
         [RubyMethod("to_s")]
+        [RubyMethod("inspect")]
         public static MutableString/*!*/ ToS(RubyContext/*!*/ context, RubyModule/*!*/ self) {
             return self.GetDisplayName(context, false);
         }
 
         [RubyMethod("name")]
-        public static MutableString/*!*/ GetName(RubyContext/*!*/ context, RubyModule/*!*/ self) {
-            return self.GetDisplayName(context, true);
+        public static MutableString GetName(RubyContext/*!*/ context, RubyModule/*!*/ self) {
+            return self.GetNameString(context);
         }
 
         [RubyMethod("freeze")]
         public static RubyModule/*!*/ Freeze(RubyContext/*!*/ context, RubyModule/*!*/ self) {
             self.Freeze();
+            return self;
+        }
+
+        // True if the string is a constant path ("A", "A::B", "::A::B"), which set_temporary_name rejects
+        // to keep temporary names distinguishable from real ones.
+        private static bool IsConstantPath(string/*!*/ name) {
+            if (name.StartsWith("::", StringComparison.Ordinal)) {
+                name = name.Substring(2);
+            }
+            foreach (string segment in name.Split(new[] { "::" }, StringSplitOptions.None)) {
+                if (!Tokenizer.IsConstantName(segment)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        [RubyMethod("set_temporary_name")]
+        public static RubyModule/*!*/ SetTemporaryName(RubyContext/*!*/ context, RubyModule/*!*/ self, [DefaultProtocol]MutableString name) {
+            if (self.HasPermanentName) {
+                throw RubyExceptions.CreateRuntimeError("can't change permanent name");
+            }
+
+            if (name == null) {
+                self.SetName(null, false);
+                return self;
+            }
+
+            string str = name.ConvertToString();
+            if (str.Length == 0) {
+                throw RubyExceptions.CreateArgumentError("empty class/module name");
+            }
+            if (IsConstantPath(str)) {
+                throw RubyExceptions.CreateArgumentError("the temporary name must not be a constant path to avoid confusion");
+            }
+
+            self.SetName(str, false);
             return self;
         }
 
@@ -999,7 +2025,7 @@ namespace IronRuby.Builtins {
                 return self.TypeTracker != null ? self.Context.GetClass(self.TypeTracker.Type.MakeByRefType()) : null;
             } catch (Exception) {
                 throw RubyExceptions.CreateTypeError(
-                    "Cannot create by-ref type for `{0}'", self.Context.GetTypeName(self.TypeTracker.Type, true)
+                    "Cannot create by-ref type for '{0}'", self.Context.GetTypeName(self.TypeTracker.Type, true)
                 );
             }
         }
@@ -1021,25 +2047,25 @@ namespace IronRuby.Builtins {
                     arrayType = elementType.MakeArrayType();
                 } catch (Exception) {
                     throw RubyExceptions.CreateTypeError(
-                        "Cannot create array type for `{0}'", self.Context.GetTypeName(elementType, true)
+                        "Cannot create array type for '{0}'", self.Context.GetTypeName(elementType, true)
                     );
                 }
                 return self.Context.GetModule(arrayType);
             }
 
-            if (!type.IsGenericTypeDefinition()) {
+            if (!type.IsGenericTypeDefinition) {
                 if (provided > 0) {
-                    throw RubyExceptions.CreateArgumentError("`{0}' is not a generic type definition", self.Name);
+                    throw RubyExceptions.CreateArgumentError("'{0}' is not a generic type definition", self.Name);
                 }
                 return self;
             }
 
             int required = type.GetGenericArguments().Length;
             if (required != provided) {
-                throw RubyExceptions.CreateArgumentError("Type `{0}' requires {1} generic type arguments, {2} provided", self.Name, required, provided);
+                throw RubyExceptions.CreateArgumentError("Type '{0}' requires {1} generic type arguments, {2} provided", self.Name, required, provided);
             }
 
-            Type concreteType = type.MakeGenericType(Protocols.ToTypes(self.Context, typeArgs));
+            Type concreteType = Protocols.MakeGenericType(self.Context, type, self.Name, typeArgs);
             return self.Context.GetModule(concreteType);
         }
 
@@ -1047,20 +2073,20 @@ namespace IronRuby.Builtins {
         [RubyMethod("[]")]
         public static RubyModule/*!*/ Of(RubyModule/*!*/ self, int genericArity) {
             if (self.TypeTracker == null) {
-                throw RubyExceptions.CreateArgumentError("`{0}' is not a type", self.Name);
+                throw RubyExceptions.CreateArgumentError("'{0}' is not a type", self.Name);
             }
 
             Type type = self.TypeTracker.Type;
 
-            if (!type.IsGenericTypeDefinition()) {
+            if (!type.IsGenericTypeDefinition) {
                 if (genericArity > 0) {
-                    throw RubyExceptions.CreateArgumentError("`{0}' is not a generic type definition", self.Name);
+                    throw RubyExceptions.CreateArgumentError("'{0}' is not a generic type definition", self.Name);
                 }
                 return self;
             }
             
             if (type.GetGenericArguments().Length != genericArity) {
-                throw RubyExceptions.CreateArgumentError("`{0}' does not have generic arity {1}", self.Name, genericArity);
+                throw RubyExceptions.CreateArgumentError("'{0}' does not have generic arity {1}", self.Name, genericArity);
             }
 
             return self;

@@ -14,41 +14,32 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections.Generic;
-using System.Text;
 using System.Threading;
 using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Runtime {
     /// <summary>
-    /// TODO: use ReaderWriterLockSlim on CLR4?
     /// Queryable recursive lock.
     /// </summary>
     internal sealed class CheckedMonitor {
-        private int _locked;
-
         internal void Enter(ref bool lockTaken) {
-            try {
-                MonitorUtils.Enter(this, ref lockTaken);
-            } finally {
-                if (lockTaken) {
-                        _locked++;
-                }
-            }
+            MonitorUtils.Enter(this, ref lockTaken);
         }
 
         internal void Exit(ref bool lockTaken) {
-            try {
-                MonitorUtils.Exit(this, ref lockTaken);
-            } finally {
-                if (!lockTaken) {
-                    _locked--;
-                }
-            }
+            MonitorUtils.Exit(this, ref lockTaken);
         }
 
+        /// <summary>
+        /// True if the calling thread holds this lock.  Ask the monitor itself rather than keeping a
+        /// count on the side: a counter maintained around Enter/Exit is written by the leaving thread
+        /// after it has already released the monitor, so two threads handing the lock over can lose one
+        /// of the two updates and leave the count at zero while a thread is demonstrably inside.  It
+        /// also answered for any thread rather than the asking one, which is not the question callers
+        /// are asking.
+        /// </summary>
         public bool IsLocked {
-            get { return _locked > 0; }
+            get { return Monitor.IsEntered(this); }
         }
 
         public IDisposable/*!*/ CreateLocker() {

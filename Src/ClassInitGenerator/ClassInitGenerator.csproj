@@ -1,42 +1,16 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
-<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0">
-  <Import Project="$(ProjectDir)..\..\Build\Common.proj" />
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <SchemaVersion>2.0</SchemaVersion>
-    <ProjectGuid>{166940A1-2C91-4BD0-B72B-A517FBD8BF0B}</ProjectGuid>
     <OutputType>Exe</OutputType>
-    <AppDesignerFolder>Properties</AppDesignerFolder>
-    <RootNamespace>ClassInitGenerator</RootNamespace>
+    <TargetFrameworks>$(IronRubyTargetFrameworks)</TargetFrameworks>
     <AssemblyName>ClassInitGenerator</AssemblyName>
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'v2Debug|AnyCPU' ">
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'v2Release|AnyCPU' ">
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <RootNamespace>ClassInitGenerator</RootNamespace>
+    <Nullable>disable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <Reference Include="System.Data" />
-    <Reference Include="System.Xml" />
+    <ProjectReference Include="..\Ruby\Ruby.csproj" />
+    <ProjectReference Include="..\Libraries\IronRuby.Libraries.csproj" />
+    <ProjectReference Include="..\Libraries.Yaml\IronRuby.Libraries.Yaml.csproj" />
+    <ProjectReference Include="$(DlrSourceDir)\Microsoft.Scripting\Microsoft.Scripting.csproj" />
+    <ProjectReference Include="$(DlrSourceDir)\Microsoft.Dynamic\Microsoft.Dynamic.csproj" />
   </ItemGroup>
-  <ItemGroup>
-    <Compile Include="ReflectionCacheGenerator.cs" />
-    <Compile Include="Libraries\InitGenerator.cs" />
-    <Compile Include="Libraries\LibraryDef.cs" />
-    <Compile Include="Generator.cs" />
-    <Compile Include="Properties\AssemblyInfo.cs" />
-  </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\Ruby\Ruby.csproj">
-      <Project>{7F6984B4-EE6D-4E6F-ABB1-E210D7DC4FDD}</Project>
-      <Name>Ruby</Name>
-    </ProjectReference>
-  </ItemGroup>
-  <Import Project="$(CSharpTargets)" />
-  <Import Project="$(BeforeTargetFiles)" />
-  <Target Name="BeforeBuild" DependsOnTargets="$(BeforeTargets);GenerateCurrentVersion" />
-  <Import Project="$(AfterTargetFiles)" />
-  <Target Name="AfterBuild" DependsOnTargets="$(AfterTargets)" />
 </Project>

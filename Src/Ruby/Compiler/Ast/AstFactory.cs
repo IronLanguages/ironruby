@@ -13,16 +13,11 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Microsoft.Scripting.Ast;
@@ -41,8 +36,6 @@ namespace IronRuby.Compiler.Ast {
 
     public static class AstFactory {
 
-        internal static readonly MSA.Expression[] EmptyExpressions = new MSA.Expression[0];
-        internal static readonly MSA.ParameterExpression[] EmptyParameters = new MSA.ParameterExpression[0];
         internal static readonly MSA.Expression NullOfMutableString = Ast.Constant(null, typeof(MutableString));
         internal static readonly MSA.Expression NullOfProc = Ast.Constant(null, typeof(Proc));
         internal static readonly MSA.Expression True = Ast.Constant(ScriptingRuntimeHelpers.True);
@@ -109,7 +102,7 @@ namespace IronRuby.Compiler.Ast {
 
             // We prefer to peek inside the delegate and call the target method directly. However, we need to
             // exclude DynamicMethods since Delegate.Method returns a dummy MethodInfo, and we cannot emit a call to it.
-            if (methodInfo.DeclaringType == null || !methodInfo.DeclaringType.IsPublic() || !methodInfo.IsPublic) {
+            if (methodInfo.DeclaringType == null || !methodInfo.DeclaringType.IsPublic || !methodInfo.IsPublic) {
                 // do not inline:
                 return Ast.Call(AstUtils.Constant(method), method.GetType().GetMethod("Invoke"), arguments);
             } 

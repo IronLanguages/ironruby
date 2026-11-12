@@ -21,23 +21,74 @@ namespace IronRuby.StandardLibrary.FileControl {
     [RubyModule("Fcntl")]
     public class Fcntl {
 
+        // The platform's own commands: IO#fcntl hands them to fcntl(2) as they are. The first five
+        // are the same on every Unix; the record locks are not.
         [RubyConstant]
-        public const int F_SETFL = 0x01;
+        public const int F_DUPFD = 0;
 
         [RubyConstant]
-        public const int O_CREAT = 0x0100;
+        public const int F_GETFD = 1;
 
         [RubyConstant]
-        public const int O_EXCL = 0x0400;
+        public const int F_SETFD = 2;
 
         [RubyConstant]
-        public const int O_TRUNC = 0x0200;
+        public const int F_GETFL = 3;
 
         [RubyConstant]
-        public const int O_APPEND = 0x0008;
+        public const int F_SETFL = 4;
 
         [RubyConstant]
-        public const int O_NONBLOCK = 0x01;
+        public static readonly int F_GETLK = IOModeNative.Pick(5, 7, 11, 5);
+
+        [RubyConstant]
+        public static readonly int F_SETLK = IOModeNative.Pick(6, 8, 12, 6);
+
+        [RubyConstant]
+        public static readonly int F_SETLKW = IOModeNative.Pick(7, 9, 13, 7);
+
+        [RubyConstant]
+        public const int FD_CLOEXEC = 1;
+
+        [RubyConstant]
+        public static readonly int F_RDLCK = IOModeNative.Pick(0, 1, 1, 0);
+
+        [RubyConstant]
+        public static readonly int F_WRLCK = IOModeNative.Pick(1, 3, 3, 1);
+
+        [RubyConstant]
+        public const int F_UNLCK = 2;
+
+        // Linux only.
+        [RubyConstant]
+        public static readonly object F_GETPIPE_SZ = LibraryInitializer.PlatformConstant(IOModeNative.Pick(1032, 0, 0, 0));
+
+        [RubyConstant]
+        public static readonly object F_SETPIPE_SZ = LibraryInitializer.PlatformConstant(IOModeNative.Pick(1031, 0, 0, 0));
+
+        // The open(2) status flags, the platform's own values - fcntl(2) reads them back and
+        // F_SETFL sets them, so they are the same numbers File::Constants uses.
+        [RubyConstant]
+        public readonly static int O_CREAT = IOModeNative.CreateIfNotExists;
+
+        [RubyConstant]
+        public readonly static int O_EXCL = IOModeNative.ErrorIfExists;
+
+        [RubyConstant]
+        public readonly static int O_TRUNC = IOModeNative.Truncate;
+
+        [RubyConstant]
+        public readonly static int O_APPEND = IOModeNative.Append;
+
+        [RubyConstant]
+        public readonly static int O_NONBLOCK = IOModeNative.NonBlocking;
+
+        [RubyConstant]
+        public readonly static int O_NOCTTY = IOModeNative.NoControllingTerminal;
+
+        // MRI's Fcntl spells O_NONBLOCK twice, under its older name as well.
+        [RubyConstant]
+        public readonly static int O_NDELAY = IOModeNative.NonBlocking;
 
         [RubyConstant]
         public const int O_RDONLY = 0x0000;

@@ -13,11 +13,6 @@
  *
  * ***************************************************************************/
 
-using System;
-using Microsoft.Scripting;
-using Microsoft.Scripting.Runtime;
-using IronRuby.Compiler;
-using IronRuby.Compiler.Ast;
 
 namespace IronRuby.Tests {
 
@@ -140,7 +135,7 @@ def foo
 end     
 
 def test
-  l = lambda {
+  l = lambda { |i|
     puts(foo..false ? 'true' : 'false')
   }
   
@@ -215,16 +210,54 @@ false
 
         /// <summary>
         /// Block expressions propagate 'in-condition' property to the last statement.
+        /// A parenthesized statement list does not: its range is a Range (true..false: an ArgumentError),
+        /// and ruby -w warns about the literals in void context before it.
         /// </summary>
         public void RangeCondition2() {
-            AssertOutput(delegate() {
-                CompilerTest(@"
-puts((TRUE..FALSE) ? 'true' : 'false')
-puts(begin TRUE..FALSE end ? 'true' : 'false')
+            TestOutput(@"
+puts((true..false) ? 'true' : 'false')
+puts(begin true..false end ? 'true' : 'false')
 
-#puts((0;1;TRUE..FALSE) ? 'true' : 'false')   # TODO: literals are removed with warning
-");
-            }, @"
+begin
+  puts((0;1;true..false) ? 'true' : 'false')
+rescue ArgumentError => e
+  puts e.message
+end
+", @"
+true
+true
+bad value for range
+", 2);
+        }
+
+        /// <summary>
+        /// A range that contains itself: inspect writes "(... .. ...)" where it recurs and == and eql? answer
+        /// true there, as MRI's rb_exec_recursive does. All three overflowed the stack, which killed CRuby's
+        /// test_range.
+        /// </summary>
+        public void Range_Recursive1() {
+            TestOutput(@"
+class CyclicRange < Range
+  def <=>(other); true; end
+end
+x = CyclicRange.allocate; x.send(:initialize, x, 1)
+y = CyclicRange.allocate; y.send(:initialize, y, 1)
+z = CyclicRange.allocate; z.send(:initialize, z, :another)
+e = CyclicRange.allocate; e.send(:initialize, e, 1, true)
+p x, e
+p x == y, x.eql?(y), x == z, x.eql?(z)
+a = CyclicRange.allocate
+b = CyclicRange.allocate
+a.send(:initialize, b, 1)
+b.send(:initialize, a, 1)
+p a == b, a.eql?(b)
+", @"
+(... .. ...)..1
+(... ... ...)...1
+true
+true
+false
+false
 true
 true
 ");

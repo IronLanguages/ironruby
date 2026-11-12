@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>IronRuby wasm worker test page</title></head>
+<body>
+<pre id="log">booting worker...</pre>
+<script type="module">
+import { createIronRubyWorker } from '/ironruby-client.js';
+window.output = [];
+window.irReady = createIronRubyWorker({ onOutput: (fd, text) => window.output.push({ fd, text, t: performance.now() }) })
+  .then(ir => { window.ir = ir; document.getElementById('log').textContent = JSON.stringify(ir.bootInfo); return ir.bootInfo; });
+</script>
+</body></html>

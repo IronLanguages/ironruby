@@ -1,0 +1,111 @@
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs b/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs
+--- a/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs
+@@ -1542,6 +1542,11 @@
+         }
+ 
+         internal void CompileAsVoid(Expression expr) {
++            // The tree can be deeper than this thread's stack goes (see StackGuard).
++            if (!StackGuard.IsSufficient) {
++                StackGuard.RunOnFreshStack(() => CompileAsVoid(expr));
++                return;
++            }
+             bool pushLabelBlock = TryPushLabelBlock(expr);
+             int startingStackDepth = Instructions.CurrentStackDepth;
+             switch (expr.NodeType) {
+@@ -1673,6 +1678,11 @@
+         }
+ 
+         public void Compile(Expression expr) {
++            // The tree can be deeper than this thread's stack goes (see StackGuard).
++            if (!StackGuard.IsSufficient) {
++                StackGuard.RunOnFreshStack(() => Compile(expr));
++                return;
++            }
+             bool pushLabelBlock = TryPushLabelBlock(expr);
+             CompileNoLabelPush(expr);
+             if (pushLabelBlock) {
+diff --git a/src/core/Microsoft.Dynamic/Ast/FlowControlRewriter.cs b/src/core/Microsoft.Dynamic/Ast/FlowControlRewriter.cs
+--- a/src/core/Microsoft.Dynamic/Ast/FlowControlRewriter.cs
++++ b/src/core/Microsoft.Dynamic/Ast/FlowControlRewriter.cs
+@@ -134,6 +134,14 @@
+             return result;
+         }
+ 
++        public override Expression Visit(Expression node) {
++            // The tree can be deeper than this thread's stack goes (see StackGuard).
++            if (!StackGuard.IsSufficient) {
++                return StackGuard.RunOnFreshStack(() => base.Visit(node));
++            }
++            return base.Visit(node);
++        }
++
+         protected override Expression VisitExtension(Expression node) {
+             if (node is FinallyFlowControlExpression ffc) {
+                 // Unwrap nested finally flow expressions
+diff --git a/src/core/Microsoft.Dynamic/Utils/StackGuard.cs b/src/core/Microsoft.Dynamic/Utils/StackGuard.cs
+new file mode 100644
+--- /dev/null
++++ b/src/core/Microsoft.Dynamic/Utils/StackGuard.cs
+@@ -0,0 +1,61 @@
++// Licensed to the .NET Foundation under one or more agreements.
++// The .NET Foundation licenses this file to you under the Apache 2.0 License.
++// See the LICENSE file in the project root for more information.
++
++using System;
++using System.Globalization;
++using System.Runtime.CompilerServices;
++using System.Runtime.ExceptionServices;
++using System.Threading;
++
++namespace Microsoft.Scripting.Utils {
++    /// <summary>
++    /// Lets a recursive walk over an expression tree go as deep as the tree does. Trees nest as deeply as
++    /// the code they were made from, and a walk that recurses once (or several times) per level can run
++    /// out of stack long before the tree ends. A walk asks <see cref="IsSufficient"/> before it descends,
++    /// and when the stack is close to running out it carries on with <see cref="RunOnFreshStack{T}"/>: on a
++    /// new thread with a stack of its own, while this one waits. System.Linq.Expressions' own compilers
++    /// do the same (their StackGuard).
++    /// </summary>
++    internal static class StackGuard {
++        // Reserved, not committed: the pages are touched only as deep as the walk goes.
++        private const int FreshStackSize = 64 * 1024 * 1024;
++
++        /// <summary>
++        /// Whether there is room on this thread's stack for another level of a walk.
++        /// </summary>
++        public static bool IsSufficient => RuntimeHelpers.TryEnsureSufficientExecutionStack();
++
++        /// <summary>
++        /// Runs <paramref name="action"/> on a new thread with a fresh stack and waits for it, so that it looks
++        /// to the caller like an ordinary call: its result is returned and its exception rethrown with the
++        /// original stack trace.
++        /// </summary>
++        public static T RunOnFreshStack<T>(Func<T> action) {
++            T result = default;
++            ExceptionDispatchInfo error = null;
++            CultureInfo culture = CultureInfo.CurrentCulture, uiCulture = CultureInfo.CurrentUICulture;
++            var thread = new Thread(() => {
++                CultureInfo.CurrentCulture = culture;
++                CultureInfo.CurrentUICulture = uiCulture;
++                try {
++                    result = action();
++                } catch (Exception e) {
++                    error = ExceptionDispatchInfo.Capture(e);
++                }
++            }, FreshStackSize);
++            thread.Name = "DLR deep tree walk";
++            thread.Start();
++            thread.Join();
++            error?.Throw();
++            return result;
++        }
++
++        public static void RunOnFreshStack(Action action) {
++            RunOnFreshStack<object>(() => {
++                action();
++                return null;
++            });
++        }
++    }
++}

@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System.Collections.Generic;
 using Microsoft.Scripting;
@@ -25,7 +21,6 @@ using Microsoft.Scripting.Utils;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Compiler.Ast {
-    using Ast = MSA.Expression;
 
     public partial class IfExpression : Expression {
         private Expression/*!*/ _condition;
@@ -62,9 +57,18 @@ namespace IronRuby.Compiler.Ast {
             _elseIfClauses = elseIfClauses;
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
 
             MSA.Expression result;
+
+            // the :line hooks of elsif conditions are claimed in source order, before the clauses
+            // are transformed (last first)
+            var traces = new MSA.Expression[_elseIfClauses.Count];
+            for (int j = 0; j < _elseIfClauses.Count; j++) {
+                if (_elseIfClauses[j].IsElsif) {
+                    traces[j] = gen.TraceLine(_elseIfClauses[j].Location.Start.Line);
+                }
+            }
 
             int i = _elseIfClauses.Count - 1;
 
@@ -78,10 +82,20 @@ namespace IronRuby.Compiler.Ast {
             }
 
             while (i >= 0) {
+                var clause = _elseIfClauses[i];
+                var condition = clause.Condition.TransformCondition(gen, true);
+                if (traces[i] != null) {
+                    condition = MSA.Expression.Block(traces[i], condition);
+                }
+                if (clause.IsElsif) {
+                    // a statement on the elsif's line has no event of its own
+                    gen.SetLastTracedLine(clause.Location.Start.Line);
+                }
+
                 // emit: else (if (condition) body else result)
                 result = AstFactory.Condition(
-                    _elseIfClauses[i].Condition.TransformCondition(gen, true),
-                    gen.TransformStatementsToExpression(_elseIfClauses[i].Statements),
+                    condition,
+                    gen.TransformStatementsToExpression(clause.Statements),
                     result
                 );
                 i--;

@@ -14,7 +14,6 @@
  * ***************************************************************************/
 
 using System.Diagnostics;
-using System.Reflection;
 using IronRuby.Builtins;
 using Microsoft.Scripting.Actions.Calls;
 

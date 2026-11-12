@@ -15,32 +15,89 @@
 
 using System;
 using System.Reflection;
-using Microsoft.Scripting.Actions;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
 
 namespace IronRuby.Runtime.Calls {
     internal sealed class RubyCustomMethodInfo : RubyMemberInfo {
         private readonly RuleGenerator/*!*/ _ruleGenerator;
+        private readonly int? _arity;
 
         public RubyCustomMethodInfo(RuleGenerator/*!*/ ruleGenerator, RubyMemberFlags flags, RubyModule/*!*/ declaringModule)
+            : this(ruleGenerator, flags, declaringModule, null) {
+        }
+
+        /// <summary>
+        /// A rule generator with a fixed number of arguments - a Struct member's reader (0) or
+        /// writer (1) - reports it as its arity.
+        /// </summary>
+        public RubyCustomMethodInfo(RuleGenerator/*!*/ ruleGenerator, RubyMemberFlags flags, RubyModule/*!*/ declaringModule, int? arity)
             : base(flags, declaringModule) {
 
             Assert.NotNull(ruleGenerator, declaringModule);
             _ruleGenerator = ruleGenerator;
+            _arity = arity;
         }
 
         internal override void BuildCallNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ name) {
             _ruleGenerator(metaBuilder, args, name);
         }
 
+        // Class#new:
+        internal bool IsInstanceConstructor {
+            get { return _ruleGenerator.Method == ((RuleGenerator)RuleGenerators.InstanceConstructor).Method; }
+        }
+
+        // Method#call, #[] and #===:
+        internal bool IsMethodCall {
+            get { return _ruleGenerator.Method == ((RuleGenerator)RuleGenerators.MethodCall).Method; }
+        }
+
+        /// <summary>
+        /// Like a library method registered under several names, one rule generator registered
+        /// under several - Method#call, #[] and #=== - gets an info each, and Ruby considers the
+        /// names to be the same method.
+        /// </summary>
+        public override bool IsEquivalentTo(RubyMemberInfo/*!*/ other) {
+            if (ReferenceEquals(this, other)) {
+                return true;
+            }
+            var info = other as RubyCustomMethodInfo;
+            return info != null && Equals(_ruleGenerator, info._ruleGenerator);
+        }
+
+        public override int GetEquivalenceHashCode() {
+            return _ruleGenerator.GetHashCode();
+        }
+
         protected internal override RubyMemberInfo/*!*/ Copy(RubyMemberFlags flags, RubyModule/*!*/ module) {
-            return new RubyCustomMethodInfo(_ruleGenerator, flags, module);
+            return new RubyCustomMethodInfo(_ruleGenerator, flags, module, _arity);
+        }
+
+        /// <summary>
+        /// MRI reports a Struct member writer's parameter by the name `_` ([[:req, :_]]), and the reader's not at all.
+        /// </summary>
+        public override RubyArray/*!*/ GetRubyParameterArray() {
+            if (_arity == 1 && DeclaringModule != null) {
+                var context = DeclaringModule.Context;
+                return new RubyArray { new RubyArray { context.CreateAsciiSymbol("req"), context.CreateAsciiSymbol("_") } };
+            }
+            return base.GetRubyParameterArray();
         }
 
         public override MemberInfo/*!*/[]/*!*/ GetMembers() {
             return new MemberInfo[] { _ruleGenerator.GetMethodInfo() };
+        }
+
+        /// <summary>
+        /// A rule generator binds whatever arguments arrive - Class#new, Kernel#send, IO.open -
+        /// so its arity is -1, as MRI's is for those; Class#allocate alone takes nothing.
+        /// </summary>
+        public override int GetArity() {
+            if (_arity.HasValue) {
+                return _arity.Value;
+            }
+            return _ruleGenerator.GetMethodInfo().Name == "InstanceAllocator" ? 0 : -1;
         }
 
         public override RubyMemberInfo TrySelectOverload(Type/*!*/[]/*!*/ parameterTypes) {

@@ -1,4 +1,4 @@
-﻿/* ****************************************************************************
+/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -14,19 +14,17 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections.Generic;
-using System.Text;
 using IronRuby.Compiler.Generation;
-using Microsoft.Scripting.Math;
-using IronRuby.Builtins;
+using System.Numerics;
 using System.Diagnostics;
 using Microsoft.Scripting.Runtime;
+using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Runtime {
     [ReflectionCached]
     public struct IntegerValue : IEquatable<IntegerValue> {
         private int _fixnum;
-        private BigInteger _bignum;
+        private BigInteger? _bignum;
 
         public override bool Equals(object obj) {
             if (obj == null) {
@@ -37,8 +35,10 @@ namespace IronRuby.Runtime {
                 return Equals((IntegerValue)obj);
             } else if (obj is int) {
                 return Equals(new IntegerValue((int)obj));
+            } else if (obj is long) {
+                return Equals(new IntegerValue((BigInteger)(long)obj));
             } else if (obj is BigInteger) {
-                return Equals(new IntegerValue(obj as BigInteger));
+                return Equals(new IntegerValue((BigInteger)obj));
             }
 
             return false;
@@ -62,12 +62,12 @@ namespace IronRuby.Runtime {
         public BigInteger Bignum { 
             get {
                 Debug.Assert(!IsFixnum);
-                return _bignum;
+                return _bignum.Value;
             }
         }
 
         public bool IsFixnum { 
-            get { return ReferenceEquals(_bignum, null); } 
+            get { return !_bignum.HasValue; } 
         }
 
         public IntegerValue(int value) {
@@ -89,15 +89,17 @@ namespace IronRuby.Runtime {
         }
 
         public object/*!*/ ToObject() {
-            return (object)_bignum ?? ScriptingRuntimeHelpers.Int32ToObject(_fixnum);
+            // Normalized on the way out: a bignum that fits in an Int32 or an Int64 must come back
+            // as one, or two equal Integers would end up with different representations.
+            return _bignum.HasValue ? Protocols.Normalize(_bignum.Value) : ScriptingRuntimeHelpers.Int32ToObject(_fixnum);
         }
 
         public int ToInt32() {
             int result;
             if (IsFixnum) {
                 result = _fixnum;
-            } else if (!_bignum.AsInt32(out result)) {
-                throw RubyExceptions.CreateRangeError("Bignum too big to convert into 32-bit signed integer");
+            } else if (!_bignum.Value.AsInt32(out result)) {
+                throw RubyExceptions.CreateRangeError("Integer too big to convert into 32-bit signed integer");
             }
             return result;
         }
@@ -106,8 +108,8 @@ namespace IronRuby.Runtime {
             long result;
             if (IsFixnum) {
                 result = _fixnum;
-            } else if (!_bignum.AsInt64(out result)) {
-                throw RubyExceptions.CreateRangeError("Bignum too big to convert into 64-bit signed integer");
+            } else if (!_bignum.Value.AsInt64(out result)) {
+                throw RubyExceptions.CreateRangeError("Integer too big to convert into 64-bit signed integer");
             }
             return result;
         }
@@ -120,7 +122,7 @@ namespace IronRuby.Runtime {
             }
 
             uint u;
-            if (_bignum.AsUInt32(out u)) {
+            if (_bignum.Value.AsUInt32(out u)) {
                 return u;
             }
             throw RubyExceptions.CreateRangeError("bignum too big to convert into 32-bit unsigned integer");
@@ -128,8 +130,8 @@ namespace IronRuby.Runtime {
 
         public bool Equals(IntegerValue other) {
             if (_fixnum != other.Fixnum) return false;
-            if (ReferenceEquals(_bignum, null)) return ReferenceEquals(other._bignum, null);
-            return _bignum.Equals(other._bignum);
+            if (!_bignum.HasValue) return !other._bignum.HasValue;
+            return other._bignum.HasValue && _bignum.Value.Equals(other._bignum.Value);
         }
     }
 }

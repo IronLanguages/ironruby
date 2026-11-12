@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
@@ -59,12 +55,12 @@ namespace IronRuby.Compiler.Ast {
 
         internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen, MSA.Expression targetValue, bool tryRead) {
             Assert.NotNull(gen, targetValue);
-            return MethodCall.TransformRead(this, gen, false, "[]", targetValue, _arguments, _block, null, null);
+            return MethodCall.TransformRead(this, gen, _array is SelfReference, "[]", targetValue, _arguments, _block, null, null);
         }
 
         internal override MSA.Expression/*!*/ TransformWrite(AstGenerator/*!*/ gen, MSA.Expression target, MSA.Expression/*!*/ rightValue) {
             Assert.NotNull(target);
-            return MethodCall.TransformRead(this, gen, _array.NodeType == NodeTypes.SelfReference, "[]=", target, _arguments, _block, null, rightValue);
+            return MethodCall.TransformRead(this, gen, _array is SelfReference, "[]=", target, _arguments, _block, null, rightValue);
         }
     }
 

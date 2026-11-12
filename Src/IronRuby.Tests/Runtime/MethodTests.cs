@@ -14,7 +14,9 @@
  * ***************************************************************************/
 
 using System;
-using IronRuby.Runtime;
+using System.Runtime.CompilerServices;
+using IronRuby.Builtins;
+using IronRuby.Runtime.Calls;
 
 namespace IronRuby.Tests {
     public partial class Tests {
@@ -22,7 +24,7 @@ namespace IronRuby.Tests {
             TestOutput(@"
 puts nil
 ", 
-            @"nil");
+            @"");
         }
 
         public void SimpleCall2() {
@@ -45,7 +47,7 @@ puts y
 x = 123
 puts x
 ", @"
-nil
+
 123
 ");
 
@@ -120,10 +122,10 @@ foo(1,*[2,3,4])
 foo(1,*[2,3],*[4,5,6,7])
 foo(1,*[2,3,4,5,6,7,8,9,10,11,12])
 ", @"
-#<ArgumentError: wrong number of arguments (0 for 4)>
-#<ArgumentError: wrong number of arguments (1 for 4)>
-#<ArgumentError: wrong number of arguments (2 for 4)>
-#<ArgumentError: wrong number of arguments (3 for 4)>
+#<ArgumentError: wrong number of arguments (given 0, expected 4+)>
+#<ArgumentError: wrong number of arguments (given 1, expected 4+)>
+#<ArgumentError: wrong number of arguments (given 2, expected 4+)>
+#<ArgumentError: wrong number of arguments (given 3, expected 4+)>
 [1, 2, :c, :d, [], 3, 4]
 [1, 2, 3, :d, [], 4, 5]
 [1, 2, 3, 4, [], 5, 6]
@@ -164,7 +166,38 @@ self[1,*[],*[]] = 6
 [:a, :b, 1]
 ");
         }
-        
+
+        /// <summary>
+        /// The arity error of a method whose keywords were lowered onto a trailing parameter describes the
+        /// declared positionals and names the required keywords, like MRI; a keyword hash is not counted.
+        /// </summary>
+        public void MethodParamsKeywordArityError1() {
+            TestOutput(@"
+def f1(a, k:); end
+def f2(a, k: 1); end
+def f3(a, **nil); end
+def f4(a, k:, j:); end
+
+f1 rescue p $!
+f1(1, 2, 3) rescue p $!
+f1(1, 2, 3, k: 1) rescue p $!
+f1(*[]) rescue p $!
+f2 rescue p $!
+f2(1, 2, 3) rescue p $!
+f3 rescue p $!
+f4 rescue p $!
+", @"
+#<ArgumentError: wrong number of arguments (given 0, expected 1; required keyword: k)>
+#<ArgumentError: wrong number of arguments (given 3, expected 1; required keyword: k)>
+#<ArgumentError: wrong number of arguments (given 3, expected 1; required keyword: k)>
+#<ArgumentError: wrong number of arguments (given 0, expected 1; required keyword: k)>
+#<ArgumentError: wrong number of arguments (given 0, expected 1)>
+#<ArgumentError: wrong number of arguments (given 3, expected 1)>
+#<ArgumentError: wrong number of arguments (given 0, expected 1)>
+#<ArgumentError: wrong number of arguments (given 0, expected 1; required keywords: k, j)>
+");
+        }
+
         public void MethodCallCaching1() {
             AssertOutput(() => CompilerTest(@"
 module N
@@ -221,8 +254,9 @@ end
 
 C.new.foo
 ",
+// Since Ruby 3.0 a module included into M reaches the classes that already include M.
 @"
-error
+foo
 foo
 ");
         }
@@ -427,6 +461,146 @@ end
 obj.f");
         }
 
+        // a site of the binder, called on the target; whether it went through a LibraryDispatcher (rather than a rule)
+        private bool CallsThroughDispatcher(CallSite<Func<CallSite, object, object>>/*!*/ site, object target, string/*!*/ expected) {
+            object result = site.Target(site, target);
+            Assert(result.ToString() == expected);
+            return site.Target.Target is LibraryDispatcher;
+        }
+
+        /// <summary>
+        /// The first calls of a library method go through a LibraryDispatcher, which the binder caches for its other sites: its budget
+        /// is the dispatcher's, spent by every site that shares it. Once it is spent, the next call it would have taken - from any
+        /// site - gets the rule, which the binder caches for the other sites in turn. (Each site that shared a spent dispatcher used to
+        /// get a dispatcher of its own, shared and spent in turn by the next sites, for as long as they were called.)
+        /// </summary>
+        public void LibraryDispatcherBudget1() {
+            int saved = LibraryDispatcher.BudgetOverride;
+            LibraryDispatcher.BudgetOverride = 3;
+            try {
+                var binder = new RubyCallAction(Context, "swapcase", RubyCallSignature.Simple(0));
+                var sites = new CallSite<Func<CallSite, object, object>>[6];
+                for (int i = 0; i < sites.Length; i++) {
+                    sites[i] = CallSite<Func<CallSite, object, object>>.Create(binder);
+                }
+                var str = MutableString.CreateAscii("aB");
+                var sym = Context.CreateAsciiSymbol("aB");
+
+                // the dispatcher made for site 0, found by sites 1 and 2 in the binder's cache:
+                for (int i = 0; i < 3; i++) {
+                    Assert(CallsThroughDispatcher(sites[i], str, "Ab"));
+                }
+                Assert(LibraryDispatcher.IsHot(binder, str));
+                Assert(!LibraryDispatcher.IsHot(binder, sym));
+
+                // spent: the rule, for the site that made it too
+                Assert(!CallsThroughDispatcher(sites[3], str, "Ab"));
+                Assert(!CallsThroughDispatcher(sites[4], str, "Ab"));
+                Assert(!CallsThroughDispatcher(sites[0], str, "Ab"));
+                Assert(!CallsThroughDispatcher(sites[2], str, "Ab"));
+
+                // receivers of another class: a dispatcher of their own
+                Assert(CallsThroughDispatcher(sites[5], sym, "Ab"));
+                Assert(CallsThroughDispatcher(sites[3], sym, "Ab"));
+            } finally {
+                LibraryDispatcher.BudgetOverride = saved;
+            }
+        }
+
+        /// <summary>
+        /// A site that sees receivers of two classes in turn spends the dispatcher of each - not a fresh dispatcher each time its call
+        /// of one class follows a call of the other - and then calls rules.
+        /// </summary>
+        public void LibraryDispatcherBudget2() {
+            int saved = LibraryDispatcher.BudgetOverride;
+            LibraryDispatcher.BudgetOverride = 3;
+            try {
+                var binder = new RubyCallAction(Context, "swapcase", RubyCallSignature.Simple(0));
+                var site = CallSite<Func<CallSite, object, object>>.Create(binder);
+                var str = MutableString.CreateAscii("aB");
+                var sym = Context.CreateAsciiSymbol("aB");
+
+                for (int i = 0; i < 3; i++) {
+                    Assert(CallsThroughDispatcher(site, str, "Ab"));
+                    Assert(CallsThroughDispatcher(site, sym, "Ab"));
+                }
+                for (int i = 0; i < 20; i++) {
+                    Assert(!CallsThroughDispatcher(site, str, "Ab"));
+                    Assert(!CallsThroughDispatcher(site, sym, "Ab"));
+                }
+            } finally {
+                LibraryDispatcher.BudgetOverride = saved;
+            }
+        }
+
+        /// <summary>
+        /// A nil block chooses an overload of a library method that takes no block, where a block chooses one that does: the rule
+        /// bound for a nil block holds for nil blocks only. (It took later calls with a block too, and ignored the block.)
+        /// </summary>
+        public void LibraryMethodNilBlock1() {
+            int saved = LibraryDispatcher.BudgetOverride;
+            LibraryDispatcher.BudgetOverride = 0;
+            try {
+                TestOutput(@"
+f = ->(a, b) { a.sort_by(&b) }
+g = ->(a, b) { a.map(&b) }
+2.times do
+  p f.([2, 1], nil).class, g.([1], nil).class
+  b = proc { |v| -v }
+  p f.([1, 2], b), g.([1], b)
+end
+", @"
+Enumerator
+Enumerator
+[2, 1]
+[-1]
+Enumerator
+Enumerator
+[2, 1]
+[-1]
+");
+            } finally {
+                LibraryDispatcher.BudgetOverride = saved;
+            }
+        }
+
+        /// <summary>
+        /// The #coerce protocol asks an operand's own respond_to? first (rb_check_funcall). The coercion storage holds one site,
+        /// named by its first use: once a call of the site had made it the #coerce site, a later operand's respond_to? went
+        /// through it as coerce(:coerce) - a NoMethodError for an operand without #coerce, the wrong argument for one with it.
+        /// A rule's storages served the operands of one class; a dispatcher's serve every call of its site.
+        /// </summary>
+        public void CoerceRespondTo1() {
+            const string script = @"
+class C; end
+class Symbol; def coerce(o); $k += 1; [o, 1]; end; end
+def cmp(v); 1 <=> v; end
+$k = 0
+p cmp(C.new), cmp(:s)
+class C; def respond_to?(n, priv = false); $c += 1 if n == :coerce; super; end; end
+$c = 0
+p cmp(C.new), cmp(:s), $c, $k
+";
+            const string expected = @"
+nil
+0
+nil
+0
+1
+2
+";
+            TestOutput(script, expected);
+
+            // rules only: the same site serves the second cmp(C.new) through the rule of the first
+            int saved = LibraryDispatcher.BudgetOverride;
+            LibraryDispatcher.BudgetOverride = 0;
+            try {
+                TestOutput(script, expected);
+            } finally {
+                LibraryDispatcher.BudgetOverride = saved;
+            }
+        }
+
         /// <summary>
         /// Checks that if the same site is used twice and the first use failes on parameter conversion the second use is not affected.
         /// </summary>
@@ -529,6 +703,124 @@ end
 ");
         }
 
+        /// <summary>
+        /// instance_variable_get/set/defined? take a Symbol or String name without the conversion site, public_send(:name)
+        /// has an overload with no argument list, and Kernel#clone(freeze:) is C# (it was a prelude method with the keyword in
+        /// front of the C# one). Names, visibility, keywords and the freeze: errors stay MRI's. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Kernel_ReflectionFastPaths1() {
+            TestOutput(@"
+require 'ruby4'
+def show(label)
+  r = yield
+  puts ""#{label} => #{r.inspect}""
+rescue Exception => e
+  puts ""#{label} !! #{e.class}: #{e.message}""
+end
+class Foo
+  def initialize; @a = 1; end
+  def pub = :pub
+  def kw(a: 1) = a
+  def args(*a, **k, &b) = [a, k, b&.call]
+  def protected_m = :prot
+  protected :protected_m
+  def priv = :priv
+  private :priv
+  def call_prot(o) = o.public_send(:protected_m)
+  def method_missing(n, *a) = n == :ghost ? [:ghost, a] : super
+  def respond_to_missing?(n, p = false) = n == :ghost || super
+end
+o = Foo.new
+show(""ivar_get sym"") { o.instance_variable_get(:@a) }
+show(""ivar_get str"") { o.instance_variable_get(""@a"") }
+show(""ivar_get missing"") { o.instance_variable_get(:@zz) }
+show(""ivar_get bad"") { o.instance_variable_get(:a) }
+show(""ivar_get bad str"") { o.instance_variable_get(""@1"") }
+show(""ivar_get int"") { o.instance_variable_get(1) }
+show(""ivar_get nil"") { o.instance_variable_get(nil) }
+class S2 < String; def to_str = ""@b""; end
+show(""ivar_get str subclass"") { o.instance_variable_get(S2.new(""@a"")) }
+class ToS; def to_str = ""@a""; end
+show(""ivar_get to_str"") { o.instance_variable_get(ToS.new) }
+show(""ivar_set sym"") { o.instance_variable_set(:@b, 2); o.instance_variables }
+show(""ivar_set bad"") { o.instance_variable_set(:b, 2) }
+show(""ivar_defined"") { [o.instance_variable_defined?(:@a), o.instance_variable_defined?(""@q"")] }
+show(""ivar name err"") { begin; o.instance_variable_get(:bad); rescue NameError => e; [e.name, e.receiver.equal?(o)]; end }
+show(""ivar utf8 name"") { o.instance_variable_set(:@ü, 3); o.instance_variable_get(""@ü"") }
+show(""public_send pub"") { o.public_send(:pub) }
+show(""public_send str"") { o.public_send(""pub"") }
+show(""public_send ghost"") { o.public_send(:ghost) }
+show(""public_send none"") { o.public_send(:nope) }
+show(""public_send blk"") { o.public_send(:args) { 7 } }
+show(""public_send kw"") { o.public_send(:kw, a: 5) }
+show(""public_send args"") { o.public_send(:args, 1, 2, k: 3) { 4 } }
+show(""public_send noname"") { o.public_send }
+show(""public_send int"") { o.public_send(1) }
+show(""public_send to_str"") { o.public_send(ToS.new) }
+show(""public_send **{}"") { o.public_send(:pub, **{}) }
+show(""clone"") { c = o.clone; [c.class, c.instance_variable_get(:@a), c.frozen?] }
+show(""clone frozen"") { o2 = Foo.new.freeze; [o2.clone.frozen?, o2.clone(freeze: false).frozen?, o2.clone(freeze: nil).frozen?, Foo.new.clone(freeze: true).frozen?] }
+show(""clone singleton"") { o3 = Foo.new; def o3.sing = 1; [o3.clone.sing, (o3.dup.sing rescue :nodup)] }
+show(""clone bad freeze"") { o.clone(freeze: 1) }
+show(""clone bad freeze str"") { o.clone(freeze: ""x"") }
+show(""clone unknown"") { o.clone(foo: 1) }
+show(""clone unknowns"") { o.clone(foo: 1, bar: 2) }
+show(""clone freeze+unknown"") { o.clone(freeze: true, foo: 1) }
+show(""clone positional"") { o.clone(1) }
+show(""clone hash positional"") { o.clone({freeze: true}) }
+show(""clone **{}"") { o.clone(**{}).class }
+show(""clone special"") { [1.clone, nil.clone, :a.clone, 1.clone(freeze: true), (1.clone(freeze: false) rescue $!.class)] }
+class IC; attr_reader :got; def initialize_clone(o, **kw) = (@got = kw; super); end
+show(""initialize_clone kw"") { [IC.new.clone.got, IC.new.clone(freeze: false).got, IC.new.clone(freeze: true).got, IC.new.clone(freeze: nil).got] }
+class IC2; def initialize_clone(o) = super; end
+show(""initialize_clone no kw"") { [IC2.new.clone.class, (IC2.new.clone(freeze: true) rescue $!.class)] }
+show(""clone params"") { [Kernel.instance_method(:clone).parameters, Kernel.instance_method(:clone).arity] }
+show(""string clone"") { s = ""x"".freeze; [s.clone.frozen?, s.clone(freeze: false).frozen?] }
+", @"
+ivar_get sym => 1
+ivar_get str => 1
+ivar_get missing => nil
+ivar_get bad !! NameError: 'a' is not allowed as an instance variable name
+ivar_get bad str !! NameError: '@1' is not allowed as an instance variable name
+ivar_get int !! TypeError: 1 is not a symbol nor a string
+ivar_get nil !! TypeError: nil is not a symbol nor a string
+ivar_get str subclass => 1
+ivar_get to_str => 1
+ivar_set sym => [:@a, :@b]
+ivar_set bad !! NameError: 'b' is not allowed as an instance variable name
+ivar_defined => [true, false]
+ivar name err => [:bad, true]
+ivar utf8 name => 3
+public_send pub => :pub
+public_send str => :pub
+public_send ghost => [:ghost, []]
+public_send none !! NoMethodError: undefined method 'nope' for an instance of Foo
+public_send blk => [[], {}, 7]
+public_send kw => 5
+public_send args => [[1, 2], {k: 3}, 4]
+public_send noname !! ArgumentError: no method name given
+public_send int !! TypeError: 1 is not a symbol nor a string
+public_send to_str !! NoMethodError: undefined method '@a' for an instance of Foo
+public_send **{} => :pub
+clone => [Foo, 1, false]
+clone frozen => [true, false, true, true]
+clone singleton => [1, :nodup]
+clone bad freeze !! ArgumentError: unexpected value for freeze: Integer
+clone bad freeze str !! ArgumentError: unexpected value for freeze: String
+clone unknown !! ArgumentError: unknown keyword: :foo
+clone unknowns !! ArgumentError: unknown keywords: :foo, :bar
+clone freeze+unknown !! ArgumentError: unknown keyword: :foo
+clone positional !! ArgumentError: wrong number of arguments (given 1, expected 0)
+clone hash positional !! ArgumentError: wrong number of arguments (given 1, expected 0)
+clone **{} => Foo
+clone special => [1, nil, :a, 1, ArgumentError]
+initialize_clone kw => [{}, {freeze: false}, {freeze: true}, {}]
+initialize_clone no kw => [IC2, ArgumentError]
+clone params => [[[:key, :freeze]], -1]
+string clone => [true, false]
+");
+        }
+
         public void AttributeAccessors1() {
             AssertOutput(delegate {
                 CompilerTest(@"
@@ -581,9 +873,9 @@ c.set_foo(3,4) rescue p $!
 p c.foo(*[])
 p c.foo(1) rescue p $!
 "), @"
-#<ArgumentError: wrong number of arguments (2 for 1)>
+#<ArgumentError: wrong number of arguments (given 2, expected 1)>
 2
-#<ArgumentError: wrong number of arguments (1 for 0)>
+#<ArgumentError: wrong number of arguments (given 1, expected 0)>
 ");
         }
 
@@ -692,7 +984,7 @@ class A
   alias_method :xxx, :foo           # should find foo
 end
 "), @"
-#<UnboundMethod: A(M)#foo>
+#<UnboundMethod: M#foo(bar)() Visibility1.rb:8>
 ");
         }
 
@@ -730,7 +1022,7 @@ end
 
 C.new.foo
 ", @"
-#<UnboundMethod: C(A)#foo>
+#<UnboundMethod: A#foo() Visibility2A.rb:4>
 B::foo
 ");
         }
@@ -822,7 +1114,7 @@ end
 
 c.foo rescue p $!
 "), @"
-#<NoMethodError: protected method `foo' called for #<C:*>>
+#<NoMethodError: protected method 'foo' called for #<C:*>>
 ", OutputFlags.Match);
         }
 
@@ -848,7 +1140,7 @@ class X; end
 
 c,d,x = C.new,D.new,X.new
 
-# test visibility caching:
+# test visibility caching (instance_eval makes no singleton class - Ruby 3.2 - so c is reported as an instance):
 2.times do
   [[d,c], [c,d], [x,c], [x,d]].each do |s,r| 
     s.instance_eval { r.foo } rescue p $! 
@@ -857,13 +1149,71 @@ end
 "), @"
 foo
 foo
-#<NoMethodError: protected method `foo' called for #<C:*>>
+#<NoMethodError: protected method 'foo' called for an instance of C>
 mm
 foo
 foo
-#<NoMethodError: protected method `foo' called for #<C:*>>
+#<NoMethodError: protected method 'foo' called for an instance of C>
 mm
 ", OutputFlags.Match);
+        }
+
+        /// <summary>
+        /// A singleton class made while a scope runs - lazily, by a def in an instance_eval block - is self's class
+        /// from then on, also for the visibility of a protected method called on an explicit receiver, even when an
+        /// earlier call in the same scope already asked for self's class.
+        /// </summary>
+        public void Visibility5() {
+            TestOutput(@"
+class C; end
+
+o = C.new
+p(o.instance_eval {
+  me = self
+  [1].to_s
+  def secret; :a; end
+  singleton_class.send(:protected, :secret)
+  me.secret
+})
+
+p(C.new.instance_exec {
+  me = self
+  me.to_s
+  define_singleton_method(:secret) { :b }
+  singleton_class.send(:protected, :secret)
+  me.secret
+})
+", @"
+:a
+:b
+");
+        }
+
+        /// <summary>
+        /// A compiled protected call guards on the caller's self class, so once self gains a singleton class that
+        /// includes the method's module the same site binds again and the call is allowed.
+        /// </summary>
+        public void Visibility6() {
+            TestOutput(@"
+module M
+  protected
+  def foo; :m; end
+end
+class C; include M; end
+
+s = Object.new
+r = C.new
+p(s.instance_eval {
+  res = []
+  2.times do |i|
+    res << (r.foo rescue :denied)
+    extend(M) if i == 0
+  end
+  res
+})
+", @"
+[:denied, :m]
+");
         }
 
         public void ModuleFunctionVisibility1() {
@@ -921,7 +1271,8 @@ end
         }
 
         /// <summary>
-        /// define_method copies given method and sets its visibility according to the the current scope flags.
+        /// define_method copies the given method and gives the copy the visibility the enclosing
+        /// scope is in - so a `private' above it makes the copy private, as MRI does.
         /// </summary>
         public void DefineMethodVisibility1() {
             TestOutput(@"
@@ -944,23 +1295,12 @@ end
 
 B.new.send :foo
 ", @"
-foo
+#<NoMethodError: private method 'foo' called for an instance of B>
 foo
 ");
         }
 
-#if OBSOLETE
-        [Options(Compatibility = RubyCompatibility.Ruby186)]
-        public void DefineMethodVisibility2A() {
-            Test_DefineMethodVisibility2();
-        }
-#endif
-
         public void DefineMethodVisibility2B() {
-            Test_DefineMethodVisibility2();
-        }
-
-        public void Test_DefineMethodVisibility2() {
             TestOutput(@"
 module M                                              # the inner module is the same module we call define_method on
   1.times do  
@@ -982,9 +1322,11 @@ end
 
 p M.public_instance_methods(false).sort
 p M.private_instance_methods(false).sort
+p M.singleton_methods.sort
 ", @"
-[:a, :b, :c, :d]
-[]
+[:c, :d]
+[:a, :b]
+[:a]
 ");
         }
 
@@ -1046,7 +1388,49 @@ true
 true
 ");
         }
-        
+
+        /// <summary>
+        /// The scope's default visibility applies only where the calling frame's self is the
+        /// module itself (MRI's rb_vm_cref_in_context). importmap-rails sends attr_accessor to
+        /// Rails::Application from the top level of a file, whose default is private.
+        /// </summary>
+        public void AttributeAccessorsVisibility2() {
+            TestOutput(@"
+class Box; end
+Box.send(:attr_accessor, :a)
+
+class Box
+  private
+  Box.send(:attr_reader, :c)
+end
+
+class Other
+  private
+  Box.send(:attr_writer, :d)
+end
+
+Box.class_eval { private; attr_reader :f }
+
+module Helper
+  def self.define(klass)
+    klass.send(:attr_reader, :g)
+  end
+end
+Helper.define(Box)
+
+[:a, :a=, :c, :d=, :f, :g].each do |m|
+  puts ""#{m} #{Box.public_method_defined?(m) ? 'public' : 'private'}""
+end
+", @"
+a public
+a= public
+c private
+d= public
+f private
+g public
+");
+        }
+
         private string MethodDefinitionInDefineMethodCode1 = @"
 class A
   $p = lambda { def foo; end }
@@ -1064,13 +1448,6 @@ puts A.send(:remove_method, :foo) rescue puts B.send(:remove_method, :foo)
         public void MethodDefinitionInDefineMethod1A() {
             AssertOutput(() => CompilerTest(MethodDefinitionInDefineMethodCode1), "A");
         }
-
-#if OBSOLETE
-        [Options(Compatibility = RubyCompatibility.Ruby186)]
-        public void MethodDefinitionInDefineMethod1B() {
-            AssertOutput(() => CompilerTest(MethodDefinitionInDefineMethodCode1), "B");
-        }
-#endif
 
         private string MethodDefinitionInDefineMethodCode2 = @"
 class B
@@ -1090,19 +1467,9 @@ puts A.send(:remove_method, :foo) rescue puts B.send(:remove_method, :foo)
             AssertOutput(() => CompilerTest(MethodDefinitionInDefineMethodCode2), "B");
         }
 
-#if OBSOLETE
-        /// <summary>
-        /// MRI 1.8 actually prints A. We consider it a bug that we won't copy.
-        /// </summary>
-        [Options(Compatibility = RubyCompatibility.Ruby186)]
-        public void MethodDefinitionInDefineMethod2B() {
-            AssertOutput(() => CompilerTest(MethodDefinitionInDefineMethodCode2), "B");
-        }
-#endif
-
         private string MethodDefinitionInModuleEvalCode = @"
 class A
-  $p = lambda { def foo; end }
+  $p = lambda { |m| def foo; end }
 end
 
 class B
@@ -1115,13 +1482,6 @@ puts A.send(:remove_method, :foo) rescue puts B.send(:remove_method, :foo)
         public void MethodDefinitionInModuleEval1A() {
             AssertOutput(() => CompilerTest(MethodDefinitionInModuleEvalCode), "B");
         }
-
-#if OBSOLETE
-        [Options(Compatibility = RubyCompatibility.Ruby186)]
-        public void MethodDefinitionInModuleEval1B() {
-            AssertOutput(() => CompilerTest(MethodDefinitionInModuleEvalCode), "B");
-        }
-#endif
 
         public void Scenario_ModuleOps_Methods() {
             AssertOutput(delegate() {
@@ -1190,9 +1550,9 @@ m[1,2]
 n[1,2]
 ");
             }, @"
-#<Method: C#foo>
-#<UnboundMethod: C#foo>
-#<Method: D(C)#foo>
+#<Method: C#foo(a, b) Methods1.rb:3>
+#<UnboundMethod: C#foo(a, b) Methods1.rb:3>
+#<Method: D(C)#foo(a, b) Methods1.rb:3>
 3
 3
 ");
@@ -1210,6 +1570,219 @@ end
 ", @"
 0
 1
+");
+        }
+
+        /// <summary>
+        /// Method#inspect shows the parameter list for library methods and attribute accessors
+        /// too, as MRI does ("_" for a required parameter with no name); a rule-generator method
+        /// such as Class#new takes any arguments and says so in its arity.
+        /// </summary>
+        public void MethodInspect_LibraryParameters1() {
+            TestOutput(@"
+class Foo; attr_accessor :a; end
+puts 1.method(:+).inspect, [].method(:push).inspect, Foo.method(:new).inspect
+puts Foo.new.method(:a).inspect.sub(/ \S+:\d+>/, '>'), Foo.new.method(:a=).inspect.sub(/ \S+:\d+>/, '>')
+p Foo.method(:new).arity, Foo.method(:new).parameters, 1.method(:send).arity, Foo.method(:allocate).arity
+", @"
+#<Method: Integer#+(_)>
+#<Method: Array#push(*)>
+#<Method: #<Class:Foo>(Class)#new(*)>
+#<Method: Foo#a()>
+#<Method: Foo#a=(_)>
+-1
+[[:rest]]
+-1
+0
+");
+        }
+
+        /// <summary>
+        /// A core method reports what MRI's does. One MRI writes in C has the arity of its C function and no parameter
+        /// names: the number it takes if that is fixed, else -1 and [[:rest]] (Integer#round was -1 less one per mandatory
+        /// parameter, BasicObject#method_missing -2). One MRI writes in Ruby has MRI's parameters (Kernel#Integer).
+        /// </summary>
+        public void MethodArity_CoreMethods1() {
+            TestOutput(@"
+p 1.method(:round).arity, 1.method(:round).parameters, 1.method(:+).arity, 1.method(:+).parameters
+p [].method(:push).arity, Kernel.instance_method(:respond_to?).arity, BasicObject.instance_method(:method_missing).arity
+p method(:Integer).arity, method(:Integer).parameters
+puts method(:Integer).inspect.sub(/ \S+:\d+>/, '>'), Process.method(:clock_gettime).inspect, method(:define_singleton_method).inspect
+p Array.instance_method(:first).arity, Array.instance_method(:first).parameters, ''.method(:unpack).parameters
+", @"
+-1
+[[:rest]]
+1
+[[:req]]
+-1
+-1
+-1
+-2
+[[:req, :arg], [:opt, :base], [:key, :exception]]
+#<Method: Object(Kernel)#Integer(arg, base=..., exception: ...)>
+#<Method: Process.clock_gettime(*)>
+#<Method: Object(Kernel)#define_singleton_method(*)>
+-1
+[[:opt, :n]]
+[[:req, :fmt], [:key, :offset]]
+");
+        }
+
+        /// <summary>
+        /// Arguments library methods took fewer of than MRI's: Numeric#round and friends a number of digits, Symbol#match a
+        /// position, Kernel#autoload? the inherit flag; printf prints nothing for none, method_missing wants a name.
+        /// Thread.exit takes no thread (that is Thread.kill).
+        /// </summary>
+        public void MethodArity_LibraryArguments1() {
+            TestOutput(@"
+class N < Numeric; def to_f; 12.3456; end; end
+n = N.new
+p n.round(2), n.round(-1), n.round(1, half: :even), n.floor(2), n.ceil(2), n.truncate(2)
+p :abcb.match(/b/, 2).begin(0), :abcb.match('b', 2) { |m| m.begin(0) }
+p autoload?(:Foo, false), Object.autoload?(:Foo, false)
+p printf
+[-> { autoload?(:Foo, false, 1) }, -> { :a.match(/a/, 1, 2) }, -> { n.round(1, 2) }, -> { method_missing },
+ -> { Thread.exit(1) }].each { |l| p((l.call rescue $!)) }
+", @"
+12.35
+10
+12.3
+12.34
+12.35
+12.34
+3
+3
+nil
+nil
+nil
+#<ArgumentError: wrong number of arguments (given 3, expected 1..2)>
+#<ArgumentError: wrong number of arguments (given 3, expected 1..2)>
+#<ArgumentError: wrong number of arguments (given 2, expected 0..1)>
+#<ArgumentError: no method name given>
+#<ArgumentError: wrong number of arguments (given 1, expected 0)>
+");
+        }
+
+        /// <summary>
+        /// A core method the prelude writes in Ruby reports what MRI's C function takes, no Ruby parameters of its own: the
+        /// private copies of Process's module functions have the singleton's arity and no source location; Range#first is
+        /// (*). Arguments counted as MRI counts them: Kernel#warn knows only uplevel: and category:, IO.read takes 1..4,
+        /// Kernel#open converts the path first, ARGF#readlines counts at the end of input too. Windows has no
+        /// initgroups: there it is NotImplementedError, (*) as CRuby's rb_f_notimplement is.
+        /// </summary>
+        public void MethodArity_PreludeMethods1() {
+            TestOutput(@"
+require 'ruby4'
+p Process.instance_method(:egid).arity, Process.instance_method(:initgroups).parameters, Process.instance_method(:egid).source_location
+p (1..2).method(:first).arity, (1..2).method(:first).parameters, method(:warn).parameters
+puts (1..2).method(:first).inspect
+class E; include Enumerable; def each(*a); yield a.size; yield 9; end; end
+r = []; E.new.reverse_each(1, 2) { |x| r << x }; p r
+p Encoding::UTF_8._dump
+[-> { warn('x', a: 1) }, -> { warn('x', a: 1, b: 2) }, -> { (1..3).first(1, 2) }, -> { (1..3).last(1, 2) },
+ -> { (1..3).min(1, 2) }, -> { (1..3).max(1, 2) }, -> { (1..3).count(1, 2) }, -> { IO.read },
+ -> { IO.read(__FILE__, 1, 2, 3, 4) }, -> { IO.read(__FILE__, 1, 2, 3) }, -> { open(1, 2, 3, 4) },
+ -> { Process.clock_getres }, -> { ARGF.readlines(1, 2, 3) }, -> { Thread.each_caller_location(1, 2, 3) {} },
+].each { |l| p((l.call rescue $!)) }
+", @"
+0
+" + (Environment.OSVersion.Platform == PlatformID.Win32NT ? "[[:rest]]" : "[[:req], [:req]]") + @"
+nil
+-1
+[[:rest]]
+[[:rest, :msgs], [:key, :uplevel], [:key, :category]]
+#<Method: Range#first(*)>
+[9, 2]
+""UTF-8""
+#<ArgumentError: unknown keyword: :a>
+#<ArgumentError: unknown keywords: :a, :b>
+#<ArgumentError: wrong number of arguments (given 2, expected 1)>
+#<ArgumentError: wrong number of arguments (given 2, expected 1)>
+#<ArgumentError: wrong number of arguments (given 2, expected 1)>
+#<ArgumentError: wrong number of arguments (given 2, expected 1)>
+#<ArgumentError: wrong number of arguments (given 2, expected 1)>
+#<ArgumentError: wrong number of arguments (given 0, expected 1..4)>
+#<ArgumentError: wrong number of arguments (given 5, expected 1..4)>
+#<ArgumentError: wrong number of arguments (given 3, expected 0..2)>
+#<TypeError: no implicit conversion of Integer into String>
+#<ArgumentError: wrong number of arguments (given 0, expected 1..2)>
+#<ArgumentError: wrong number of arguments (given 3, expected 0..2)>
+#<ArgumentError: wrong number of arguments (given 3, expected 0..2)>
+");
+        }
+
+        /// <summary>
+        /// A method body is skimmed past at load time and bridged when first called. Since prism cd76b0d1
+        /// a SymbolNode's content location is no longer optional; the skimmer still read it as optional,
+        /// so every node after a symbol in a method body was read from the wrong offset ("Unknown prism
+        /// node type", IndexOutOfRangeException) - mspec, for one, could not start.
+        /// </summary>
+        public void MethodDef_SymbolInBody1() {
+            TestOutput(@"
+def sym = :start
+def syms
+  [:a, :""b c"", %s(d), :e]
+end
+def call(x)
+  [x, :after]
+end
+p sym, syms, call(:before)
+", @"
+:start
+[:a, :""b c"", :d, :e]
+[:before, :after]
+");
+        }
+
+        /// <summary>
+        /// A method with keyword parameters but no **rest binds the keywords of a call that passed none from one
+        /// shared empty keyword hash (RubyOps.GetOmittedKeywordArguments) rather than a new one per call. Its
+        /// prologue only reads it: what it binds, the errors it raises - a missing or an unknown keyword, a Hash
+        /// passed positionally, keywords landing in a positional, **nil - and what super and eval("super") pass
+        /// on are as before, in the generic body and in the specialized one, and on several threads at once.
+        /// The output is CRuby 4.0's.
+        /// </summary>
+        public void KeywordsOmitted1() {
+            TestOutput(@"
+require 'ruby4'
+class K
+  def m(a, k: 1, j: a) = [a, k, j]
+  def r(a, k:, j: 2) = [a, k, j]
+  def n(a, **nil) = a
+  def e(k: 1) = k
+end
+class S < K
+  def m(a, k: 5, j: 6) = super
+  def e(k: 7) = [super, eval(""super"")]
+end
+o = K.new; s = S.new
+def try = yield rescue ""#{$!.class}: #{$!.message}""
+60.times do |i|
+  r = [o.m(i), o.m(i, j: 3), s.m(i), o.e, s.e, o.n(i)]
+  p r if i % 30 == 0
+end
+p try { o.r(1) }
+p try { o.m(1, {x: 1}) }
+p try { o.m({k: 2}) }
+p try { o.m(k: 2) }
+p try { o.e(z: 1) }
+p try { o.e({k: 2}) }
+p try { o.n(1, k: 1) }
+p try { o.r(1, {k: 1}) }
+t = 4.times.map { |n| Thread.new { 2000.times.map { |i| o.m(i).sum + o.e }.sum } }
+p t.map(&:value).uniq
+", @"
+[[0, 1, 0], [0, 1, 3], [0, 5, 6], 1, [7, 7], 0]
+[[30, 1, 30], [30, 1, 3], [30, 5, 6], 1, [7, 7], 30]
+""ArgumentError: missing keyword: :k""
+""ArgumentError: wrong number of arguments (given 2, expected 1)""
+[{k: 2}, 1, {k: 2}]
+""ArgumentError: wrong number of arguments (given 0, expected 1)""
+""ArgumentError: unknown keyword: :z""
+""ArgumentError: wrong number of arguments (given 1, expected 0)""
+""ArgumentError: no keywords accepted""
+""ArgumentError: wrong number of arguments (given 2, expected 1; required keyword: k)""
+[4002000]
 ");
         }
     }

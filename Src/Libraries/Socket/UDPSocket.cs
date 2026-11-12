@@ -13,7 +13,6 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_SYNC_SOCKETS
 
 using System.Net;
 using System.Net.Sockets;
@@ -23,7 +22,7 @@ using IronRuby.Runtime;
 using System.Runtime.InteropServices;
 
 namespace IronRuby.StandardLibrary.Sockets {
-    [RubyClass("UDPSocket", BuildConfig = "FEATURE_SYNC_SOCKETS")]
+    [RubyClass("UDPSocket")]
     public class UDPSocket : IPSocket {
         /// <summary>
         /// Creates an uninitialized socket.
@@ -52,7 +51,7 @@ namespace IronRuby.StandardLibrary.Sockets {
         }
 
         private static Socket/*!*/ CreateSocket(AddressFamily addressFamily) {
-            return new Socket(addressFamily, SocketType.Dgram, ProtocolType.Udp);
+            return RubyBasicSocket.NewSocket(addressFamily, SocketType.Dgram, ProtocolType.Udp);
         }
 
 #region Public Instance Methods
@@ -60,7 +59,6 @@ namespace IronRuby.StandardLibrary.Sockets {
         [RubyMethod("bind")]
         public static int Bind(ConversionStorage<MutableString>/*!*/ stringCast, ConversionStorage<int>/*!*/ fixnumCast, 
             UDPSocket/*!*/ self, object hostNameOrAddress, object port) {
-
             int iPort = ConvertToPortNum(stringCast, fixnumCast, port);
             IPAddress address = (hostNameOrAddress != null) ? 
                 GetHostAddress(ConvertToHostString(stringCast, hostNameOrAddress)) : IPAddress.Loopback;
@@ -74,9 +72,20 @@ namespace IronRuby.StandardLibrary.Sockets {
         public static int Connect(ConversionStorage<MutableString>/*!*/ stringCast, ConversionStorage<int>/*!*/ fixnumCast, 
             UDPSocket/*!*/ self, object hostname, object port) {
 
-            string strHostname = ConvertToHostString(stringCast, hostname);
             int iPort = ConvertToPortNum(stringCast, fixnumCast, port);
-            self.Socket.Connect(strHostname, iPort);
+            if (hostname == null) {
+                // getaddrinfo(3) with a null node resolves to the loopback; ConvertToHostString
+                // turned nil into an empty name the resolver answers with EAI_NONAME.
+                IPAddress loopback = (self.Socket.AddressFamily == AddressFamily.InterNetworkV6)
+                    ? IPAddress.IPv6Loopback : IPAddress.Loopback;
+                EndPoint ep = new IPEndPoint(loopback, iPort);
+                Blocking(() => self.Socket.Connect(ep));
+                return 0;
+            }
+            // Resolved here rather than by Socket.Connect(string, int), so that a name that does not
+            // resolve fails the way every other lookup does ("getaddrinfo: ...").
+            IPAddress address = GetHostAddress(ConvertToHostString(stringCast, hostname), self.Socket.AddressFamily);
+            Blocking(() => self.Socket.Connect(address, iPort));
             return 0;
         }
 
@@ -109,7 +118,6 @@ namespace IronRuby.StandardLibrary.Sockets {
             RubyBasicSocket/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ message,
             object flags, object hostNameOrAddress, object port) {
 
-            Protocols.CheckSafeLevel(fixnumCast.Context, 4, "send");
             int iPort = ConvertToPortNum(stringCast, fixnumCast, port);
             SocketFlags sFlags = ConvertToSocketFlag(fixnumCast, flags);
 
@@ -118,7 +126,7 @@ namespace IronRuby.StandardLibrary.Sockets {
                 GetHostAddress(ConvertToHostString(stringCast, hostNameOrAddress)) : IPAddress.Loopback;
 
             EndPoint toEndPoint = new IPEndPoint(address, iPort);
-            return self.Socket.SendTo(message.ConvertToBytes(), sFlags, toEndPoint);
+            return Blocking(() => self.Socket.SendTo(message.ConvertToBytes(), sFlags, toEndPoint));
         }
 
         // These overwritten methods have to be here because we kill the ones in RubyBasicSocket by creating the one above
@@ -139,4 +147,3 @@ namespace IronRuby.StandardLibrary.Sockets {
         #endregion
     }
 }
-#endif

@@ -13,10 +13,6 @@
  *
  * ***************************************************************************/
 
-using System;
-using System.Collections.Generic;
-using System.Text;
-using System.Diagnostics;
 
 namespace IronRuby.Builtins {
     /// <summary>
@@ -56,6 +52,13 @@ namespace IronRuby.Builtins {
     /// Represents a module mixed into all flag enums.
     /// </summary>
     public static class FlagEnumeration {
+        // stub
+    }
+
+    /// <summary>
+    /// Represents a module mixed into every CLR class that no library defines (hash patterns over CLR members).
+    /// </summary>
+    public static class ClrPatternMatching {
         // stub
     }
 }

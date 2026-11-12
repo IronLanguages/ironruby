@@ -1,57 +1,158 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
-<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0">
-  <Import Project="$(ProjectDir)..\..\Build\Common.proj" />
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <SchemaVersion>2.0</SchemaVersion>
-    <ProjectGuid>{D6AB587D-A888-4B98-85AC-F15E36F53838}</ProjectGuid>
+    <TargetFrameworks>$(IronRubyTargetFrameworks)</TargetFrameworks>
     <OutputType>Exe</OutputType>
-    <AppDesignerFolder>Properties</AppDesignerFolder>
-    <RootNamespace>IronRuby</RootNamespace>
     <AssemblyName>ir</AssemblyName>
-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <PlatformTarget>x86</PlatformTarget>
-    <CodeAnalysisRuleSet>Ruby.Console.ruleset</CodeAnalysisRuleSet>
+    <RootNamespace>IronRuby.Hosting</RootNamespace>
   </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'FxCop|AnyCPU' ">
+  <!-- Windows Forms and WPF are not part of .NET but of the Windows Desktop runtime,
+       Microsoft.WindowsDesktop.App. On .NET Framework every machine had them in the GAC;
+       on .NET (5 and later) an app sees them only when its host references that framework, and
+       System.Windows.Forms.rb, PresentationCore.rb and PresentationFramework.rb load them
+       by name. So ir references it whenever the build targets Windows: a win-* RID, or no
+       RID on a Windows machine. A self-contained build (the release archive) then carries
+       it; a framework-dependent one needs it installed, which every Windows .NET SDK does.
+       The TFM stays net10.0 - only UseWindowsForms/UseWPF insist on net10.0-windows - so the
+       bin paths the launchers and scripts hardcode stay what they are.
+       Build without it: -p:IronRubyWindowsDesktop=false. -->
+  <PropertyGroup>
+    <IronRubyWindowsDesktop Condition="'$(IronRubyWindowsDesktop)' == '' and $(RuntimeIdentifier.StartsWith('win'))">true</IronRubyWindowsDesktop>
+    <IronRubyWindowsDesktop Condition="'$(IronRubyWindowsDesktop)' == '' and '$(RuntimeIdentifier)' == '' and $([MSBuild]::IsOSPlatform('Windows'))">true</IronRubyWindowsDesktop>
+    <!-- cross-publishing win-x64 from Linux or macOS: the SDK refuses a Windows-only framework there otherwise -->
+    <EnableWindowsTargeting Condition="'$(IronRubyWindowsDesktop)' == 'true'">true</EnableWindowsTargeting>
   </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'v2Debug|AnyCPU' ">
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'v2Release|AnyCPU' ">
-  </PropertyGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\Libraries\IronRuby.Libraries.csproj">
-      <Project>{77323B06-15A2-4CF4-8A7A-86EAA2B66498}</Project>
-      <Name>IronRuby.Libraries</Name>
-    </ProjectReference>
-    <ProjectReference Include="..\Ruby\Ruby.csproj">
-      <Project>{7F6984B4-EE6D-4E6F-ABB1-E210D7DC4FDD}</Project>
-      <Name>Ruby</Name>
-    </ProjectReference>
+  <ItemGroup Condition="'$(IronRubyWindowsDesktop)' == 'true'">
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="Program.cs" />
-    <Compile Include="Properties\AssemblyInfo.cs" />
-    <Compile Include="..\AssemblyVersion.cs">
-      <Link>Properties\AssemblyVersion.cs</Link>
-    </Compile>
-    <Compile Include="Properties\BuildInfo.Generated.cs" />
+    <!-- Ruby exposes UTF-7; must be set before any encoding is used (AppContext latches early in a console host) -->
+    <RuntimeHostConfigurationOption Include="System.Text.Encoding.EnableUnsafeUTF7Encoding" Value="true" />
+    <!-- On Unix, .NET emulates FileShare with flock(2). Ruby's open(2) takes no lock, and
+         the emulation collides with a real File#flock: a second process cannot even open a
+         file this process has LOCK_EX'd. Turn the emulation off. -->
+    <RuntimeHostConfigurationOption Include="System.IO.DisableFileLocking" Value="true" />
   </ItemGroup>
+  <!-- RbConfig's ruby_install_name is "ironruby", as JRuby's is "jruby", so RbConfig.ruby is
+       <bindir>/ironruby(.exe): a copy of the apphost under that name. An apphost starts the
+       ir.dll whose name is written into it, whatever the file itself is called. -->
+  <Target Name="CopyIronRubyAppHost" AfterTargets="Build" Condition="'$(UseAppHost)' != 'false'">
+    <Copy SourceFiles="$(OutDir)$(AssemblyName)$(_NativeExecutableExtension)"
+          DestinationFiles="$(OutDir)ironruby$(_NativeExecutableExtension)"
+          Condition="Exists('$(OutDir)$(AssemblyName)$(_NativeExecutableExtension)')" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="PublishIronRubyAppHost" AfterTargets="Publish" Condition="'$(UseAppHost)' != 'false'">
+    <Copy SourceFiles="$(PublishDir)$(AssemblyName)$(_NativeExecutableExtension)"
+          DestinationFiles="$(PublishDir)ironruby$(_NativeExecutableExtension)"
+          Condition="Exists('$(PublishDir)$(AssemblyName)$(_NativeExecutableExtension)')" SkipUnchangedFiles="true" />
+  </Target>
+  <!-- ironrubyw.exe, as CRuby has rubyw.exe and JRuby jrubyw.exe: the same ir.dll behind an
+       apphost marked as a Windows GUI program, so Windows gives it no console window - for
+       Windows Forms and WPF programs such as Samples/Notepad. It is the SDK's own
+       CreateAppHost, as for a WinExe project. Only a Windows apphost has the flag. -->
+  <!-- Inputs and Outputs as the SDK's own _CreateAppHost has them: CreateAppHost rewrites its
+       file every time, and a build while Notepad runs under ironrubyw.exe could not. -->
+  <Target Name="CreateIronRubyWAppHost" AfterTargets="Build"
+          Inputs="@(IntermediateAssembly);$(AppHostSourcePath)" Outputs="$(OutDir)ironrubyw.exe"
+          Condition="'$(UseAppHost)' != 'false' and '$(_NativeExecutableExtension)' == '.exe' and '$(AppHostSourcePath)' != '' and Exists('$(AppHostSourcePath)')">
+    <CreateAppHost AppHostSourcePath="$(AppHostSourcePath)"
+                   AppHostDestinationPath="$(OutDir)ironrubyw.exe"
+                   AppBinaryName="$(AssemblyName)$(TargetExt)"
+                   IntermediateAssembly="@(IntermediateAssembly->'%(FullPath)')"
+                   WindowsGraphicalUserInterface="true" />
+  </Target>
+  <Target Name="PublishIronRubyWAppHost" AfterTargets="Publish"
+          Condition="'$(UseAppHost)' != 'false' and '$(_NativeExecutableExtension)' == '.exe' and Exists('$(OutDir)ironrubyw.exe')">
+    <Copy SourceFiles="$(OutDir)ironrubyw.exe" DestinationFiles="$(PublishDir)ironrubyw.exe" SkipUnchangedFiles="true" />
+  </Target>
   <ItemGroup>
-    <None Include="..\App.Debug.config">
-      <Link>App.Debug.config</Link>
-    </None>
-    <None Include="..\App.Release.config">
-      <Link>App.Release.config</Link>
-    </None>
-    <None Include="Ruby.Console.ruleset" />
+    <ProjectReference Include="..\Ruby\Ruby.csproj" />
+    <ProjectReference Include="..\Libraries\IronRuby.Libraries.csproj" />
+    <!-- yaml.rb load_assembly's this at runtime, so it has to sit next to the host -->
+    <ProjectReference Include="..\Libraries.Yaml\IronRuby.Libraries.Yaml.csproj" />
+    <ProjectReference Include="..\Prism\IronRuby.Prism.csproj" />
+    <ProjectReference Include="$(DlrSourceDir)\Microsoft.Scripting\Microsoft.Scripting.csproj" />
+    <ProjectReference Include="$(DlrSourceDir)\Microsoft.Dynamic\Microsoft.Dynamic.csproj" />
   </ItemGroup>
-  <Import Project="$(CSharpTargets)" />
-  <Import Project="$(BeforeTargetFiles)" />
-  <Target Name="BeforeBuild" DependsOnTargets="$(BeforeTargets);GenerateCurrentVersion" />
-  <Import Project="$(AfterTargetFiles)" />
-  <Target Name="AfterBuild" DependsOnTargets="$(AfterTargets)" />
+  <!-- IronRubyStartupProfile=true (Util/package-release.sh) has crossgen2 compile with Build/startup.mibc, a profile of
+       the methods startup runs (Util/make-startup-mibc.sh). It pays off in a composite image of IronRuby and the
+       framework (PublishReadyToRunComposite, self-contained only), where the generic instantiations startup makes
+       over framework types become precompilable: `ir -e 1` then JITs ~140 methods instead of ~570 and runs 8% fewer
+       instructions than in the self-contained per-assembly R2R build. In the framework-dependent host it changes next
+       to nothing (1%), so the R2R host does not use it. -->
+  <ItemGroup Condition="'$(IronRubyStartupProfile)' == 'true' and Exists('$(MSBuildThisFileDirectory)..\..\Build\startup.mibc')">
+    <PublishReadyToRunPgoFiles Include="$(MSBuildThisFileDirectory)..\..\Build\startup.mibc" />
+  </ItemGroup>
+  <!-- NativeAOT (experimental): one native executable, no JIT, everything interpreted.
+         dotnet publish Src/Console/Ruby.Console.csproj -c Release -r linux-x64 -f net8.0 -p:IronRubyNativeAot=true \
+           -p:DlrSourceDir=... -o Src/Console/bin/NativeAOT/net8.0       # then IR_CONFIG=NativeAOT ./ir.sh
+       Not -p:PublishAot=true: a global property reaches the DLR projects too, and their net462 and
+       netstandard2.0 targets fail restore with NETSDK1207. Needs the DLR patch
+       Build/dlr-patches/aot/0001-interpreter-only-without-dynamic-code.patch.
+       Nothing here applies to a normal build or to the R2R host. -->
+  <PropertyGroup Condition="'$(IronRubyNativeAot)' == 'true'">
+    <PublishAot>true</PublishAot>
+    <!-- IronRuby.Prism is an Exe project (it has a test driver); only its library half is used -->
+    <ValidateExecutableReferencesMatchSelfContained>false</ValidateExecutableReferencesMatchSelfContained>
+    <!-- IronRuby's library initializers, binders and ReflectionCache find members by name at run
+         time and nothing in IronRuby is annotated for trimming: keep IronRuby and the DLR whole. -->
+    <TrimMode>partial</TrimMode>
+    <!-- NativeAOT bakes feature switches in at compile time; the SDK default (false) for this one
+         wins over the RuntimeHostConfigurationOption item above. -->
+    <EnableUnsafeUTF7Encoding>true</EnableUnsafeUTF7Encoding>
+    <SuppressTrimAnalysisWarnings>false</SuppressTrimAnalysisWarnings>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(IronRubyNativeAot)' == 'true'">
+    <TrimmerRootAssembly Include="IronRuby" />
+    <TrimmerRootAssembly Include="IronRuby.Libraries" />
+    <TrimmerRootAssembly Include="IronRuby.Libraries.Yaml" />
+    <TrimmerRootAssembly Include="IronRuby.Prism" />
+    <TrimmerRootAssembly Include="Microsoft.Scripting" />
+    <TrimmerRootAssembly Include="Microsoft.Dynamic" />
+    <!-- .NET types Ruby code reaches through CLR interop, by reflection at run time -->
+    <TrimmerRootDescriptor Include="NativeAot.roots.xml" />
+    <!-- Microsoft.Scripting references it (app.config support), but privately, so it never reaches
+         the host's output; ILC refuses to compile a rooted assembly whose references are missing -->
+    <PackageReference Include="System.Configuration.ConfigurationManager" Version="8.0.0" />
+  </ItemGroup>
+  <!-- A Release build on Linux also produces the ReadyToRun host (Util/publish-r2r.sh), which ir.sh runs by default:
+       it starts about a third faster. The publish is a RuntimeIdentifier build of its own, so the target stays out of
+       it, and IronRubyNestedR2R stops a publish from running it again. A failed publish only warns: the IL build is
+       still good, and ir.sh does not pick a host older than the build.
+
+       The host gets the startup library too (Util/aot/build-startup.sh, IronRuby.Startup.dll): the Ruby code every
+       start runs - the core prelude, rubygems and the rest - compiled ahead of time against exactly this host, so that
+       `ir -e 1` does not parse, transform and LightCompile it (~17% faster to start, 32 MB on disk, ~6 MB more RSS).
+       It needs the .NET 10 SDK and runtime; without them, or if it fails, the host goes without it, which costs only
+       the speedup. -p:IronRubyStartupLibrary=false leaves it out. -->
+  <PropertyGroup>
+    <IronRubyStartupLibrary Condition="'$(IronRubyStartupLibrary)' == ''">true</IronRubyStartupLibrary>
+  </PropertyGroup>
+  <Target Name="IronRubyReadyToRunHost" AfterTargets="Build"
+          Condition="'$(Configuration)' == 'Release' and '$(TargetFramework)' != '' and '$(RuntimeIdentifier)' == '' and '$(IronRubyNestedR2R)' != 'true' and '$(IronRubyR2R)' != 'false' and $([MSBuild]::IsOSPlatform('Linux'))">
+    <!-- The host is published next to the old one and swapped in only once the publish succeeded: a publish that
+         fails halfway (it has hit an IOException race in Src/Prism/bin/.../linux-x64) would otherwise leave a host
+         with some assemblies new and some old. One retry, since that race does not repeat; the retry's exit status
+         decides (IgnoreStandardErrorWarningFormat), not the error lines the failed first attempt printed, which would
+         otherwise turn a good publish into ExitCode -1 and skip the swap. The startup library is built against the new
+         host before the swap, so the two always go in together. -->
+    <PropertyGroup>
+      <_IrR2RDir>$(MSBuildProjectDirectory)/bin/R2R/$(TargetFramework)</_IrR2RDir>
+      <_IrR2RNew>$(_IrR2RDir).new</_IrR2RNew>
+      <_IrR2RPublish>&quot;$(DOTNET_HOST_PATH)&quot; publish &quot;$(MSBuildProjectFullPath)&quot; -c Release -r linux-x64 --self-contained false -f $(TargetFramework) -p:PublishReadyToRun=true -p:IronRubyNestedR2R=true -p:IronRubyTargetFrameworks=$(TargetFramework) -p:DlrSourceDir=&quot;$(DlrSourceDir)&quot; -o &quot;$(_IrR2RNew)&quot; -nologo</_IrR2RPublish>
+      <_IrR2RPublishExit>-1</_IrR2RPublishExit>
+      <_IrStartupExit></_IrStartupExit>
+    </PropertyGroup>
+    <Exec ContinueOnError="WarnAndContinue" IgnoreStandardErrorWarningFormat="true"
+          Command="rm -rf &quot;$(_IrR2RNew)&quot; &amp;&amp; ( $(_IrR2RPublish) || $(_IrR2RPublish) )">
+      <Output TaskParameter="ExitCode" PropertyName="_IrR2RPublishExit" />
+    </Exec>
+    <Exec Condition="'$(_IrR2RPublishExit)' == '0' and '$(IronRubyStartupLibrary)' == 'true'" IgnoreExitCode="true" IgnoreStandardErrorWarningFormat="true"
+          StandardOutputImportance="high"
+          Command="sh &quot;$(MSBuildProjectDirectory)/../../Util/aot/build-startup.sh&quot; --host &quot;$(_IrR2RNew)&quot; --tfm $(TargetFramework) --dlr &quot;$(DlrSourceDir)&quot;">
+      <Output TaskParameter="ExitCode" PropertyName="_IrStartupExit" />
+    </Exec>
+    <Warning Condition="'$(_IrStartupExit)' != '' and '$(_IrStartupExit)' != '0' and '$(_IrStartupExit)' != '3'"
+             Text="The startup library (Util/aot/build-startup.sh) failed with exit code $(_IrStartupExit): the R2R host runs without it." />
+    <Exec Condition="'$(_IrR2RPublishExit)' == '0'" ContinueOnError="WarnAndContinue" Command="rm -rf &quot;$(_IrR2RDir)&quot; &amp;&amp; mv &quot;$(_IrR2RNew)&quot; &quot;$(_IrR2RDir)&quot;" />
+  </Target>
 </Project>

@@ -17,6 +17,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
+using IronRuby.Runtime;
 
 namespace IronRuby.Builtins {
     public sealed class CharacterMap {
@@ -159,36 +160,39 @@ namespace IronRuby.Builtins {
             return map;
         }
 
+        /// <summary>
+        /// Expands a tr-style selector into the characters it names, following MRI's trnext:
+        /// a backslash escapes the next character unless it is the last one, a dash is a range
+        /// only when a character follows it, and a descending range is an error rather than an
+        /// empty set.
+        /// </summary>
         internal static IEnumerable<char>/*!*/ ExpandRanges(MutableString/*!*/ str, int start, int end, bool infinite) {
-            int rangeMax = -1;
             char c = '\0';
             int i = start;
-            char lookahead = str.GetChar(start);
-            while (true) {
-                if (c < rangeMax) {
-                    // next character of the current range:
-                    c++;
-                } else if (i < end) {
-                    c = lookahead;
+            while (i < end) {
+                if (str.GetChar(i) == '\\' && i < end - 1) {
                     i++;
-                    lookahead = (i < end) ? str.GetChar(i) : '\0';
-                    if (lookahead == '-' && i + 1 < end) {
-                        // range:
-                        rangeMax = str.GetChar(i + 1);
-                        i += 2;
-                        lookahead = (i < end) ? str.GetChar(i) : '\0';
-
-                        if (c > rangeMax) {
-                            continue;
-                        }
-                    } else {
-                        rangeMax = -1;
-                    }
-                } else {
-                    break;
                 }
+                c = str.GetChar(i++);
 
-                yield return c;
+                if (i < end - 1 && str.GetChar(i) == '-') {
+                    i++;
+                    char last = str.GetChar(i++);
+                    if (c > last) {
+                        throw RubyExceptions.CreateArgumentError(
+                            String.Format("invalid range \"{0}-{1}\" in string transliteration", c, last)
+                        );
+                    }
+                    for (char expanded = c; ; expanded++) {
+                        yield return expanded;
+                        if (expanded == last) {
+                            break;
+                        }
+                    }
+                    c = last;
+                } else {
+                    yield return c;
+                }
             }
 
             if (infinite) {

@@ -23,10 +23,20 @@ namespace IronRuby.Builtins {
     public static class TrueClass : Object {
         #region Public Instance Methods
 
+        /// <summary>One frozen string, answered again every time - as in MRI.</summary>
+        private static readonly MutableString/*!*/ _TrueString = MutableString.CreateAscii("true").Freeze();
+
         [RubyMethodAttribute("to_s")]
+        [RubyMethodAttribute("inspect")]
         public static MutableString/*!*/ ToString(bool self) {
             Debug.Assert(self == true);
-            return MutableString.CreateAscii("true"); 
+            return _TrueString;
+        }
+
+        // MRI defines #=== on nil, true and false themselves; it is Kernel#=== (rb_equal) all the same.
+        [RubyMethodAttribute("===")]
+        public static bool CaseEquals(BinaryOpStorage/*!*/ equals, bool self, object other) {
+            return Protocols.IsEqual(equals, self, other);
         }
 
         [RubyMethodAttribute("&")]

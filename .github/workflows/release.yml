@@ -1,0 +1,478 @@
+name: Release
+
+# Binary builds: a self-contained IronRuby for each platform and each target framework,
+# made by Util/package-release.sh, and for Windows also an installer made from the net10.0
+# archive by Util/installer/build-installer.sh. net10.0 (LTS) is the main download and keeps
+# the plain names (ironruby-<version>-<rid>.*, and the -setup.exe); net11.0 archives sit
+# beside them as ironruby-<version>-net11-<rid>.*. Pushing a tag v* publishes them all as a
+# GitHub release (a pre-release while the version has a suffix such as -preview1), with
+# Docs/releases/<tag>.md as the notes when there is one; running the workflow by hand, or
+# a pull request that changes the packaging, only keeps them as workflow artifacts.
+# Each published file gets a signed build provenance attestation (actions/attest) in the
+# job that built it; `gh attestation verify <file> --repo Largo/ironruby` checks it.
+# The launch video, rendered from media/launch, is only rendered when asked for by hand -
+# it takes about 7 minutes of every run otherwise: with render_video it is kept as an
+# artifact, and with video_for set to a tag it alone is rendered and replaces the video,
+# and its SHA256SUMS line, on that release (or adds them to one published without).
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - Util/package-release.sh
+      - Util/installer/**
+      # the startup library every archive carries: its compiler, and the prelude it compiles most of
+      - Util/aot/**
+      - Util/process-smoke.rb
+      - Src/StdLib/ironruby/ruby4.rb
+  workflow_dispatch:
+    inputs:
+      render_video:
+        description: Render the launch video as well, as a workflow artifact
+        type: boolean
+        required: false
+        default: false
+      video_for:
+        description: Render only the launch video and replace it on this release (a tag, such as v4.0.0)
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: 1
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+  # The prism revision Src/Prism/Generated was generated from (Src/Prism/README.md), the one
+  # the vendored Ruby half of prism in Src/StdLib belongs to; ci.yml builds from the same one.
+  PRISM_REF: 30a255539e81842b2b7f12b4fd3c62a7b4d64165
+  # The DLR revision Build/dlr-patches applies to; ci.yml builds from the same one, so a
+  # release can be rebuilt and an upstream change only arrives when this is moved on purpose.
+  # Move both together, after checking the patches still apply.
+  DLR_REF: 922753f8ccbf5186c15899116d5a407b6b1723fb
+
+jobs:
+  # The pull requests and pushes of ci.yml test net11.0 only; the downloads are built on
+  # net10.0 and net11.0, so a v* tag runs ci.yml's whole test set on both first, and the
+  # release job below publishes nothing unless it passed. (The Release PR, from a release/*
+  # branch, has run it on both frameworks already.)
+  tests:
+    name: tests
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    uses: ./.github/workflows/ci.yml
+    with:
+      tfms: both
+
+  package:
+    name: ${{ matrix.rid }} ${{ matrix.tfm }}
+    if: github.event_name != 'workflow_dispatch' || inputs.video_for == ''
+    runs-on: ${{ matrix.os }}
+    # macOS is untested (README, Platforms): a failure there does not hold the release back.
+    continue-on-error: ${{ matrix.experimental }}
+    # id-token, attestations and artifact-metadata: for the build provenance below.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,  rid: linux-x64, tfm: net10.0, sdk: 10.0.x, experimental: false }
+          - { os: windows-latest, rid: win-x64,   tfm: net10.0, sdk: 10.0.x, experimental: false }
+          - { os: macos-latest,   rid: osx-arm64, tfm: net10.0, sdk: 10.0.x, experimental: true }
+          - { os: ubuntu-latest,  rid: linux-x64, tfm: net11.0, sdk: 11.0.x, experimental: false }
+          - { os: windows-latest, rid: win-x64,   tfm: net11.0, sdk: 11.0.x, experimental: false }
+          - { os: macos-latest,   rid: osx-arm64, tfm: net11.0, sdk: 11.0.x, experimental: true }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # See ci.yml: the sources must reach the parser byte for byte.
+      - name: Keep checkouts byte-identical on Windows
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf input
+
+      - uses: actions/checkout@v7
+        with:
+          path: ironruby
+
+      - uses: actions/checkout@v7
+        with:
+          repository: IronLanguages/dlr
+          ref: ${{ env.DLR_REF }}
+          path: dlr
+
+      - uses: actions/checkout@v7
+        with:
+          repository: ruby/prism
+          ref: ${{ env.PRISM_REF }}
+          path: prism
+
+      - name: Patch the DLR
+        run: |
+          for patch in ironruby/Build/dlr-patches/*.patch; do
+            echo "applying $patch"
+            git -C dlr apply "../$patch"
+          done
+
+      # The DLR multi-targets up to net10.0, so the build needs at least the .NET 10 SDK.
+      # Each job installs its own framework's SDK: the .NET 10 one for net10.0, as for every
+      # release before, and the .NET 11 one for net11.0, which a net11.0 build needs (and
+      # whose runtime the startup library's compiler, Util/aot, runs on).
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: ${{ matrix.sdk }}
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+
+      # Built as in ci.yml; see there for why Windows links the sources directly.
+      - name: Build libprism
+        working-directory: prism
+        run: |
+          ruby templates/template.rb
+          if [ "$RUNNER_OS" = Windows ]; then
+            command -v gcc >/dev/null || export PATH="/c/msys64/ucrt64/bin:/c/msys64/mingw64/bin:/c/msys64/usr/bin:$PATH"
+            mkdir -p build
+            shopt -s nullglob
+            sources=(src/*.c src/*/*.c)
+            gcc -shared -O2 -std=c99 -DPRISM_EXPORT_SYMBOLS -Iinclude \
+              -o build/libprism.dll "${sources[@]}"
+          else
+            make shared
+          fi
+          ls -l build
+
+      # Built as in ci.yml (Util/build-markly.sh), so the archive carries markly's cmark-gfm.
+      - name: Build libmarkly_cmark
+        working-directory: ironruby
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            command -v gcc >/dev/null || export PATH="/c/msys64/ucrt64/bin:/c/msys64/mingw64/bin:/c/msys64/usr/bin:$PATH"
+          fi
+          bash Util/build-markly.sh
+          ls -l Src/Libraries/Markly/native/build
+
+      # The committed loader must be the one this prism revision generates; a mismatch
+      # would build fine and then misread the syntax tree.
+      - name: Check the prism loader against the prism revision
+        working-directory: ironruby/Src/Prism
+        run: |
+          ruby generate.rb ../../../prism/config.yml "$RUNNER_TEMP/prism-gen"
+          diff -r --strip-trailing-cr Generated "$RUNNER_TEMP/prism-gen"
+
+      # Built as in ci.yml: the rbs gem's parser behind rbs_extension, from the gem
+      # pinned by SHA-256 in Util/build-librbs.sh, shipped beside the assemblies.
+      - name: Build librbs
+        working-directory: ironruby
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            command -v gcc >/dev/null || export PATH="/c/msys64/ucrt64/bin:/c/msys64/mingw64/bin:/c/msys64/usr/bin:$PATH"
+          fi
+          Util/build-librbs.sh
+          ls -l Src/Libraries/Rbs/native/build
+
+      # package-release.sh rebuilds libe_sqlite3.so for the Linux archive (gcc, unzip) and
+      # checks it with the system's libsqlite3 preloaded, the case SQLitePCL.raw#682 is about.
+      - name: SQLite for the Linux archive
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libsqlite3-0 unzip
+
+      - name: Package
+        working-directory: ironruby
+        timeout-minutes: 60
+        env:
+          IR_TFM: ${{ matrix.tfm }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            export IR_VERSION="${GITHUB_REF_NAME#v}"
+          else
+            version=$(sed -n 's/.*DisplayVersion = "\(.*\)";.*/\1/p' Src/Ruby/CurrentVersion.cs)
+            export IR_VERSION="$version+$(git rev-parse --short HEAD)"
+          fi
+          Util/package-release.sh "${{ matrix.rid }}" "$GITHUB_WORKSPACE/dist"
+
+      # The startup library (IronRuby.Startup.dll, Util/aot), from the archive itself, unpacked afresh: with it there,
+      # the archive's ir must load it, use it and run with it. package-release.sh only ships one that passed its own
+      # check, and leaves it out otherwise (only the speedup lost); on a pull request a missing library fails the job,
+      # so that a change that loses it is seen, while a tag still publishes an archive without it. The job summary
+      # has `ir -e 1` with and without it.
+      - name: Startup library, from the archive
+        working-directory: dist
+        # a library that hangs a program fails here, instead of holding the job for 6 hours
+        timeout-minutes: 10
+        run: |
+          dir="$RUNNER_TEMP/startup-check"
+          rm -rf "$dir" && mkdir -p "$dir"
+          case "${{ matrix.rid }}" in
+            win-*) 7z x -bd -o"$dir" ironruby-*-${{ matrix.rid }}.zip > /dev/null ;;
+            *)     tar -xzf ironruby-*-${{ matrix.rid }}.tar.gz -C "$dir" ;;
+          esac
+          cd "$dir"/ironruby-*
+          lib="Src/Console/bin/Release/${{ matrix.tfm }}/IronRuby.Startup.dll"
+          if [ ! -f "$lib" ]; then
+            echo "::warning::the archive has no startup library"
+            [ "$GITHUB_EVENT_NAME" != pull_request ]
+            exit
+          fi
+          smoke="$GITHUB_WORKSPACE/ironruby/Util/aot/startup-smoke.rb"
+          case "${{ matrix.rid }}" in
+            win-*) trace=$(IR_STARTUP_DLL_TRACE=1 cmd //c ir.cmd "$(cygpath -w "$smoke")" 2>&1) ;;
+            *)     trace=$(IR_STARTUP_DLL_TRACE=1 ./ir.sh "$smoke" 2>&1) ;;
+          esac
+          # (here-strings, not echo | grep -q: with pipefail, grep -q leaving early can fail echo with SIGPIPE)
+          grep -v "^IronRuby.Startup: \(parsing\|compiling\|compiles\|the JIT parses\)" <<<"$trace"
+          grep -q "IronRuby.Startup: loaded" <<<"$trace"
+          # (not `! grep`: set -e does not stop at a negated command that fails)
+          if grep -q "IronRuby.Startup: .*not used" <<<"$trace"; then exit 1; fi
+          # registering it threw (the loader catches that, and runs without it)
+          if grep -q "^IronRuby.Startup: [A-Za-z.]*Exception" <<<"$trace"; then exit 1; fi
+          grep -q "^done" <<<"$trace"
+          # a pipe and a child work at all (the smoke prints what they raise rather than raising it)
+          grep -q "^pipe: piped" <<<"$trace"
+          grep -q "^popen: popen true" <<<"$trace"
+          echo "ok: $lib loaded and used"
+
+      # Pipes, child processes and the libc calls under them (Util/process-smoke.rb), from the archive unpacked by the
+      # step above: what one libc lacks (macOS has no pipe2) or passes differently (a variadic argument, on Apple arm64)
+      # only shows on that platform. Windows has a CreateProcess implementation of its own, and no bash.
+      - name: Pipes and processes, from the archive
+        if: runner.os != 'Windows'
+        working-directory: dist
+        timeout-minutes: 5
+        run: |
+          cd "$RUNNER_TEMP"/startup-check/ironruby-*
+          ./ir.sh "$GITHUB_WORKSPACE/ironruby/Util/process-smoke.rb"
+
+      # The Windows archive carries Samples/Notepad: drive it from the unpacked tree, on
+      # the Release build the archive ships. package-release.sh leaves the tree in dist/.
+      - name: Notepad sample, from the archive
+        if: runner.os == 'Windows'
+        timeout-minutes: 5
+        working-directory: dist
+        run: cd ironruby-*-win-x64 && cmd //c ir.cmd Samples/Notepad/test_notepad.rb
+
+      # Inno Setup, for the installer: its release from GitHub, pinned by version and by the
+      # SHA-256 GitHub lists for that asset, installed for this job only. Only the net10.0
+      # archive becomes an installer: there is one, and it installs into C:\IronRuby40-x64
+      # whichever framework it carries.
+      - name: Inno Setup
+        if: runner.os == 'Windows' && matrix.tfm == 'net10.0'
+        env:
+          INNO_VERSION: 6.7.3
+          INNO_SHA256: 9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732
+        run: |
+          mkdir -p "$RUNNER_TEMP/innosetup-download"
+          setup="$RUNNER_TEMP/innosetup-download/innosetup-$INNO_VERSION.exe"
+          curl -fsSL -o "$setup" \
+            "https://github.com/jrsoftware/issrc/releases/download/is-${INNO_VERSION//./_}/innosetup-$INNO_VERSION.exe"
+          echo "$INNO_SHA256  $setup" | sha256sum -c
+          MSYS2_ARG_CONV_EXCL='*' "$setup" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /CURRENTUSER \
+            "/DIR=$(cygpath -w "$RUNNER_TEMP/innosetup")"
+          test -f "$RUNNER_TEMP/innosetup/ISCC.exe"
+          echo "ISCC=$RUNNER_TEMP/innosetup/ISCC.exe" >> "$GITHUB_ENV"
+
+      # The installer carries the archive just made, unchanged.
+      - name: Installer, from the archive
+        if: runner.os == 'Windows' && matrix.tfm == 'net10.0'
+        working-directory: ironruby
+        run: Util/installer/build-installer.sh "$GITHUB_WORKSPACE"/dist/ironruby-*-win-x64.zip
+
+      # Into C:\IronRuby40-x64, for this user and then for all users: ironruby, irb and
+      # `igem install rack` from the PATH a new terminal gets, then the uninstaller, which
+      # must leave no file and the PATH as it was.
+      - name: Install, run and uninstall
+        if: runner.os == 'Windows' && matrix.tfm == 'net10.0'
+        timeout-minutes: 15
+        shell: pwsh
+        working-directory: dist
+        run: |
+          $test = "$env:GITHUB_WORKSPACE\ironruby\Util\installer\test-installer.ps1"
+          $setup = (Get-Item ironruby-*-win-x64-setup.exe).FullName
+          & $test $setup
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & $test $setup -AllUsers
+
+      # Signed SLSA build provenance for the archive a tag publishes, with GitHub's own
+      # actions/attest, pinned to the commit of its v4.2.2 tag: `gh attestation verify
+      # <archive> --repo Largo/ironruby` shows that this workflow built it, from which
+      # commit and in which run. dist/ironruby-<version>-[net11-]<rid>*.* is the archive, and
+      # on Windows net10.0 the installer, -setup.exe; not the directory the archive was
+      # packed from.
+      - name: Attest build provenance
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/ironruby-*-${{ matrix.rid }}*.*
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ironruby-${{ matrix.rid }}-${{ matrix.tfm }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*-setup.exe
+          if-no-files-found: error
+
+  # media/launch is a HyperFrames composition (media/launch/README.md). A video that
+  # does not render does not hold the archives back.
+  video:
+    name: launch video
+    if: github.event_name == 'workflow_dispatch' && (inputs.render_video || inputs.video_for != '')
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    # A render takes about 7 minutes; a failed one can leave hyperframes waiting.
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: FFmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      # The music is not in the repository; the script fetches the pinned recording.
+      - name: Music
+        run: bash media/launch/tools/fetch-music.sh --profile
+
+      # lint is static and must pass; check also audits layout and contrast in the
+      # browser and only warns here. The version is pinned in package.json.
+      - name: Check and render
+        working-directory: media/launch
+        env:
+          HYPERFRAMES_SKIP_SKILLS: 1
+        run: |
+          hf="npx --yes hyperframes@$(sed -n 's/.*hyperframes@\([0-9.]*\).*/\1/p' package.json | head -1)"
+          $hf telemetry disable
+          $hf lint
+          $hf browser ensure
+          $hf check || echo "::warning::hyperframes check reported findings"
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          $hf render --fps 60 --quality high --output "$GITHUB_WORKSPACE/dist/ironruby-4-launch.mp4"
+          $hf snapshot --frames 12
+
+      # As the archives: the film that video_for puts on a release gets its provenance here,
+      # in the job that rendered it.
+      - name: Attest build provenance
+        if: inputs.video_for != ''
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/ironruby-4-launch.mp4
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ironruby-launch-video
+          path: dist/ironruby-4-launch.mp4
+          if-no-files-found: error
+
+      # Stills across the film, to look at a render without downloading it.
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: launch-video-frames
+          path: media/launch/snapshots
+          if-no-files-found: ignore
+
+  release:
+    name: GitHub release
+    # A pushed tag only: a run by hand keeps its archives as artifacts, even on a tag.
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [tests, package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: Docs/releases
+
+      # ironruby-<rid>-net* only: the archives of every RID and framework and the installer.
+      # Not the review stills, the video, or the test output of the tests job above, which
+      # 4.0.5 published as results.txt when the pattern was ironruby-*. SHA256SUMS lists all of them.
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          pattern: ironruby-*-net*
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * | tee SHA256SUMS
+
+      # The archives were attested where they were built; SHA256SUMS is made here.
+      - name: Attest SHA256SUMS
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/SHA256SUMS
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prerelease=""
+          case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease" ;; esac
+          notes=()
+          if [ -f "Docs/releases/$GITHUB_REF_NAME.md" ]; then
+            notes=(--notes-file "Docs/releases/$GITHUB_REF_NAME.md")
+          fi
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --title "IronRuby ${GITHUB_REF_NAME#v}" \
+            "${notes[@]}" --generate-notes $prerelease
+
+  # By hand: a new render of the video on a release that is already out. Only the video
+  # and its line in SHA256SUMS change; the archives stay as they were published.
+  replace-video:
+    name: replace the video on ${{ inputs.video_for }}
+    if: github.event_name == 'workflow_dispatch' && inputs.video_for != ''
+    needs: video
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: ironruby-launch-video
+          path: dist
+
+      - name: Checksums
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.video_for }}
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS
+          sum=$(sha256sum ironruby-4-launch.mp4)
+          { grep -v ' ironruby-4-launch.mp4$' SHA256SUMS; echo "$sum"; } > SHA256SUMS.new
+          mv SHA256SUMS.new SHA256SUMS
+          cat SHA256SUMS
+
+      # The video was attested where it was rendered; this SHA256SUMS is made here.
+      - name: Attest SHA256SUMS
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/SHA256SUMS
+
+      - name: Upload
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.video_for }}
+        run: gh release upload "$TAG" ironruby-4-launch.mp4 SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"

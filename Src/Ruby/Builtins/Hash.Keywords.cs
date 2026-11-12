@@ -1,0 +1,330 @@
+/* ****************************************************************************
+ *
+ * Copyright (c) Microsoft Corporation. 
+ *
+ * This source code is subject to terms and conditions of the Apache License, Version 2.0. A 
+ * copy of the license can be found in the License.html file at the root of this distribution. If 
+ * you cannot locate the  Apache License, Version 2.0, please send an email to 
+ * ironruby@microsoft.com. By using this source code in any fashion, you are agreeing to be bound 
+ * by the terms of the Apache License, Version 2.0.
+ *
+ * You must not remove this notice, or any other, from this software.
+ *
+ *
+ * ***************************************************************************/
+
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+
+namespace IronRuby.Builtins {
+
+    /// <summary>
+    /// What binding keyword parameters needs from the hash a keyword call passed (see
+    /// RubyOps.KeywordArgumentsMatch). The keys looked for are Symbols, and a Symbol is equal to
+    /// nothing but itself, so an entry holds one exactly when its key is that very object. A
+    /// keyword hash is small, and scanning a handful of entries for a reference is cheaper than
+    /// hashing the key and probing for it; a larger hash is probed as usual.
+    /// </summary>
+    public partial class Hash {
+        private const int IdentityScanLimit = 8;
+
+        /// <summary>
+        /// An empty keyword-call hash with room for <paramref name="capacity"/> Symbol keys, to be
+        /// filled with <see cref="AppendUnlinked"/>. Binding keyword parameters only scans the
+        /// entries (<see cref="TryGetValueByIdentity"/>, <see cref="HasKeywords"/>), so such a hash
+        /// gets no bucket array unless something probes it later (LinkPendingBuckets).
+        /// </summary>
+        internal static Hash/*!*/ CreateKeywordArguments(IEqualityComparer<object>/*!*/ comparer, int capacity) {
+            var result = CreateUnlinked(comparer, capacity);
+            result.IsKeywordArguments = true;
+            return result;
+        }
+
+        /// <summary>
+        /// An empty hash with room for <paramref name="capacity"/> Symbol keys, to be filled with
+        /// <see cref="AppendUnlinked"/>: a keyword-call hash, or a hash literal whose keys are all
+        /// Symbol literals. No bucket array until something probes (LinkPendingBuckets). The entry
+        /// array is the usual GetPrime size, 3 for up to three keys: an exact fit of two for a
+        /// two-key literal saved 16 bytes, but made the hash's first added key a resize, and
+        /// `h = {a: x, b: y}; h[:c] = z' then 1.37x slower than with room for the third key.
+        /// </summary>
+        internal static Hash/*!*/ CreateUnlinked(IEqualityComparer<object>/*!*/ comparer, int capacity) {
+            var result = new Hash(comparer, 0);
+            if (capacity <= SmallUnlinkedSize) {
+                // every keyword call with up to three keywords: no prime table walk and no 64-bit division
+                result._entries = new Entry[SmallUnlinkedSize];
+                result._fastModMultiplier = SmallUnlinkedMultiplier;
+                return result;
+            }
+            int size = GetPrime(capacity);
+            result._entries = new Entry[size];
+            result._fastModMultiplier = UInt64.MaxValue / (uint)size + 1;
+            return result;
+        }
+
+        // GetPrime's answer for up to three keys, and the FastMod multiplier that goes with it.
+        private const int SmallUnlinkedSize = 3;
+        private const ulong SmallUnlinkedMultiplier = UInt64.MaxValue / SmallUnlinkedSize + 1;
+
+        /// <summary>
+        /// Adds a Symbol key to a hash made by <see cref="CreateKeywordArguments"/>, within the
+        /// capacity it was made with. A Symbol is equal only to itself, so a repeated key is found by
+        /// identity and, as an insert would, keeps its position and takes the new value. The hash
+        /// code is taken now, as an insert would take it, so linking the buckets later asks nothing
+        /// of the keys.
+        /// </summary>
+        internal void AppendUnlinked(object/*!*/ key, object value) {
+            Debug.Assert(_buckets == null && _count < _entries.Length);
+            Entry[] entries = _entries;
+            for (int i = 0; i < _count; i++) {
+                if (entries[i].Key == key) {
+                    entries[i].Value = value;
+                    _stamp++;
+                    return;
+                }
+            }
+            ref Entry e = ref entries[_count++];
+            e.HashCode = _comparer.GetHashCode(key);
+            e.Next = -1;
+            e.Key = key;
+            e.Value = value;
+            _liveCount++;
+            _version++;
+            _stamp++;
+        }
+
+        /// <summary>
+        /// A copy of this hash - default value or proc and comparer included, as the copy
+        /// constructor makes it - without the keys among <paramref name="names"/>, which are
+        /// compared by identity (see <see cref="TryGetValueByIdentity"/>): a **rest parameter.
+        /// </summary>
+        internal Hash/*!*/ CopyWithoutKeywords(object/*!*/[]/*!*/ names) {
+            Entry[] entries = _entries;
+            int count = _count;
+            if (AllKeysAreSymbols()) {
+                return CopyUnlinkedWithout(names);
+            }
+
+            var result = new Hash(_comparer, _liveCount);
+            result._defaultProc = _defaultProc;
+            result._defaultValue = DefaultValue;
+            result._comparesByIdentity = _comparesByIdentity;
+
+            for (int i = _start; i < count; i++) {
+                if (entries[i].Next == TombstoneNext) {
+                    continue;
+                }
+                object key = entries[i].Key;
+                int j = 0;
+                while (j < names.Length && names[j] != key) {
+                    j++;
+                }
+                if (j == names.Length) {
+                    result[key] = entries[i].Value;
+                }
+            }
+            return result;
+        }
+
+        private bool AllKeysAreSymbols() {
+            Entry[] entries = _entries;
+            int count = _count;
+            for (int i = _start; i < count; i++) {
+                if (entries[i].Next != TombstoneNext && !(entries[i].Key is RubySymbol)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// <see cref="CopyWithoutKeywords"/> for a hash whose keys are all Symbols: they cannot be
+        /// equal to each other, so the copy takes the entries - hash codes included, the comparer
+        /// being the same - without a bucket array, which the first probe builds
+        /// (LinkPendingBuckets), as a keyword call's own hash is made (<see cref="CreateKeywordArguments"/>).
+        /// A **rest parameter is mostly passed on or read through, so it often never gets one.
+        /// </summary>
+        private Hash/*!*/ CopyUnlinkedWithout(object/*!*/[]/*!*/ names) {
+            var result = new Hash(_comparer, 0);
+            result._defaultProc = _defaultProc;
+            result._defaultValue = DefaultValue;
+            result._comparesByIdentity = _comparesByIdentity;
+
+            int live = _liveCount;
+            if (live == 0) {
+                return result;
+            }
+            int size = GetPrime(live);
+            Entry[] target = new Entry[size];
+            Entry[] entries = _entries;
+            int count = _count;
+            int n = 0;
+            for (int i = _start; i < count; i++) {
+                if (entries[i].Next == TombstoneNext) {
+                    continue;
+                }
+                object key = entries[i].Key;
+                int j = 0;
+                while (j < names.Length && names[j] != key) {
+                    j++;
+                }
+                if (j < names.Length) {
+                    continue;
+                }
+                ref Entry e = ref target[n++];
+                e.HashCode = entries[i].HashCode;
+                e.Next = -1;
+                e.Key = key;
+                e.Value = entries[i].Value;
+            }
+            if (n > 0) {
+                result._entries = target;
+                result._fastModMultiplier = UInt64.MaxValue / (uint)size + 1;
+                result._count = n;
+                result._liveCount = n;
+                result._version++;
+                result._stamp++;
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// A copy of this hash's entries marked as keyword arguments and laid out as a keyword call's
+        /// own hash is (<see cref="CreateKeywordArguments"/>, no bucket array): what `**h` passes on.
+        /// Null unless every key is a Symbol - so the keys need no check for duplicates - and the
+        /// comparer is <paramref name="comparer"/>, whose hash codes the entries then already hold;
+        /// the caller copies by inserting instead.
+        /// </summary>
+        internal Hash TryCopyAsKeywordArguments(IEqualityComparer<object>/*!*/ comparer) {
+            int live = _liveCount;
+            if (live == 0 || _comparer != comparer) {
+                return null;
+            }
+
+            if (!AllKeysAreSymbols()) {
+                return null;
+            }
+
+            var result = CreateKeywordArguments(comparer, live);
+            Entry[] entries = _entries;
+            int count = _count;
+            Entry[] target = result._entries;
+            int n = 0;
+            for (int i = _start; i < count; i++) {
+                if (entries[i].Next == TombstoneNext) {
+                    continue;
+                }
+                ref Entry e = ref target[n++];
+                e.HashCode = entries[i].HashCode;
+                e.Next = -1;
+                e.Key = entries[i].Key;
+                e.Value = entries[i].Value;
+            }
+            result._count = n;
+            result._liveCount = n;
+            result._version++;
+            result._stamp++;
+            return result;
+        }
+
+        /// <summary>
+        /// True when <paramref name="other"/> holds the very key and value objects this hash holds, in
+        /// the same order. Compared by reference: false may also mean equal but not the same objects.
+        /// </summary>
+        internal bool HasSameEntries(Hash/*!*/ other) {
+            if (other._liveCount != _liveCount) {
+                return false;
+            }
+            Entry[] a = _entries, b = other._entries;
+            int i = _start, n = _count;
+            int j = other._start, m = other._count;
+            while (true) {
+                while (i < n && a[i].Next == TombstoneNext) {
+                    i++;
+                }
+                while (j < m && b[j].Next == TombstoneNext) {
+                    j++;
+                }
+                if (i >= n || j >= m) {
+                    return i >= n && j >= m;
+                }
+                if (a[i].Key != b[j].Key || a[i].Value != b[j].Value) {
+                    return false;
+                }
+                i++;
+                j++;
+            }
+        }
+
+        /// <summary>
+        /// The value stored under <paramref name="key"/>, which must be a key that is equal only to
+        /// itself (a Symbol). Entry <paramref name="hint"/> is tried first: callers mostly pass
+        /// keywords in the order they are declared in.
+        /// </summary>
+        internal bool TryGetValueByIdentity(object/*!*/ key, int hint, out object value) {
+            Entry[] entries = _entries;
+            if (entries != null && _liveCount <= IdentityScanLimit) {
+                int count = _count;
+                if ((uint)hint < (uint)count && entries[hint].Key == key && entries[hint].Next != TombstoneNext) {
+                    value = entries[hint].Value;
+                    return true;
+                }
+                for (int i = _start; i < count; i++) {
+                    if (entries[i].Key == key && entries[i].Next != TombstoneNext) {
+                        value = entries[i].Value;
+                        return true;
+                    }
+                }
+                value = null;
+                return false;
+            }
+            return TryGetValue(key, out value);
+        }
+
+        /// <summary>
+        /// True when the first <paramref name="requiredCount"/> of <paramref name="names"/> are all keys
+        /// of this hash and, unless <paramref name="acceptsOthers"/>, it has no key but those names.
+        /// The names are compared by identity, see <see cref="TryGetValueByIdentity"/>.
+        /// </summary>
+        internal bool HasKeywords(object/*!*/[]/*!*/ names, int requiredCount, bool acceptsOthers) {
+            int live = _liveCount;
+            if (live == 0) {
+                return requiredCount == 0;
+            }
+
+            if (live <= IdentityScanLimit && names.Length <= 64) {
+                Entry[] entries = _entries;
+                int count = _count;
+                ulong seen = 0;
+                for (int i = _start; i < count; i++) {
+                    if (entries[i].Next == TombstoneNext) {
+                        continue;
+                    }
+                    object key = entries[i].Key;
+                    int j = 0;
+                    while (j < names.Length && names[j] != key) {
+                        j++;
+                    }
+                    if (j < names.Length) {
+                        seen |= 1UL << j;
+                    } else if (!acceptsOthers) {
+                        return false;
+                    }
+                }
+                ulong required = (requiredCount >= 64) ? ulong.MaxValue : (1UL << requiredCount) - 1;
+                return (seen & required) == required;
+            }
+
+            int found = 0;
+            for (int i = 0; i < names.Length; i++) {
+                if (ContainsKey(names[i])) {
+                    found++;
+                } else if (i < requiredCount) {
+                    return false;
+                }
+            }
+            return acceptsOthers || found == live;
+        }
+    }
+}

@@ -15,12 +15,8 @@
 
 using System;
 using IronRuby.Builtins;
-using System.Text;
-using System.Diagnostics;
 using System.Collections.Generic;
 using IronRuby.Runtime;
-using Microsoft.Scripting;
-using System.Runtime.CompilerServices;
 using System.Collections;
 using Microsoft.Scripting.Utils;
 
@@ -128,22 +124,14 @@ namespace IronRuby.Tests {
             RubyArray a;
 
             a = new RubyArray(new object[] { 1, 2, 8 });
-            Assert(!a.IsTainted && !a.IsFrozen && !a.IsReadOnly && !((IList)a).IsFixedSize && !((ICollection)a).IsSynchronized);
+            Assert(!a.IsFrozen && !a.IsReadOnly && !((IList)a).IsFixedSize && !((ICollection)a).IsSynchronized);
             Assert(ReferenceEquals(((ICollection)a).SyncRoot, a));
-
-            a.IsTainted = true;
-            Assert(a.IsTainted);
-            a.IsTainted = false;
-            Assert(!a.IsTainted);
 
             a[1] = 5;
             Assert((int)a[0] == 1 && (int)a[1] == 5 && (int)a[2] == 8);
 
             ((IRubyObjectState)a).Freeze();
             Assert(a.IsFrozen);
-
-            AssertExceptionThrown<RuntimeError>(() => a.IsTainted = true);
-            Assert(!a.IsTainted);
 
             AssertExceptionThrown<RuntimeError>(() => a[1] = 1);
             Assert((int)a[0] == 1 && (int)a[1] == 5 && (int)a[2] == 8);
@@ -360,6 +348,51 @@ namespace IronRuby.Tests {
             AssertExceptionThrown<RuntimeError>(() => a.Insert(0, 1));
             AssertExceptionThrown<RuntimeError>(() => a.InsertRange(0, new object[0]));
             AssertExceptionThrown<RuntimeError>(() => a.InsertRange(0, Enumerable(0)));
+        }
+
+        /// <summary>
+        /// Insertions that have to grow the buffer of an array whose elements no longer start at
+        /// its beginning (after a shift). They used to copy the elements to the front of the new
+        /// buffer and keep the old start: [1, 2, 3, 4].shift then unshift(7, 8) read back as
+        /// [8, 2, 3, 4, nil].
+        /// </summary>
+        [Options(NoRuntime = true)]
+        public void RubyArray_InsertAfterShift() {
+            RubyArray a;
+
+            a = new RubyArray(new object[] { 1, 2, 3, 4 });
+            a.RemoveAt(0);
+            a.InsertRange(0, new object[] { 7, 8 });
+            AssertValueEquals(a, 7, 8, 2, 3, 4);
+
+            a = new RubyArray(new object[] { 1, 2, 3, 4 });
+            a.RemoveAt(0);
+            a.Insert(3, 9);
+            a.InsertRange(1, new object[] { 5, 6, 7 });
+            AssertValueEquals(a, 2, 5, 6, 7, 3, 4, 9);
+
+            // Every mix of the ends and the middle, against List<object>.
+            var random = new Random(1);
+            for (int round = 0; round < 200; round++) {
+                a = new RubyArray();
+                var expected = new List<object>();
+                for (int step = 0; step < 300; step++) {
+                    int count = random.Next(20);
+                    var items = new object[count];
+                    for (int i = 0; i < count; i++) {
+                        items[i] = step * 100 + i;
+                    }
+                    switch (random.Next(6)) {
+                        case 0: a.AddRange(items); expected.AddRange(items); break;
+                        case 1: a.InsertRange(0, items); expected.InsertRange(0, items); break;
+                        case 2: int index = random.Next(a.Count + 1); a.InsertRange(index, items); expected.InsertRange(index, items); break;
+                        case 3: a.Insert(0, step); expected.Insert(0, step); break;
+                        case 4: if (a.Count > 0) { int n = random.Next(Math.Min(a.Count, 5)) + 1; a.RemoveRange(0, n); expected.RemoveRange(0, n); } break;
+                        case 5: if (a.Count > 0) { int at = random.Next(a.Count); a.RemoveAt(at); expected.RemoveAt(at); } break;
+                    }
+                    Assert(ArrayUtils.ValueEquals(a.ToArray(), expected.ToArray()));
+                }
+            }
         }
 
         [Options(NoRuntime = true)]

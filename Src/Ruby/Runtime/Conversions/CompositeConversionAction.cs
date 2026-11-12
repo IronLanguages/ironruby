@@ -13,21 +13,15 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
 using IronRuby.Compiler.Generation;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Diagnostics;
-using AstUtils = Microsoft.Scripting.Ast.Utils;
 using IronRuby.Runtime.Calls;
 
 namespace IronRuby.Runtime.Conversions {
@@ -62,7 +56,25 @@ namespace IronRuby.Runtime.Conversions {
             get { return _resultType; }
         }
 
+        /// <summary>
+        /// The context's one binder for the conversion (<see cref="RubyMetaBinderFactory.CompositeConversion"/>), as every
+        /// other conversion has: its sites then share the rules it binds rather than each binding its own for the same
+        /// receiver class, and a storage's GetSite(Make(...)) allocates nothing once the site exists.
+        /// </summary>
         public static CompositeConversionAction/*!*/ Make(RubyContext/*!*/ context, CompositeConversion/*!*/ conversion) {
+            // A new call site then finds the rules its binder has bound for other sites; with an action of its own -
+            // Make used to create one per call - every site bound each rule anew (30 binds at `ir -e 1' for ToPathToStr
+            // alone, about a quarter of a millisecond each on the R2R host). A null context (MakeShared, shared
+            // components) gets the shared factory's one action.
+            var factory = (context != null) ? context.MetaBinderFactory : RubyMetaBinderFactory.Shared;
+            return factory.CompositeConversion(conversion);
+        }
+
+        /// <summary>
+        /// A new action - for <see cref="RubyMetaBinderFactory"/>, which keeps one per runtime. Everyone else calls Make.
+        /// A null <paramref name="context"/> makes the shared action (<see cref="MakeShared"/>), of shared components.
+        /// </summary>
+        internal static CompositeConversionAction/*!*/ Create(RubyContext context, CompositeConversion conversion) {
             switch (conversion) {
                 case CompositeConversion.ToFixnumToStr:
                     return new CompositeConversionAction(conversion,
@@ -106,6 +118,14 @@ namespace IronRuby.Runtime.Conversions {
 
         public override Expression/*!*/ CreateExpression() {
             return Methods.GetMethod(GetType(), "MakeShared").OpCall(Ast.Constant(_conversion));
+        }
+
+        // A path (to_path, then to_str) of a String - nearly every path a library method is given - or nil is converted by the
+        // first conversion implicitly, to itself, which goes without a rule (see ImplicitConversionDispatcher): the rule is one of
+        // the first of its delegate type, whose interpretation has code JIT-compiled the first time (10 ms at `ir -e 1').
+        protected override object BindPrecompiled(Type/*!*/ delegateType, object[]/*!*/ args) {
+            return (Context != null && _conversion == CompositeConversion.ToPathToStr) ?
+                ImplicitConversionDispatcher<MutableString>.TryCreate((ConvertToPathAction)_conversions[0], delegateType, args) : null;
         }
 
         protected override bool Build(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, bool defaultFallback) {

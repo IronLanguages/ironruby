@@ -13,30 +13,15 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
+using System;
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
-using System.Collections;
 using System.Collections.Generic;
-using System.Diagnostics;
-using System.Linq;
-using System.Runtime.CompilerServices;
-using Microsoft.Scripting;
-using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Utils;
-using IronRuby.Runtime;
-using IronRuby.Runtime.Conversions;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 	
 namespace IronRuby.Compiler.Ast {
-    using Ast = MSA.Expression;
-    using AstExpressions = ReadOnlyCollectionBuilder<MSA.Expression>;
-    using ExpressionsBuilder = Microsoft.Scripting.Ast.ExpressionCollectionBuilder<MSA.Expression>;
 
-    // TODO: remove this class
     public class Arguments {
         internal static readonly Arguments Empty = new Arguments();
 
@@ -49,7 +34,7 @@ namespace IronRuby.Compiler.Ast {
         public Expression/*!*/[]/*!*/ Expressions { get { return _expressions; } }
         
         public Arguments() {
-            _expressions = Expression.EmptyArray;
+            _expressions = Array.Empty<Expression>();
         }
 
         public Arguments(Expression/*!*/ arg) {
@@ -62,7 +47,7 @@ namespace IronRuby.Compiler.Ast {
                 Assert.NotNullItems(expressions);
             }
 
-            _expressions = expressions ?? Expression.EmptyArray;
+            _expressions = expressions ?? Array.Empty<Expression>();
         }
 
         #region Transform to Call/Yield Expression
@@ -88,12 +73,11 @@ namespace IronRuby.Compiler.Ast {
                 result.Add(_expressions[i].TransformRead(gen));
             }
 
-            // TODO: 1.9 allows multiple splats at call-site, e.g. foo(a,b,*c,*d,e,*f).
-            // Currently our call-sites only implement single splatting so we convert the arguments to such form, 
-            // e.g. foo(a,b,*[*c,*d,e,*f]).
-            if (splattedCount == 1) {
+            // A call site splats one trailing array, so from the first splat on the arguments go into
+            // one: foo(a,b,*c,*d,e,*f) is passed as foo(a,b,*[*c,*d,e,*f]).
+            if (splattedCount == 1 && firstSplatted == _expressions.Length - 1) {
                 return _expressions[firstSplatted].TransformRead(gen);
-            } else if (splattedCount > 1) {
+            } else if (splattedCount >= 1) {
                 return UnsplatArguments(gen, firstSplatted);
             } else {
                 return null;

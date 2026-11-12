@@ -13,25 +13,14 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
-using System.Diagnostics;
-using System.Dynamic;
 using Microsoft.Scripting;
-using Microsoft.Scripting.Actions;
-using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
-using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
 using IronRuby.Runtime.Conversions;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Compiler.Ast {
-    using Ast = MSA.Expression;
 
     // TODO: remove?
     public partial class MatchExpression : Expression {
@@ -56,7 +45,7 @@ namespace IronRuby.Compiler.Ast {
             return "method";
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             return Methods.MatchString.OpCall(
                 AstUtils.LightDynamic(ConvertToStrAction.Make(gen.Context), typeof(MutableString), _expression.Transform(gen)),
                 _regex.Transform(gen),

@@ -64,7 +64,7 @@ D.foo
 []
 C.foo
 [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0]
-"
+", 2
             );
         }
 
@@ -143,6 +143,352 @@ D.new.foo 'arg'
 ");
             }, @"
 C.foo
+");
+        }
+
+        /// <summary>
+        /// A parameterless super in a method with **rest, ** or **nil forwards the keywords as `**rest' would - read
+        /// from the locals, so a reassigned rest passes its new value, and nothing at all when there are none -
+        /// rather than the hidden trailing hash the keywords arrived in, whose `{}' was one positional argument
+        /// too many for a parent without keywords. The output is CRuby's.
+        /// </summary>
+        public void SuperParameterlessKeywordRest1() {
+            TestOutput(@"
+class P
+  def m(h = :none) h end
+  def r(*a) a end
+  def k(**kw) kw end
+end
+class C < P
+  def m(**kw) super end
+  def r(a, **) super end
+  def k(b: 1, **rest) super end
+end
+class D < P
+  def m(**nil) super end
+  def r(a, b = 2, **kw) kw = {y: a}; super end
+end
+def s(x)
+  x.is_a?(Hash) ? [:hash, *x.to_a] : x.is_a?(Array) ? x.map { |e| s(e) } : x
+end
+p s(C.new.m), s(C.new.m(a: 1)), s(C.new.r(1)), s(C.new.r(1, z: 2)), s(C.new.k), s(C.new.k(z: 2))
+p s(D.new.m), s(D.new.r(1)), s(D.new.r(1, 3, q: 4))
+class E < StandardError; def initialize(**kw) super end; end
+p E.new.message
+", @"
+:none
+[:hash, [:a, 1]]
+[1]
+[1, [:hash, [:z, 2]]]
+[:hash, [:b, 1]]
+[:hash, [:z, 2], [:b, 1]]
+:none
+[1, 2, [:hash, [:y, 1]]]
+[1, 3, [:hash, [:y, 1]]]
+""E""
+");
+        }
+
+        /// <summary>
+        /// `super(a, **h)`, and a parameterless super in a method with **rest, pass h through one of two plain call
+        /// sites: nothing at all when it is empty, and a copy when it is not - so what the parent does to the hash is
+        /// its own - and through #to_hash or not at all when the rest was reassigned to something else. The
+        /// arguments are evaluated in source order. The output is CRuby's.
+        /// </summary>
+        public void SuperKeywordSplat1() {
+            TestOutput(@"
+class P
+  def m(h = :none) h end
+  def r(*a, **kw) [a, kw] end
+  def w(h = nil) h[:w] = 1 if h; h end
+  def lg(x) ($log ||= []) << x; x end
+end
+class C < P
+  def m(**kw) super(**kw) end
+  def r(*a, **kw) super(*a, **kw) end
+  def w(**kw) r = super; [r, kw] end
+end
+class D < P
+  def r(a, k: 1, **rest) super end
+  def w(**kw) kw = nil; super end
+end
+class E < P
+  def r(a) super(lg(a), **lg({x: 1})) end
+end
+def s(x)
+  x.is_a?(Hash) ? [:hash, *x.to_a] : x.is_a?(Array) ? x.map { |e| s(e) } : x
+end
+p s(C.new.m), s(C.new.m(a: 1))
+p s(C.new.r(1, 2)), s(C.new.r(1, 2, z: 3)), s(C.new.r)
+p s(C.new.w), s(C.new.w(a: 1))
+p s(D.new.r(1)), s(D.new.r(1, z: 2, k: 3))
+p s(D.new.w(a: 1))
+p s(E.new.r(5)), s($log)
+", @"
+:none
+[:hash, [:a, 1]]
+[[1, 2], [:hash]]
+[[1, 2], [:hash, [:z, 3]]]
+[[], [:hash]]
+[nil, [:hash]]
+[[:hash, [:a, 1], [:w, 1]], [:hash, [:a, 1]]]
+[[1], [:hash, [:k, 1]]]
+[[1], [:hash, [:z, 2], [:k, 3]]]
+nil
+[[5], [:hash, [:x, 1]]]
+[5, [:hash, [:x, 1]]]
+");
+        }
+
+        /// <summary>
+        /// The parameterless super of a method whose only keyword parameter is **rest passes the parent the hash the call
+        /// passed while the rest still holds exactly that, and lets go of it as it does: a second super, one in a loop, an
+        /// eval'd one, and one after the body changed the rest each pass a copy, so whatever a parent keeps or changes -
+        /// a positional Hash parameter, Array#push - is its own. The output is CRuby's.
+        /// </summary>
+        public void SuperKeywordRestPassOn1() {
+            TestOutput(@"
+class P
+  def m(h = :none) h[:p] = (h[:p] || 0) + 1 if h.is_a?(Hash); h end
+  def k(**kw) kw[:pk] = 1; kw end
+end
+class C < P
+  def m(**kw) r1 = super; r2 = super; [r1, r2, kw, r1.equal?(r2)] end
+  def k(**kw) r = super; [r, kw] end
+end
+class L < P
+  def m(**kw) (1..2).map { super } end
+end
+class E < P
+  def m(**kw) r = super; [r, eval('super'), r.equal?(eval('super'))] end
+end
+class M < P
+  def m(**kw) kw[:q] = 2; super end
+end
+class AA < Array
+  def push(**kw) super; super; self end
+end
+class A3; def initialize(**o) @o = o end; attr_reader :o; end
+class B3 < A3; def initialize(**o) super end; end
+class C3 < B3; def initialize(**o) super; o[:after] = 1 end; end
+def s(x)
+  x.is_a?(Hash) ? [:hash, *x.to_a] : x.is_a?(Array) ? x.map { |e| s(e) } : x
+end
+p s(C.new.m(q: 1)), s(C.new.m)
+p s(C.new.k(q: 1)), s(C.new.k)
+p s(L.new.m(q: 1))
+p s(E.new.m(q: 1))
+p s(M.new.m(q: 1))
+a = AA.new.push(x: 1)
+p a[0].equal?(a[1])
+p s(C3.new(a: 1).o)
+", @"
+[[:hash, [:q, 1], [:p, 1]], [:hash, [:q, 1], [:p, 1]], [:hash, [:q, 1]], false]
+[:none, :none, [:hash], true]
+[[:hash, [:q, 1], [:pk, 1]], [:hash, [:q, 1]]]
+[[:hash, [:pk, 1]], [:hash]]
+[[:hash, [:q, 1], [:p, 1]], [:hash, [:q, 1], [:p, 1]]]
+[[:hash, [:q, 1], [:p, 1]], [:hash, [:q, 1], [:p, 1]], false]
+[:hash, [:q, 2], [:p, 1]]
+false
+[:hash, [:a, 1]]
+");
+        }
+
+        /// <summary>
+        /// A parameterless super after the body set the **rest to something else: with named keywords it has to be a
+        /// Hash still (TypeError otherwise, nil included); a lone **rest goes as `**rest` would, nil passing nothing and
+        /// anything else through #to_hash. MRI's rules, and its output.
+        /// </summary>
+        public void SuperParameterlessKeywordRest2() {
+            TestOutput(@"
+class O; def to_hash = {z: 9}; end
+class P; def m(*a, **k) [a, k] end; def n(*a, **k) [a, k] end; def o(*a, **k) [a, k] end; end
+class C < P
+  def m(a, b: 1, **r) r = O.new; super end
+  def n(a, **r) r = O.new; super end
+  def o(a, **r) r = 5; super end
+end
+class D < P
+  def m(a, b: 1, **r) r = nil; super end
+  def n(a, **r) r = nil; super end
+  def o(a, **r) r = {'s' => 1}; super end
+end
+def s(x)
+  x.is_a?(Hash) ? [:hash, *x.to_a] : x.is_a?(Array) ? x.map { |e| s(e) } : x
+end
+[C, D].each { |c| %i[m n o].each { |m| p((s(c.new.send(m, 1)) rescue [$!.class, $!.message])) } }
+", @"
+[TypeError, ""wrong argument type O (expected Hash)""]
+[[1], [:hash, [:z, 9]]]
+[TypeError, ""no implicit conversion of Integer into Hash""]
+[TypeError, ""wrong argument type nil (expected Hash)""]
+[[1], [:hash]]
+[[1], [:hash, [""s"", 1]]]
+");
+        }
+
+        /// <summary>
+        /// A **rest parameter of a call that passed no keywords takes over the empty default the hidden keyword
+        /// parameter was given, instead of copying it: it is still a new, plain hash on every call, in a method,
+        /// a proc, a lambda, a define_method block and a signature with optional and rest positionals, and
+        /// passing it on positionally passes a Hash, not keywords. The output is CRuby's.
+        /// </summary>
+        public void KeywordRestOmitted1() {
+            TestOutput(@"
+def s(x)
+  x.is_a?(Hash) ? [:hash, *x.to_a] : x.is_a?(Array) ? x.map { |e| s(e) } : x
+end
+def r(**kw) kw end
+a = r; a[:a] = 1
+p s(r), a.equal?(r), s(a)
+def t2(*a, **k) [a, k] end
+def pass2(**kw) t2(kw) end
+def pass3(**kw) t2(**kw) end
+p s(pass2), s(pass3), s(pass2(q: 1)), s(pass3(q: 1))
+pr = proc { |**kw| kw[:z] = 1; kw }
+x = pr.call; y = pr.call
+p s(x), x.equal?(y)
+l = lambda { |a, **kw| kw[a] = a; kw }
+p s(l.(1)), s(l.(2)), s(l.(3, b: 4))
+def g(a, b = 2, *c, **kw) kw[:q] = a; kw end
+p s(g(1)), s(g(2)), s(g(3, z: 1))
+class D; define_method(:dm) { |**kw| kw[:d] = 1; kw }; end
+p s(D.new.dm), s(D.new.dm)
+", @"
+[:hash]
+false
+[:hash, [:a, 1]]
+[[[:hash]], [:hash]]
+[[], [:hash]]
+[[[:hash, [:q, 1]]], [:hash]]
+[[], [:hash, [:q, 1]]]
+[:hash, [:z, 1]]
+false
+[:hash, [1, 1]]
+[:hash, [2, 2]]
+[:hash, [:b, 4], [3, 3]]
+[:hash, [:q, 1]]
+[:hash, [:q, 2]]
+[:hash, [:z, 1], [:q, 3]]
+[:hash, [:d, 1]]
+[:hash, [:d, 1]]
+");
+        }
+
+        /// <summary>
+        /// eval("super") in a method with keyword parameters passes the hidden parameter the keywords arrived in as
+        /// `**` would - nothing at all for an empty one - not as one more positional argument. Without keywords that is
+        /// the **rest itself (it took the empty default over), and after a parameterless super passed the keywords on
+        /// it is the **rest too, so both see what the body put in it. The output is CRuby's.
+        /// </summary>
+        public void SuperEvalKeywords1() {
+            TestOutput(@"
+class P
+  def m(h = :none) h end
+  def n(*a, **k) [a, k] end
+  def q(*a, **k) [a, k] end
+  def w(a, h = :none) [a, h] end
+end
+class C < P
+  def m(**kw) eval('super') end
+  def n(**kw) eval('super') end
+  def o(**kw) kw[:y] = 2; eval('super') end
+  def q(**kw) r = super; kw[:y] = 2; [r, eval('super')] end
+  def w(a, **kw) eval('super') end
+end
+class P; def o(h = :none) h end; end
+def s(x)
+  x.is_a?(Hash) ? [:hash, *x.to_a] : x.is_a?(Array) ? x.map { |e| s(e) } : x
+end
+p s(C.new.m), s(C.new.m(x: 1))
+p s(C.new.n), s(C.new.n(x: 1))
+p s(C.new.o)
+p s(C.new.q(x: 1))
+p s(C.new.w(1)), s(C.new.w(1, x: 1))
+", @"
+:none
+[:hash, [:x, 1]]
+[[], [:hash]]
+[[], [:hash, [:x, 1]]]
+[:hash, [:y, 2]]
+[[[], [:hash, [:x, 1]]], [[], [:hash, [:x, 1], [:y, 2]]]]
+[1, :none]
+[1, [:hash, [:x, 1]]]
+");
+        }
+
+        /// <summary>
+        /// eval('super') passes what a parameterless super in the method itself does - the current
+        /// values of the positional and keyword parameters - also where the keywords' lowering takes
+        /// the positionals in one splat (optional, rest and post parameters).
+        /// </summary>
+        public void SuperParameterlessEval1() {
+            TestOutput(@"
+class P
+  def m(*a, **k, &b) = [a, k.to_a, b&.call]
+end
+class C1 < P; def m(*c, d:); eval('super'); end; end
+class C2 < P; def m(a, b = 2, d:); eval('super'); end; end
+class C3 < P; def m(a, b = 2, *c, d:, e: 5); eval('super'); end; end
+class C4 < P; def m(a, *c, d:, **r); eval('super'); end; end
+class C5 < P; def m(*c, d:); c << 9; d = 10; eval('super'); end; end
+class C6 < P; def m(a, *c, z, d:); eval('super'); end; end
+class C7 < P; def m(a, d: 1); d = 7; eval('super'); end; end
+p C1.new.m(1, 2, d: 3), C1.new.m(d: 3)
+p C2.new.m(1, d: 4), C2.new.m(1, 5, d: 4)
+p C3.new.m(1, 7, 8, 9, d: 4) { :blk }
+p C4.new.m(1, 2, d: 4, z: 1), C4.new.m(1, d: 4)
+p C5.new.m(1, d: 3)
+p C6.new.m(1, 2, 3, d: 4)
+p C7.new.m(1)
+", @"
+[[1, 2], [[:d, 3]], nil]
+[[], [[:d, 3]], nil]
+[[1, 2], [[:d, 4]], nil]
+[[1, 5], [[:d, 4]], nil]
+[[1, 7, 8, 9], [[:d, 4], [:e, 5]], :blk]
+[[1, 2], [[:z, 1], [:d, 4]], nil]
+[[1], [[:d, 4]], nil]
+[[1, 9], [[:d, 10]], nil]
+[[1, 2, 3], [[:d, 4]], nil]
+[[1], [[:d, 7]], nil]
+");
+        }
+
+        /// <summary>
+        /// eval('super') with anonymous and destructured parameters, **nil, a lone **rest, and from a
+        /// block and a binding.
+        /// </summary>
+        public void SuperParameterlessEval2() {
+            TestOutput(@"
+class P
+  def m(*a, **k, &b) = [a, k.to_a, b&.call]
+end
+class R < P; def m(a, **r); r = {q: 1}; eval('super'); end; end
+class A < P; def m(a, *, d:); eval('super'); end; end
+class D < P; def m((a, b), d:); eval('super'); end; end
+class N < P; def m(a, **nil); eval('super'); end; end
+class K < P; def m(a, **); eval('super'); end; end
+class B < P; def m(*c, d:); [1].map { eval('super') }.first; end; end
+class Bd < P; def m(*c, d:); b = binding; eval('super', b); end; end
+class O < P; def m(a, b = 2, *r, c, d: 1, **kw, &blk); eval('super'); end; end
+p R.new.m(1, x: 2)
+p A.new.m(1, 2, 3, d: 4)
+p D.new.m([1, 2], d: 4)
+p N.new.m(1)
+p K.new.m(1, z: 3)
+p B.new.m(5, d: 6), Bd.new.m(5, d: 6)
+p O.new.m(1, 9, d: 0, z: 1) { 3 }
+", @"
+[[1], [[:q, 1]], nil]
+[[1, 2, 3], [[:d, 4]], nil]
+[[[1, 2]], [[:d, 4]], nil]
+[[1], [], nil]
+[[1], [[:z, 3]], nil]
+[[5], [[:d, 6]], nil]
+[[5], [[:d, 6]], nil]
+[[1, 2, 9], [[:z, 1], [:d, 0]], 3]
 ");
         }
 
@@ -229,7 +575,7 @@ p d.foo(1) rescue p $!
 123
 123
 123
-#<ArgumentError: wrong number of arguments (1 for 0)>
+#<ArgumentError: wrong number of arguments (given 1, expected 0)>
 ");
         }
 
@@ -272,7 +618,7 @@ end
 
 D.new.bar rescue p $!
 "), @"
-#<NoMethodError: super: no superclass method `bar'>
+#<NoMethodError: super: no superclass method 'bar' for an instance of D>
 ");
         }
 
@@ -407,7 +753,7 @@ class C < B
   puts mq.object_id == q.object_id  
   
   q.call rescue p $!
-  mq.call
+  C.new.m
 end
 ", @"
 false
@@ -585,84 +931,41 @@ B::m
         }
 
         /// <summary>
-        /// super doesn't use self, declaring-module defined by module_eval/instance_eval.
+        /// An implicit super in a block that runs with another self - module_eval, instance_eval or instance_exec
+        /// on an object that is not an instance of the method's class, class_eval on the class - is a TypeError, as in
+        /// MRI's vm_search_super_method; with self still an instance it calls the method's super. super in a class
+        /// body is outside any method even inside `eval' in one. This test expected Ruby 1.9's answer, which called the
+        /// method's super anyway (#136). The expected output is CRuby 4.0's.
         /// </summary>
         public void SuperInModuleEval1() {
-            AssertOutput(delegate() {
-                CompilerTest(@"
-class A
-  def foo
-    puts 'A::foo'
-  end
-end
-
-class B < A
-  def foo
-    puts 'B::foo'
-  end
-end
-
+            TestOutput(@"
+class A; def foo; :a; end; end
+class B < A; def foo; :b; end; end
 class C < B
   def foo
-    A.module_eval {
-      super
-    }
-    A.new.instance_eval {
-      super
-    }
-  end
-end 
-
-C.new.foo
-");
-            }, @"
-B::foo
-B::foo
-");
-        }
-
-#if OBSOLETE
-        /// <summary>
-        /// MRI 1.8: The self object captured by Kernel#binding is the receiver of the binding call.
-        /// Thus the self used in eval might be different from the one the scope holds on.
-        /// Super call uses the scope's self object.
-        /// </summary>
-        public void SuperCallInEvalWithBinding18() {
-            TestOutput(@"
-module Kernel
-  public :binding
-end
-
-class A
-  def m
-    puts 'A::m'
+    [(A.module_eval { super } rescue $!.message), (A.new.instance_eval { super } rescue $!.message),
+     instance_eval { super }, C.new.instance_eval { super }, (C.class_eval { super } rescue $!.class)]
   end
 end
-
-class D < A
-  def m
-    puts 'D::m'
-    p self.class
-    
-    cb = C.new.binding             # binding captures C.new as self
-    eval('
-        p self.class               # self is different from RubyScope.SelfObject here
-        super                      # super picks up RubyScope.SelfObject
-    ', cb)
-  end
-end
-
-class C
-end
-
-D.new.m", @"
-D::m
-D
-C
-A::m
+p C.new.foo
+module M; def foo; eval 'class E; super; end'; end; end
+class D < B; include M; end
+p((D.new.foo rescue [$!.class, $!.message]))
+class G < B; define_method(:foo) { Object.new.instance_eval { super() } }; end
+p((G.new.foo rescue $!.message))
+class Q; def eql?(o); true; end; def ==(o); true; end; def hash; 1; end; end
+class R < B; def foo; (Q.new.instance_eval { super } rescue $!.message); end; end
+p R.new.foo
+class Integer; def sup_t; 5.instance_eval { super } rescue $!.class; end; end
+p 5.sup_t
+", @"
+[""self has wrong type to call super in this context: Class (expected C)"", ""self has wrong type to call super in this context: A (expected C)"", :b, :b, TypeError]
+[NoMethodError, ""super called outside of method""]
+""self has wrong type to call super in this context: Object (expected G)""
+""self has wrong type to call super in this context: Q (expected R)""
+NoMethodError
 ");
         }
-#endif
 
         /// <summary>
         /// MRI 1.9: The self object captured by Kernel#binding is the one captured by the scope, not the receiver of the binding call.
@@ -684,7 +987,7 @@ eval('
 ", @"
 main
 main
-#<NoMethodError: undefined method `foo' for main:Object>
+#<NoMethodError: undefined method 'foo' for main>
 ");
         }
     }

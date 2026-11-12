@@ -13,17 +13,10 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
-using Microsoft.Scripting.Generation;
-using System.Runtime.CompilerServices;
-using System;
 using System.Threading;
 using IronRuby.Runtime;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
@@ -69,12 +62,12 @@ namespace IronRuby.Compiler.Ast {
             }
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             int intBegin, intEnd;
             if (IsIntegerRange(out intBegin, out intEnd)) {
-                return (_isExclusive ? Methods.CreateExclusiveIntegerRange : Methods.CreateInclusiveIntegerRange).OpCall(
-                    AstUtils.Constant(intBegin), AstUtils.Constant(intEnd)
-                );
+                // a Range is frozen, and MRI makes a literal one of integers a single object, which
+                // the expression evaluates to every time
+                return AstUtils.Constant(new IronRuby.Builtins.Range(intBegin, intEnd, _isExclusive));
             } else {
                 return (_isExclusive ? Methods.CreateExclusiveRange : Methods.CreateInclusiveRange).OpCall(
                     AstUtils.Box(_begin.TransformRead(gen)),
@@ -87,15 +80,24 @@ namespace IronRuby.Compiler.Ast {
 
         private static int _flipFlopVariableId;
 
+
         internal override Expression/*!*/ ToCondition(LexicalScope/*!*/ currentScope) {
-            int intBegin, intEnd;
-            if (!IsIntegerRange(out intBegin, out intEnd)) {
-                return new RangeCondition(
-                    this,
-                    currentScope.GetInnermostStaticTopScope().AddVariable("#FlipFlopState" + Interlocked.Increment(ref _flipFlopVariableId), Location)
-                );
+            // An integer literal as a flip-flop end compares with $. (MRI's cond0), as in `if 4..5`.
+            var range = new RangeExpression(LineNumberCondition(_begin), LineNumberCondition(_end), _isExclusive, Location);
+            return new RangeCondition(
+                range,
+                currentScope.GetInnermostStaticTopScope().AddVariable(FlipFlopVariablePrefix + Interlocked.Increment(ref _flipFlopVariableId), Location)
+            );
+        }
+
+        internal const string FlipFlopVariablePrefix = "#FlipFlopState";
+
+        private static Expression/*!*/ LineNumberCondition(Expression/*!*/ expression) {
+            var literal = expression as Literal;
+            if (literal == null || !(literal.Value is int)) {
+                return expression;
             }
-            return this;
+            return new MethodCall(literal, "==", new Arguments(new GlobalVariable(".", literal.Location)), literal.Location);
         }
     }
 
@@ -131,7 +133,7 @@ namespace IronRuby.Compiler.Ast {
         ///     false
         ///   end  
         /// </code>
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             var begin = AstUtils.Box(_range.Begin.TransformRead(gen));
             var end = AstUtils.Box(_range.End.TransformRead(gen));
 

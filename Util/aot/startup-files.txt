@@ -1,0 +1,54 @@
+# The Ruby files ir -e 1 loads at startup (strace of a run), compiled into IronRuby.Startup.dll by
+# IronRuby.Aot startup. Paths are relative to this file.
+../../Src/StdLib/ironruby/argf.rb
+../../Src/StdLib/ironruby/ironruby/complex.rb
+../../Src/StdLib/ironruby/ironruby/did_you_mean.rb
+../../Src/StdLib/ironruby/ironruby/error_extensions.rb
+../../Src/StdLib/ironruby/ironruby/error_highlight.rb
+../../Src/StdLib/ironruby/ironruby/gem_compat.rb
+../../Src/StdLib/ironruby/ironruby/rational.rb
+../../Src/StdLib/ironruby/ironruby/syntax_suggest.rb
+../../Src/StdLib/ironruby/monitor.rb
+../../Src/StdLib/ironruby/rbconfig.rb
+../../Src/StdLib/ironruby/ruby4.rb
+../../Src/StdLib/ironruby/thread.rb
+../../Src/StdLib/ruby/4.0/gem_prelude.rb
+../../Src/StdLib/ruby/4.0/rubygems/basic_specification.rb
+../../Src/StdLib/ruby/4.0/rubygems/core_ext/kernel_gem.rb
+../../Src/StdLib/ruby/4.0/rubygems/core_ext/kernel_require.rb
+../../Src/StdLib/ruby/4.0/rubygems/defaults/ironruby.rb
+../../Src/StdLib/ruby/4.0/rubygems/defaults.rb
+../../Src/StdLib/ruby/4.0/rubygems/dependency.rb
+../../Src/StdLib/ruby/4.0/rubygems/deprecate.rb
+../../Src/StdLib/ruby/4.0/rubygems/errors.rb
+../../Src/StdLib/ruby/4.0/rubygems/exceptions.rb
+../../Src/StdLib/ruby/4.0/rubygems/platform.rb
+../../Src/StdLib/ruby/4.0/rubygems.rb
+../../Src/StdLib/ruby/4.0/rubygems/requirement.rb
+../../Src/StdLib/ruby/4.0/rubygems/specification.rb
+../../Src/StdLib/ruby/4.0/rubygems/specification_record.rb
+../../Src/StdLib/ruby/4.0/rubygems/stub_specification.rb
+../../Src/StdLib/ruby/4.0/rubygems/target_rbconfig.rb
+../../Src/StdLib/ruby/4.0/rubygems/unknown_command_spell_checker.rb
+../../Src/StdLib/ruby/4.0/rubygems/util/list.rb
+../../Src/StdLib/ruby/4.0/rubygems/util.rb
+../../Src/StdLib/ruby/4.0/rubygems/version.rb
+../../Src/StdLib/ruby/4.0/rubygems/win_platform.rb
+# Loaded by the first require of anything outside the startup set (gem activation)
+../../Src/StdLib/ruby/4.0/rubygems/path_support.rb
+# Commonly required standard library (each is only checked against its source when required)
+../../Src/StdLib/ironruby/json.rb
+../../Src/StdLib/ironruby/set.rb
+../../Src/StdLib/ironruby/stringio.rb
+../../Src/StdLib/ironruby/strscan.rb
+../../Src/StdLib/ironruby/io/console.rb
+../../Src/StdLib/ironruby/date.rb
+../../Src/StdLib/ironruby/date/format.rb
+../../Src/StdLib/ruby/4.0/optparse.rb
+../../Src/StdLib/ruby/4.0/pp.rb
+../../Src/StdLib/ruby/4.0/prettyprint.rb
+../../Src/StdLib/ruby/4.0/tempfile.rb
+../../Src/StdLib/ruby/4.0/delegate.rb
+../../Src/StdLib/ruby/4.0/time.rb
+# Not fileutils.rb and tmpdir.rb: an exception re-raised through one of their rescue clauses (FileUtils.mkdir_p,
+# Dir::Tmpname.create) loses a frame in compiled code that the interpreter keeps (Util/aot/check-startup.sh)

@@ -13,45 +13,23 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Reflection;
 using System.Text;
-using System.Runtime.CompilerServices;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
-using IronRuby.Runtime.Calls;
 using IronRuby.Runtime.Conversions;
 
 namespace IronRuby.Compiler.Ast {
     using Ast = MSA.Expression;
     using AstUtils = Microsoft.Scripting.Ast.Utils;
-    using AstExpressions = ReadOnlyCollectionBuilder<MSA.Expression>;
     using AstBlock = Microsoft.Scripting.Ast.BlockBuilder;
 
     public partial class CompoundLeftValue : LeftValue {
-        // TODO: 1.9
-        
-        /// <summary>
-        /// Empty LHS - used by blocks.
-        /// </summary>
-        internal static readonly CompoundLeftValue/*!*/ EmptyBlockSignature = new CompoundLeftValue(LeftValue.EmptyArray);
-
-        // TODO: 1.9
-
-        /// <summary>
-        /// Unspecified LHS - used by blocks.
-        /// </summary>
-        internal static readonly CompoundLeftValue/*!*/ UnspecifiedBlockSignature = new CompoundLeftValue(LeftValue.EmptyArray);
-
         /// <summary>
         /// List of l-values, possibly compound.
         /// </summary>
@@ -122,14 +100,82 @@ namespace IronRuby.Compiler.Ast {
                 }
             }
 
+            // MRI evaluates the receivers of the l-values first, left to right, and only then
+            // the right hand side: `a.x, b.y = f, g` calls a, b, f, g in that order.
+            var targets = new Queue<MSA.Expression>();
+            var evaluation = new AstBlock();
+            EvaluateTargets(gen, evaluation, targets);
+
+            MSA.Expression result;
             if (rightValues.Expressions.Length == 1) {
-                return TransformWrite(gen, rightValues.Expressions[0].TransformRead(gen), true);
+                result = TransformWrite(gen, rightValues.Expressions[0].TransformRead(gen), true, targets);
             } else {
-                return TransformWrite(gen, rightValues.TransformToArray(gen), false);
+                result = TransformWrite(gen, rightValues.TransformToArray(gen), false, targets);
+            }
+
+            if (evaluation.Count == 0) {
+                return result;
+            }
+            evaluation.Add(result);
+            return evaluation;
+        }
+
+        /// <summary>
+        /// Evaluates the target (receiver) of every l-value that has one into a temporary, in
+        /// source order, and queues the temporaries for the write phase to use in the same order.
+        /// </summary>
+        private void EvaluateTargets(AstGenerator/*!*/ gen, AstBlock/*!*/ evaluation, Queue<MSA.Expression>/*!*/ targets) {
+            // Nested targets ((a, b), c) recurse through here (see StackGuard).
+            if (!IronRuby.Runtime.StackGuard.IsSufficient) {
+                IronRuby.Runtime.StackGuard.RunOnFreshStack(() => EvaluateTargets(gen, evaluation, targets));
+                return;
+            }
+            foreach (var lvalue in _leftValues) {
+                var nested = lvalue as CompoundLeftValue;
+                if (nested != null) {
+                    nested.EvaluateTargets(gen, evaluation, targets);
+                    continue;
+                }
+
+                var target = lvalue.TransformTargetRead(gen);
+                if (target == null) {
+                    targets.Enqueue(null);
+                    continue;
+                }
+
+                var temp = gen.CurrentScope.DefineHiddenVariable("#lhs", target.Type);
+                evaluation.Add(Ast.Assign(temp, target));
+                targets.Enqueue(temp);
             }
         }
 
+        /// <summary>
+        /// Writes one l-value, using the receiver the target-evaluation phase already computed
+        /// when there is one queued (a nested write, which happens outside a multiple assignment,
+        /// passes no queue and evaluates the receiver here).
+        /// </summary>
+        private static MSA.Expression/*!*/ Write(AstGenerator/*!*/ gen, LeftValue/*!*/ lvalue, Queue<MSA.Expression> targets,
+            MSA.Expression/*!*/ rightValue) {
+
+            var nested = lvalue as CompoundLeftValue;
+            if (nested != null) {
+                // (see EvaluateTargets)
+                if (!IronRuby.Runtime.StackGuard.IsSufficient) {
+                    return IronRuby.Runtime.StackGuard.RunOnFreshStack(() => nested.TransformWrite(gen, rightValue, true, targets));
+                }
+                return nested.TransformWrite(gen, rightValue, true, targets);
+            }
+            return targets != null
+                ? lvalue.TransformWrite(gen, targets.Dequeue(), rightValue)
+                : lvalue.TransformWrite(gen, rightValue);
+        }
+
         private MSA.Expression/*!*/ TransformWrite(AstGenerator/*!*/ gen, MSA.Expression/*!*/ transformedRight, bool isSimpleRhs) {
+            return TransformWrite(gen, transformedRight, isSimpleRhs, null);
+        }
+
+        private MSA.Expression/*!*/ TransformWrite(AstGenerator/*!*/ gen, MSA.Expression/*!*/ transformedRight, bool isSimpleRhs,
+            Queue<MSA.Expression> targets) {
             var writes = new AstBlock();
             
             MSA.Expression rightList = gen.CurrentScope.DefineHiddenVariable("#rhs", typeof(IList));
@@ -148,7 +194,7 @@ namespace IronRuby.Compiler.Ast {
             writes.Add(Ast.Assign(rightList, transformedRight));
 
             for (int i = 0; i < _unsplattedValueIndex; i++) {
-                writes.Add(_leftValues[i].TransformWrite(gen, Methods.GetArrayItem.OpCall(rightList, AstUtils.Constant(i))));
+                writes.Add(Write(gen, _leftValues[i], targets, Methods.GetArrayItem.OpCall(rightList, AstUtils.Constant(i))));
             }
 
             if (HasUnsplattedValue) {
@@ -156,10 +202,11 @@ namespace IronRuby.Compiler.Ast {
 
                 // remaining RHS values:
                 MSA.Expression array = Methods.GetArrayRange.OpCall(rightList, AstUtils.Constant(_unsplattedValueIndex), explicitCount);
-                writes.Add(_leftValues[_unsplattedValueIndex].TransformWrite(gen, array));
+                writes.Add(Write(gen, _leftValues[_unsplattedValueIndex], targets, array));
 
                 for (int i = _unsplattedValueIndex + 1; i < _leftValues.Length; i++) {
-                    writes.Add(_leftValues[i].TransformWrite(gen, Methods.GetTrailingArrayItem.OpCall(rightList, AstUtils.Constant(_leftValues.Length - i), explicitCount)));
+                    writes.Add(Write(gen, _leftValues[i], targets,
+                        Methods.GetTrailingArrayItem.OpCall(rightList, AstUtils.Constant(_leftValues.Length - i), explicitCount)));
                 }
             }
 

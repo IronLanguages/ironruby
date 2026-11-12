@@ -14,7 +14,7 @@
  * ***************************************************************************/
 
 using System;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Runtime.Conversions {

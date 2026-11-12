@@ -15,15 +15,14 @@
 
 using System;
 using System.Collections;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using IronRuby.Compiler;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Builtins {
 
@@ -131,6 +130,13 @@ namespace IronRuby.Builtins {
             return MutableStringOps.Equals(respondToStorage, equalsStorage, self, other);
         }
 
+        // A CLR string is #eql? to a String of the same characters, so it has to hash as one (a long
+        // ASCII String hashes its bytes, not its characters: see MutableString.GetHashCode).
+        [RubyMethod("hash")]
+        public static int GetHashCode(string/*!*/ self) {
+            return MutableString.GetHashCode(self);
+        }
+
         [RubyMethod("eql?")]
         public static bool Eql(string/*!*/ lhs, [NotNull]string/*!*/ rhs) {
             return lhs == rhs;
@@ -160,7 +166,8 @@ namespace IronRuby.Builtins {
         [RubyMethod("slice")]
         public static string GetSubstring(string/*!*/ self, [DefaultProtocol]int start, [DefaultProtocol]int count) {
             if (!MutableStringOps.NormalizeSubstringRange(self.Length, ref start, ref count)) {
-                return (start == self.Length) ? self : null;
+                // at the very end: an empty string, as "hello"[5, 1] is - but a negative length is nil there too
+                return (start == self.Length && count >= 0) ? String.Empty : null;
             }
 
             return self.Substring(start, count);
@@ -173,13 +180,22 @@ namespace IronRuby.Builtins {
             if (!MutableStringOps.NormalizeSubstringRange(fixnumCast, range, self.Length, out begin, out count)) {
                 return null;
             }
-            return (count < 0) ? self : GetSubstring(self, begin, count);
+            // a backwards range within the string ("hello"[3..1]) is empty
+            return (count < 0) ? String.Empty : GetSubstring(self, begin, count);
         }
 
         [RubyMethod("[]")]
         [RubyMethod("slice")]
         public static string GetSubstring(string/*!*/ self, [NotNull]string/*!*/ searchStr) {
             return (self.IndexOf(searchStr, StringComparison.Ordinal) != -1) ? searchStr : null;
+        }
+
+        // a Ruby String to look for: there was no overload, so the binder took the Integer one and
+        // "hello there".to_clr_string["lo"] raised "no implicit conversion of String into Integer" (#140)
+        [RubyMethod("[]")]
+        [RubyMethod("slice")]
+        public static string GetSubstring(string/*!*/ self, [NotNull]MutableString/*!*/ searchStr) {
+            return GetSubstring(self, searchStr.ToString());
         }
 
         [RubyMethod("[]")]
@@ -217,17 +233,6 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region TODO: casecmp, capitalize, downcase, swapcase, upcase
-
-        #endregion
-
-        #region TODO: center
-
-        #endregion
-
-        #region TODO: chomp, chop
-        #endregion
-
         #region dump, inspect
 
         [RubyMethod("inspect", RubyMethodAttributes.PublicInstance)]
@@ -252,10 +257,6 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region TODO: each, each_byte, each_line
-
-        #endregion
-
         #region empty?, size, length, encoding
 
         [RubyMethod("empty?")]
@@ -273,20 +274,6 @@ namespace IronRuby.Builtins {
             return RubyEncoding.UTF8;
         }
 
-        #endregion
-
-        #region TODO: sub, gsub
-        #endregion
-
-        #region TODO: index, rindex
-
-
-        #endregion
-
-        #region TODO: delete
-        #endregion
-
-        #region TODO: count
         #endregion
 
         #region include?
@@ -328,12 +315,6 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region TODO: scan
-        #endregion
-
-        #region TODO: succ
-        #endregion
-
         #region split
 
         // TODO: return an array of CLR strings, not mutable strings
@@ -359,18 +340,12 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region TODO: strip, lstrip, rstrip
-        #endregion
-
-        #region TODO: squeeze
-        #endregion
-
         #region to_i, hex, oct
 
         [RubyMethod("to_i")]
         public static object/*!*/ ToInteger(string/*!*/ self, [DefaultProtocol, DefaultParameterValue(10)]int @base) {
             if (@base == 1 || @base < 0 || @base > 36) {
-                throw RubyExceptions.CreateArgumentError("illegal radix {0}", @base);
+                throw RubyExceptions.CreateArgumentError("invalid radix {0}", @base);
             }
             return Tokenizer.ParseInteger(self, @base).ToObject();
         }
@@ -382,7 +357,31 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("oct")]
         public static object/*!*/ ToIntegerOctal(string/*!*/ self) {
-            return Tokenizer.ParseInteger(self, 8).ToObject();
+            return Tokenizer.ParseInteger(self, DetectOctalBase(self)).ToObject();
+        }
+
+        /// <summary>
+        /// #oct is base 8, but a "0b"/"0x"/"0d"/"0o" prefix overrides that - MRI calls
+        /// rb_str_to_inum with a negative base, which means "this base unless the string
+        /// says otherwise".
+        /// </summary>
+        private static int DetectOctalBase(string/*!*/ self) {
+            int i = 0;
+            while (i < self.Length && Char.IsWhiteSpace(self[i])) {
+                i++;
+            }
+            if (i < self.Length && (self[i] == '+' || self[i] == '-')) {
+                i++;
+            }
+            if (i + 1 < self.Length && self[i] == '0') {
+                switch (Char.ToLowerInvariant(self[i + 1])) {
+                    case 'b': return 2;
+                    case 'x': return 16;
+                    case 'd': return 10;
+                    case 'o': return 8;
+                }
+            }
+            return 8;
         }
 
         #endregion
@@ -390,10 +389,100 @@ namespace IronRuby.Builtins {
         #region to_f, to_s, to_str, to_clr_string, to_sym, intern
 
         [RubyMethod("to_f")]
-        public static double ToDouble(string/*!*/ self) {
+        public static double ToDouble(RubyContext/*!*/ context, string/*!*/ self) {
+            // The tokenizer parses *literals*, where an underscore may sit anywhere between
+            // digits and the whole string has to be consumed. #to_f is the lenient form: it
+            // takes the longest valid prefix and answers 0.0 when there is none, and an
+            // underscore is only allowed strictly between two digits, so "1__2".to_f is 1.0.
+            string cleaned = ExtractDoublePrefix(self);
+            if (cleaned.Length == 0) {
+                return 0.0;
+            }
+
             double result;
-            bool complete;
-            return Tokenizer.TryParseDouble(self, out result, out complete) ? result : 0.0;
+            if (!Double.TryParse(cleaned, NumberStyles.Float, CultureInfo.InvariantCulture, out result)) {
+                // Out of range: MRI answers +/-Infinity rather than failing.
+                result = cleaned[0] == '-' ? Double.NegativeInfinity : Double.PositiveInfinity;
+            }
+            RubyOps.WarnIfFloatOutOfRange(context, cleaned, result);
+            return result;
+        }
+
+        /// <summary>
+        /// The longest prefix of <paramref name="self"/> that is a Ruby float, with the
+        /// underscores taken out. Empty when the string does not start with a number.
+        /// </summary>
+        private static string/*!*/ ExtractDoublePrefix(string/*!*/ self) {
+            int i = 0;
+            while (i < self.Length && Char.IsWhiteSpace(self[i])) {
+                i++;
+            }
+
+            var result = new StringBuilder();
+            if (i < self.Length && (self[i] == '+' || self[i] == '-')) {
+                result.Append(self[i]);
+                i++;
+            }
+
+            int digits = AppendDigits(self, ref i, result);
+
+            // The point is consumed even with nothing after it - "1.e-2" is 0.01 - but it is
+            // only kept when a fractional digit follows.
+            if (i < self.Length && self[i] == '.') {
+                i++;
+                var fraction = new StringBuilder();
+                int fractionDigits = AppendDigits(self, ref i, fraction);
+                if (fractionDigits > 0) {
+                    result.Append('.').Append(fraction.ToString());
+                }
+                digits += fractionDigits;
+            }
+
+            if (digits == 0) {
+                return String.Empty;
+            }
+
+            // An exponent counts only when it is followed by at least one digit.
+            if (i < self.Length && (self[i] == 'e' || self[i] == 'E')) {
+                int mark = result.Length;
+                var exponent = new StringBuilder();
+                int at = i + 1;
+                if (at < self.Length && (self[at] == '+' || self[at] == '-')) {
+                    exponent.Append(self[at]);
+                    at++;
+                }
+                if (AppendDigits(self, ref at, exponent) > 0) {
+                    result.Append('e').Append(exponent.ToString());
+                } else {
+                    result.Length = mark;
+                }
+            }
+
+            return result.ToString();
+        }
+
+        private static bool IsDecimalDigit(char c) {
+            return c >= '0' && c <= '9';
+        }
+
+        /// <summary>
+        /// Appends a run of digits, dropping underscores that sit between two of them and
+        /// stopping at anything else. Answers how many digits were appended.
+        /// </summary>
+        private static int AppendDigits(string/*!*/ self, ref int i, StringBuilder/*!*/ result) {
+            int count = 0;
+            while (i < self.Length) {
+                if (IsDecimalDigit(self[i])) {
+                    result.Append(self[i]);
+                    count++;
+                    i++;
+                } else if (self[i] == '_' && count > 0 && i + 1 < self.Length && IsDecimalDigit(self[i + 1])) {
+                    i++;
+                } else {
+                    break;
+                }
+            }
+            return count;
         }
 
         [RubyMethod("to_str", RubyMethodAttributes.PublicInstance)]
@@ -420,9 +509,6 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region TODO: upto
-        #endregion
-
         #region replace, reverse
 
         // Ruby replace is a mutating operation, we fallback to System.String::Replace.
@@ -441,44 +527,20 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region TODO: tr, tr_s
-        #endregion
-
-        #region TODO: ljust
-        #endregion
-
-        #region TODO: rjust
-        #endregion
-
-        #region TODO: unpack
-        #endregion
-
-        #region TODO: sum
-        #endregion
-
-        #region TODO: Encodings (1.9)
-
-        //ascii_only?
-        //bytes
-        //bytesize
-        //chars
-        //codepoints
-        //each_byte
-        //each_char
-        //each_codepoint
-        //encode
-        //encoding
-        //valid_esncoding?
-
-        #endregion
-
         #region method_missing
 
         [RubyMethod("method_missing", RubyMethodAttributes.PrivateInstance)]
         [RubyStackTraceHidden]
         public static object MethodMissing(RubyScope/*!*/ scope, BlockParam block, string/*!*/ self, [NotNull]RubySymbol/*!*/ name, params object[]/*!*/ args) {
             if (name.EndsWith('=') || name.EndsWith('!')) {
-                throw RubyExceptions.CreateTypeError("Mutating method `{0}' called for an immutable string (System::String)", name);
+                // Only a mutator that Ruby's String really defines is refused as mutating; any other
+                // name is simply undefined (#159).
+                var context = scope.RubyContext;
+                string methodName = name.ToString();
+                if (context.GetClass(typeof(MutableString)).ResolveMethod(methodName, VisibilityContext.AllVisible).Found) {
+                    throw RubyExceptions.CreateTypeError("Mutating method '{0}' called for an immutable string (System::String)", name);
+                }
+                throw RubyExceptions.CreateMethodMissing(context, self, methodName);
             }
 
             // TODO: forward to MutableString until we implement the methods here:

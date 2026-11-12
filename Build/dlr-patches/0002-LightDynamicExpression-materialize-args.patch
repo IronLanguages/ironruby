@@ -1,0 +1,35 @@
+From 2f62e8dc9d9b04ea30725518bfcbc19505118c09 Mon Sep 17 00:00:00 2001
+From: Largo <andi@idogawa.com>
+Date: Tue, 22 Sep 2026 15:20:03 +0200
+Subject: Materialize a light dynamic expression's arguments eagerly
+
+ToReadOnlyCollection() consumes the ReadOnlyCollectionBuilder it is called
+on, and Reduce() can run more than once for the same node - the light
+interpreter reduces it, and so does the background compilation that replaces
+the interpreted body with IL. The second call then saw an emptied builder.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ src/core/Microsoft.Dynamic/Ast/LightDynamicExpression.cs | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/src/core/Microsoft.Dynamic/Ast/LightDynamicExpression.cs b/src/core/Microsoft.Dynamic/Ast/LightDynamicExpression.cs
+index ba987d4..9038e9c 100644
+--- a/src/core/Microsoft.Dynamic/Ast/LightDynamicExpression.cs
++++ b/src/core/Microsoft.Dynamic/Ast/LightDynamicExpression.cs
+@@ -502,8 +502,10 @@ namespace Microsoft.Scripting.Ast {
+                 Debug.Assert(args.Count > 0);
+             ContractUtils.RequiresNotNull(returnType, nameof(returnType));
+             ContractUtils.RequiresNotEmpty(args, nameof(args));
+-            
+-            _args = args;
++
++            // materialize eagerly: ToReadOnlyCollection() consumes a ReadOnlyCollectionBuilder,
++            // and Reduce() may run more than once (interpreter + background compilation)
++            _args = args.ToReadOnlyCollection();
+             _returnType = returnType;
+         }
+ 
+-- 
+2.47.3
+

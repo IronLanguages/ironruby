@@ -1,0 +1,118 @@
+#!/bin/sh
+# Runs the built ir with the prism front end and the bundled standard library.
+# It is called ironruby as JRuby's is called jruby: RbConfig's ruby_install_name, and so
+# the `#!/usr/bin/env ironruby` of the binstubs Bundler and Rails write, names it, and a #!
+# line with "ruby" in it is one Ruby runs. (RubyGems writes this file's path instead, see
+# rubygems/defaults/ironruby.rb.) ir.sh is the short name for it.
+# Used as RUBY_EXE when running ruby/spec:
+#
+#   RUBY_EXE=./ironruby ./ironruby -Imspec/lib mspec/bin/mspec-run spec/language
+#
+# The directory ironruby is really in. `cd -P` in a subshell is a fork without an exec, a
+# millisecond and a half cheaper than dirname+readlink - which is a tenth of a warm start
+# (IR_SERVER below); a symlinked ironruby, or one found on PATH, still goes through readlink.
+IR_ROOT=
+case "$0" in
+  */*) [ -L "$0" ] || IR_ROOT="$(cd -P -- "${0%/*}" 2>/dev/null && pwd)" ;;
+esac
+[ -n "$IR_ROOT" ] || IR_ROOT="$(dirname "$(readlink -f "$0")")"
+
+# apphost needs DOTNET_ROOT when the SDK isn't on the default search path
+if [ -z "$DOTNET_ROOT" ] && [ -x /usr/local/dotnet/dotnet ]; then
+  DOTNET_ROOT=/usr/local/dotnet
+  export DOTNET_ROOT
+fi
+
+# IronRuby's own library (the core prelude and what MRI implements as C
+# extensions) comes first, then Ruby 4.0's standard library. -X:StdLib puts them
+# on $LOAD_PATH after -I, RUBYOPT's -I and RUBYLIB, where MRI keeps its own
+# library directories.
+S="$IR_ROOT/Src/StdLib"
+# IR_CONFIG=Release runs the optimized build instead (build it with
+# `dotnet build Src/Console/Ruby.Console.csproj -c Release ...`).  It is about 1.8x
+# faster across Util/bench - the Debug build is compiled with optimizations off, which
+# marks the assemblies non-optimizable, so the JIT leaves the whole runtime unoptimized
+# too - and it passes the same specs and the same IronRuby.Tests.  regen-initializers.sh
+# reads IR_CONFIG as well, so one export covers a whole session.
+# Debug is what an unconfigured run uses, because every worktree and agent script builds it.
+# A binary release (Util/package-release.sh) ships only the Release build: when IR_CONFIG is
+# not set and there is no Debug build, run that one.
+# Once an R2R host has been published (Util/publish-r2r.sh) it is the default instead: startup
+# is about a third faster (`ir -e 1`: 1.30 s -> 0.80 s). It is skipped while a Debug or Release
+# build is newer than it, since that build has changes the host does not have.
+if [ -z "$IR_CONFIG" ]; then
+  IR_CONFIG=Debug
+  if [ ! -x "$IR_ROOT/Src/Console/bin/Debug/${IR_TFM:-net10.0}/ir" ] &&
+     [ -x "$IR_ROOT/Src/Console/bin/Release/${IR_TFM:-net10.0}/ir" ]; then
+    IR_CONFIG=Release
+  fi
+  R2R_DLL="$IR_ROOT/Src/Console/bin/R2R/${IR_TFM:-net10.0}/ir.dll"
+  if [ -x "$IR_ROOT/Src/Console/bin/R2R/${IR_TFM:-net10.0}/ir" ] &&
+     [ -z "$(find "$IR_ROOT/Src/Console/bin/Debug/${IR_TFM:-net10.0}/ir.dll" \
+                  "$IR_ROOT/Src/Console/bin/Release/${IR_TFM:-net10.0}/ir.dll" \
+                  -maxdepth 0 -newer "$R2R_DLL" 2>/dev/null)" ]; then
+    IR_CONFIG=R2R
+  fi
+fi
+
+# IR_TFM picks the target framework, the same way IR_CONFIG picks the configuration.  The
+# tree multi-targets net10.0;net11.0 (Directory.Build.props), so one `dotnet build` leaves
+# both side by side and IR_TFM=net11.0 runs the .NET 11 build.  net10.0 (LTS) is the
+# default, and what the release downloads are built on.
+: "${IR_TFM:=net10.0}"
+
+IR_BIN="$IR_ROOT/Src/Console/bin/$IR_CONFIG/$IR_TFM/ir"
+# Say which configuration is missing rather than let the shell's "not found" - which a
+# filtered spec log swallows - be the only clue. Getting IR_CONFIG=Release past a tree
+# that has only ever been built Debug is the whole reason this check is here.
+if [ ! -x "$IR_BIN" ]; then
+  echo "ironruby: no $IR_CONFIG build at $IR_BIN" >&2
+  if [ "$IR_CONFIG" = "R2R" ]; then
+    # Not a build configuration: a ReadyToRun publish, which starts about 0.45s
+    # faster than Release because IronRuby's own assemblies are already native.
+    echo "ironruby: build it with: IR_TFM=$IR_TFM Util/publish-r2r.sh" >&2
+  else
+    echo "ironruby: build it with: dotnet build Src/Console/Ruby.Console.csproj -c $IR_CONFIG -p:DlrSourceDir=..." >&2
+    echo "ironruby: (that builds every framework in IronRubyTargetFrameworks, including $IR_TFM)" >&2
+  fi
+  exit 127
+fi
+
+# -S searches RUBYPATH before PATH; Src/StdLib/bin holds the executables the
+# bundled library ships (irb), so `./ironruby -S irb` runs IronRuby's own rather
+# than whatever binstub happens to be on PATH.  The directory ir itself is in
+# is RubyGems' bindir here (RbConfig's bindir), where `igem install` writes the
+# binstubs of installed gems; it comes next, so `./ironruby -S <gem executable>`
+# finds the binstub written for IronRuby before a host Ruby's version of the
+# same command - or a version manager's shim, which is a native executable and
+# not a script at all.  An existing RUBYPATH is searched after both - IronRuby's
+# own commands come first, as they always have for Src/StdLib/bin - and still
+# beats PATH for anything not found here.  ironruby.cmd uses the same order.
+RUBYPATH="$S/bin:$(dirname "$IR_BIN")${RUBYPATH:+:$RUBYPATH}"
+export RUBYPATH
+
+STDLIB="-X:StdLib=$S/ironruby:$S/ruby/4.0"
+
+# Warm start (Util/warm/README.md): IR_SERVER=start keeps a pool of IronRuby processes with the
+# runtime and the prelude already loaded, and IR_SERVER=1 runs the program in one of them -
+# `ir -e 1` in ~0.015 s instead of ~0.9 s; IR_SERVER=auto also starts a pool when none is running.
+# Whenever the pool cannot serve a request (none running, none idle, startup inputs such as
+# RUBYOPT or -I that differ from the pool's) the client execs exactly the command below instead.
+case "$IR_SERVER" in
+  ""|0) ;;
+  start|stop|restart|status)
+    exec "$IR_ROOT/Util/warm/ir-server.sh" "$IR_SERVER" "$IR_BIN" "$STDLIB" ;;
+  auto)
+    # as 1, and when no pool is running, start one in the background for the invocations to come
+    [ -x "$IR_ROOT/Util/warm/bin/ir-client" ] || "$IR_ROOT/Util/warm/build.sh" >/dev/null 2>&1
+    if [ -x "$IR_ROOT/Util/warm/bin/ir-client" ]; then
+      exec "$IR_ROOT/Util/warm/bin/ir-client" --auto "$IR_ROOT/Util/warm/ir-server.sh" 1 \
+        "$IR_BIN" "$STDLIB" "$@"
+    fi ;;
+  *)
+    if [ -x "$IR_ROOT/Util/warm/bin/ir-client" ]; then
+      exec "$IR_ROOT/Util/warm/bin/ir-client" "$IR_BIN" "$STDLIB" "$@"
+    fi ;;
+esac
+
+exec "$IR_BIN" "$STDLIB" "$@"

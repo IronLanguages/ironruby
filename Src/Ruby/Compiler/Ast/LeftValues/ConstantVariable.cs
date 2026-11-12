@@ -13,15 +13,10 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Diagnostics;
-using System.Dynamic;
 using System.Reflection;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
@@ -31,7 +26,6 @@ using IronRuby.Runtime;
 namespace IronRuby.Compiler.Ast {
     using Ast = MSA.Expression;
     using System.Collections.Generic;
-    using System.Threading;
     
     internal enum StaticScopeKind {
         Global,
@@ -98,13 +92,85 @@ namespace IronRuby.Compiler.Ast {
         }
 
         internal override MSA.Expression/*!*/ TransformReadVariable(AstGenerator/*!*/ gen, bool tryRead) {
-            return TransformRead(gen, OpGet);
+            if (!tryRead) {
+                return TransformRead(gen, OpGet);
+            }
+
+            // `X ||= v` must not raise when X is undefined: it is defined?(X) ? X : (X = v)
+            return Ast.Condition(
+                TransformRead(gen, OpIsDefined),
+                AstUtils.Box(TransformRead(gen, OpGet)),
+                AstUtils.Constant(null, typeof(object))
+            );
+        }
+
+        /// <summary>
+        /// The qualifier of `expr::NAME`, so that an assignment evaluates it once for both the
+        /// read and the write (`expr::NAME ||= v` must not run expr twice).
+        /// </summary>
+        internal override MSA.Expression TransformTargetRead(AstGenerator/*!*/ gen) {
+            return (_qualifier != null && !(_qualifier is ConstantVariable))
+                ? AstUtils.Box(_qualifier.TransformRead(gen)) : null;
+        }
+
+        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen, MSA.Expression targetValue, bool tryRead) {
+            if (targetValue == null) {
+                return TransformReadVariable(gen, tryRead);
+            }
+
+            var names = new[] { Name };
+            if (!tryRead) {
+                return Methods.GetExpressionQualifiedConstant.OpCall(targetValue, gen.CurrentScopeVariable,
+                    Ast.Constant(new ExpressionQualifiedConstantSiteCache(gen.IsCoreLibrary)), Ast.Constant(names));
+            }
+
+            // the target expression may assign a temporary, so evaluate it exactly once
+            var qualifier = gen.CurrentScope.DefineHiddenVariable("#qualifier", typeof(object));
+            return Ast.Condition(
+                Methods.IsDefinedExpressionQualifiedConstant.OpCall(Ast.Assign(qualifier, targetValue), gen.CurrentScopeVariable,
+                    Ast.Constant(new ExpressionQualifiedIsDefinedConstantSiteCache()), Ast.Constant(names)),
+                AstUtils.Box(Methods.GetExpressionQualifiedConstant.OpCall(qualifier, gen.CurrentScopeVariable,
+                    Ast.Constant(new ExpressionQualifiedConstantSiteCache(gen.IsCoreLibrary)), Ast.Constant(names))),
+                AstUtils.Constant(null, typeof(object))
+            );
+        }
+
+        internal override MSA.Expression/*!*/ TransformWrite(AstGenerator/*!*/ gen, MSA.Expression targetValue, MSA.Expression/*!*/ rightValue) {
+            if (targetValue == null) {
+                return TransformWriteVariable(gen, rightValue);
+            }
+
+            // the qualifier is evaluated first: an op-assignment reads the constant out of it
+            // while computing the value to write
+            var qualifier = gen.CurrentScope.DefineHiddenVariable("#qualifier", typeof(object));
+            return Ast.Block(
+                Ast.Assign(qualifier, AstUtils.Box(targetValue)),
+                Ast.Call(Methods.SetQualifiedConstant, AstUtils.Box(rightValue), qualifier, gen.CurrentScopeVariable,
+                    TransformName(gen), gen.SourcePathConstant, AstUtils.Constant(Location.Start.Line), Ast.Constant(gen.Encoding))
+            );
         }
 
         private const int OpGet = 0;
         private const int OpIsDefined = 1;
 
         private MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen, int opKind) {
+            object siteCache;
+            return TransformRead(gen, opKind, out siteCache);
+        }
+
+        /// <summary>
+        /// The read of a constant in a rescue clause's class list, and the cache of its site when it has one (A, ::A, A::B; not
+        /// {expr}::A), which Body.TransformExceptionHandling's exception filter reads without running the lookup (RubyOps.RescuePassMayTest).
+        /// </summary>
+        internal MSA.Expression/*!*/ TransformRescueRead(AstGenerator/*!*/ gen, out ConstantSiteCache site) {
+            object siteCache;
+            var result = TransformRead(gen, OpGet, out siteCache);
+            site = siteCache as ConstantSiteCache;
+            return result;
+        }
+
+        private MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen, int opKind, out object siteCache) {
+            siteCache = null;
             ConstantVariable constantQualifier = _qualifier as ConstantVariable;
             if (constantQualifier != null) {
                 ConstantVariable constant;
@@ -121,7 +187,7 @@ namespace IronRuby.Compiler.Ast {
                     return constant.MakeExpressionQualifiedRead(gen, opKind, names.ToReverseArray());
                 } else {
                     // A::B
-                    return MakeCachedRead(gen, opKind, constant.IsGlobal, true, Ast.Constant(names.ToReverseArray()));
+                    return MakeCachedRead(gen, opKind, constant.IsGlobal, true, Ast.Constant(names.ToReverseArray()), out siteCache);
                 }
             } else if (_qualifier != null) {
                 // {expr}::A
@@ -129,7 +195,7 @@ namespace IronRuby.Compiler.Ast {
             } else {
                 // A
                 // ::A
-                return MakeCachedRead(gen, opKind, IsGlobal, false, Ast.Constant(Name));
+                return MakeCachedRead(gen, opKind, IsGlobal, false, Ast.Constant(Name), out siteCache);
             }
         }
 
@@ -143,7 +209,7 @@ namespace IronRuby.Compiler.Ast {
                 siteCache = new ExpressionQualifiedIsDefinedConstantSiteCache();
                 op = Methods.IsDefinedExpressionQualifiedConstant;
             } else {
-                siteCache = new ExpressionQualifiedConstantSiteCache();
+                siteCache = new ExpressionQualifiedConstantSiteCache(gen.IsCoreLibrary);
                 op = Methods.GetExpressionQualifiedConstant;
             }
 
@@ -165,6 +231,8 @@ namespace IronRuby.Compiler.Ast {
         //     } else {
         //       <result> = ((WeakReference)value).Target;
         //     }
+        //   } else if (value.GetType() == typeof(RactorCheckedConstant)) {
+        //     <result> = ReadRactorCheckedConstant(value);
         //   } else {
         //     <result> = value;
         //   }
@@ -172,9 +240,8 @@ namespace IronRuby.Compiler.Ast {
         //   <result> = GetConstant(...);
         // }
         private static MSA.Expression/*!*/ MakeCachedRead(AstGenerator/*!*/ gen, int opKind, bool isGlobal, bool isQualified,
-            MSA.Expression/*!*/ name) {
+            MSA.Expression/*!*/ name, out object siteCache) {
 
-            object siteCache;
             MSA.ParameterExpression siteVar, valueVar;
             FieldInfo versionField, valueField;
             MSA.Expression readValue;
@@ -194,7 +261,7 @@ namespace IronRuby.Compiler.Ast {
                         OpCall(gen.CurrentScopeVariable, siteVar, name); 
 
             } else {
-                siteCache = (ConstantSiteCache)new ConstantSiteCache();
+                siteCache = new ConstantSiteCache(gen.IsCoreLibrary);
                 gen.CurrentScope.GetConstantSiteCacheVariables(out siteVar, out valueVar);
                 versionField = Fields.ConstantSiteCache_Version;
                 valueField = Fields.ConstantSiteCache_Value;
@@ -215,7 +282,12 @@ namespace IronRuby.Compiler.Ast {
                 readValue = Ast.Condition(
                     Ast.TypeEqual(Ast.Assign(valueVar, Ast.Field(siteVar, valueField)), typeof(WeakReference)),
                     weakValue,
-                    valueVar
+                    // a value cached once Ractors have started, which a non-main Ractor may not see
+                    Ast.Condition(
+                        Ast.TypeEqual(valueVar, typeof(RactorCheckedConstant)),
+                        Methods.ReadRactorCheckedConstant.OpCall(valueVar),
+                        valueVar
+                    )
                 );
 
                 fallback = (isQualified ? Methods.GetQualifiedConstant : Methods.GetUnqualifiedConstant).
@@ -238,15 +310,24 @@ namespace IronRuby.Compiler.Ast {
             MSA.Expression transformedName = TransformName(gen);
             MSA.Expression transformedQualifier;
 
+            // Recorded for Module#const_source_location:
+            MSA.Expression sourcePath = gen.SourcePathConstant;
+            MSA.Expression sourceLine = AstUtils.Constant(Location.Start.Line);
+
             switch (TransformQualifier(gen, out transformedQualifier)) {
                 case StaticScopeKind.Global:
-                    return Methods.SetGlobalConstant.OpCall(AstUtils.Box(rightValue), gen.CurrentScopeVariable, transformedName);
+                    return Methods.SetGlobalConstant.OpCall(AstUtils.Box(rightValue), gen.CurrentScopeVariable, transformedName, sourcePath, sourceLine, Ast.Constant(gen.Encoding));
 
                 case StaticScopeKind.EnclosingModule:
-                    return Methods.SetUnqualifiedConstant.OpCall(AstUtils.Box(rightValue), gen.CurrentScopeVariable, transformedName);
+                    return Methods.SetUnqualifiedConstant.OpCall(AstUtils.Box(rightValue), gen.CurrentScopeVariable, transformedName, sourcePath, sourceLine, Ast.Constant(gen.Encoding));
 
                 case StaticScopeKind.Explicit:
-                    return Methods.SetQualifiedConstant.OpCall(AstUtils.Box(rightValue), transformedQualifier, gen.CurrentScopeVariable, transformedName);
+                    // `qualifier::NAME = rhs` evaluates the qualifier first
+                    var qualifier = gen.CurrentScope.DefineHiddenVariable("#qualifier", typeof(object));
+                    return Ast.Block(
+                        Ast.Assign(qualifier, AstUtils.Box(transformedQualifier)),
+                        Ast.Call(Methods.SetQualifiedConstant, AstUtils.Box(rightValue), qualifier, gen.CurrentScopeVariable, transformedName, sourcePath, sourceLine, Ast.Constant(gen.Encoding))
+                    );
             }
 
             throw Assert.Unreachable;

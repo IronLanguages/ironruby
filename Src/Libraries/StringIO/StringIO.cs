@@ -15,33 +15,62 @@
 
 using System.Runtime.InteropServices;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Actions;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Utils;
 using System;
 using System.IO;
-using Microsoft.Scripting.Math;
-using System.Diagnostics;
 using System.Collections;
+using System.Collections.Generic;
+using System.Reflection;
+using System.Text;
+using IronRuby.Runtime.Conversions;
 
 namespace IronRuby.StandardLibrary.StringIO {
     [RubyClass("StringIO", Inherits = typeof(object)), Includes(typeof(Enumerable))]
     public class StringIO {
-        private MutableString/*!*/ _content;
+        // nil once StringIO.open's block has finished: MRI drops the string then, so #string
+        // answers nil rather than the text that was there.
+        private MutableString _content;
         private int _position;
         private IOMode _mode;
+
+        // What the stream was opened as, which never changes. #close_read and #close_write ask
+        // whether this end ever existed - MRI calls closing one that did not "non-duplex" and
+        // refuses - while closing an end that is merely already closed is a no-op.
+        private IOMode _initialMode;
+
         private int _lineNumber;
 
+        // One write is one step. MRI gets that from the GVL; here it has to be said, or two
+        // threads read the same position and write over each other's bytes.
+        private readonly object/*!*/ _mutex = new object();
+
+        // What #set_encoding was told, when it was told anything. Normally the encoding is the
+        // string's own, but the string may be frozen - and MRI still remembers the answer then
+        // rather than refusing, so it cannot live only on the string.
+        private RubyEncoding _externalEncoding;
+
+        // The version of MRI's stringio whose behaviour this follows.  It is not decoration:
+        // ruby/spec guards several expectations on it, because stringio changed what #read does
+        // with the encoding of a given buffer at 3.1.2.
+        [RubyConstant("VERSION")]
+        public static readonly MutableString/*!*/ Version = MutableString.CreateAscii("3.2.0").Freeze();
+
         public StringIO()
-            : this(MutableString.CreateBinary(), IOMode.ReadWrite) {
+            : this(MutableString.CreateEmpty(), IOMode.ReadWrite) {
+        }
+
+        public StringIO(RubyContext/*!*/ context)
+            : this(MutableString.CreateEmpty(context.DefaultExternalEncoding), IOMode.ReadWrite) {
         }
 
         public StringIO(MutableString/*!*/ content, IOMode mode) {
             ContractUtils.RequiresNotNull(content, "content");
             _content = content;
             _mode = mode;
+            _initialMode = mode;
         }
 
         private void SetPosition(long value) {
@@ -51,28 +80,29 @@ namespace IronRuby.StandardLibrary.StringIO {
             _position = (int)value; 
         }
 
-        private void SetContent(MutableString/*!*/ content) {
+        private void SetContent(MutableString content) {
             _content = content;
             _position = 0;
             _lineNumber = 0;
+            _externalEncoding = null;
         }
 
         private MutableString/*!*/ GetContent() {
-            if (_mode.IsClosed()) {
+            if (_mode.IsClosed() || _content == null) {
                 throw RubyExceptions.CreateIOError("closed stream");
             }
             return _content;
         }
 
         private MutableString/*!*/ GetReadableContent() {
-            if (!_mode.CanRead()) {
+            if (!_mode.CanRead() || _content == null) {
                 throw RubyExceptions.CreateIOError("not opened for reading");
             }
             return _content;
         }
 
         private MutableString/*!*/ GetWritableContent() {
-            if (!_mode.CanWrite()) {
+            if (!_mode.CanWrite() || _content == null) {
                 throw RubyExceptions.CreateIOError("not opened for writing");
             }
             return _content;
@@ -95,47 +125,121 @@ namespace IronRuby.StandardLibrary.StringIO {
 
         #region Construction
 
+        /// <summary>
+        /// StringIO.new(string = "", mode = nil, **options). IronRuby has no real keyword
+        /// arguments - they arrive as a trailing Hash - so the options are taken off the end the
+        /// same way #gets takes its chomp:.
+        /// </summary>
         [RubyConstructor]
-        public static StringIO/*!*/ Create(RubyClass/*!*/ self) {
-            return new StringIO();
-        }
+        public static StringIO/*!*/ Create(ConversionStorage<IDictionary<object, object>>/*!*/ toHash,
+            ConversionStorage<int?>/*!*/ toInt, ConversionStorage<MutableString>/*!*/ toStr,
+            BlockParam block, RubyClass/*!*/ self,
+            [Optional]object content, [Optional]object mode,
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
-        [RubyConstructor]
-        public static StringIO/*!*/ Create(RubyClass/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ initialString,
-            [DefaultProtocol, Optional, NotNull]MutableString mode) {
+            // MRI does not yield to a block here and says so rather than swallowing it.
+            if (block != null) {
+                self.Context.ReportWarning("StringIO::new() does not take block; use StringIO::open() instead");
+            }
 
-            IOMode ioMode = IOModeEnum.Parse(mode, initialString.IsFrozen ? IOMode.ReadOnly : IOMode.ReadWrite) | IOMode.PreserveEndOfLines;
-            return new StringIO(CheckContent(initialString, ioMode), ioMode);
-        }
-
-        [RubyConstructor]
-        public static StringIO/*!*/ Create(RubyClass/*!*/ self, [DefaultProtocol, NotNull]MutableString initialString, int mode) {
-            IOMode ioMode = (IOMode)mode | IOMode.PreserveEndOfLines;
-            return new StringIO(CheckContent(initialString, ioMode), ioMode);
+            var result = new StringIO(self.Context);
+            Initialize(toHash, toInt, toStr, self.Context, result, content, mode, options);
+            return result;
         }
 
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-        public static StringIO/*!*/ Reinitialize(StringIO/*!*/ self) {
-            self.SetContent(MutableString.CreateBinary());
-            self._mode = IOMode.ReadWrite;
+        public static StringIO/*!*/ Reinitialize(ConversionStorage<IDictionary<object, object>>/*!*/ toHash,
+            ConversionStorage<int?>/*!*/ toInt, ConversionStorage<MutableString>/*!*/ toStr,
+            RubyContext/*!*/ context, StringIO/*!*/ self,
+            [Optional]object content, [Optional]object mode,
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+
+            Initialize(toHash, toInt, toStr, context, self, content, mode, options);
             return self;
         }
 
-        [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-        public static StringIO/*!*/ Reinitialize(StringIO/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ content,
-            [DefaultProtocol, Optional, NotNull]MutableString mode) {
-            IOMode ioMode = IOModeEnum.Parse(mode, content.IsFrozen ? IOMode.ReadOnly : IOMode.ReadWrite) | IOMode.PreserveEndOfLines;
-            self.SetContent(CheckContent(content, ioMode));
+        /// <summary>Whether a mode asks for binary - "rb", "wb+" - reading only its flags, not
+        /// the encodings that may follow a colon.</summary>
+        private static bool IsBinaryMode(MutableString mode) {
+            if (mode == null) {
+                return false;
+            }
+            string text = mode.ToString();
+            int end = text.IndexOf(':');
+            if (end < 0) {
+                end = text.Length;
+            }
+            return text.IndexOf('b', 0, end) >= 0;
+        }
+
+        private static void Initialize(ConversionStorage<IDictionary<object, object>>/*!*/ toHash,
+            ConversionStorage<int?>/*!*/ toInt, ConversionStorage<MutableString>/*!*/ toStr,
+            RubyContext/*!*/ context, StringIO/*!*/ self, object content, object mode,
+            IDictionary<object, object> options) {
+
+            Protocols.TryConvertToOptions(toHash, ref options, ref content, ref mode);
+
+            bool hasContent = content != Missing.Value;
+            bool hasMode = mode != Missing.Value;
+
+            IOInfo info = new IOInfo();
+            bool binary = false;
+
+            // A nil mode is MRI's "no mode here", which leaves a :mode option free to give one.
+            // The conversion happens once: the mode may be a mock that expects a single #to_str.
+            if (hasMode && mode != null) {
+                var toIntSite = toInt.GetSite(TryConvertToFixnumAction.Make(context));
+                int? numeric = toIntSite.Target(toIntSite, mode);
+                if (numeric.HasValue) {
+                    info = new IOInfo(IOModeNative.ToIOMode(numeric.Value));
+                } else {
+                    MutableString text = Protocols.CastToString(toStr, mode);
+                    info = IOInfo.Parse(context, text);
+                    binary = IsBinaryMode(text);
+                }
+            }
+
+            if (options != null) {
+                // IOInfo knows the conflicts MRI refuses - an encoding or a binmode said twice,
+                // textmode and binmode at once - and they are the same ones here.
+                info = info.AddOptions(toStr, options);
+
+                object value;
+                if (options.TryGetValue(context.CreateAsciiSymbol("binmode"), out value) && Protocols.IsTrue(value)) {
+                    binary = true;
+                }
+                if (options.TryGetValue(context.CreateAsciiSymbol("mode"), out value)) {
+                    binary |= IsBinaryMode(value as MutableString);
+                }
+            }
+
+            MutableString str = hasContent
+                ? Protocols.CastToString(toStr, content)
+                : MutableString.CreateEmpty(context.DefaultExternalEncoding);
+
+            IOMode ioMode = info.HasMode
+                ? info.Mode
+                : (str.IsFrozen ? IOMode.ReadOnly : IOMode.ReadWrite);
+            ioMode |= IOMode.PreserveEndOfLines;
+
+            self.SetContent(CheckContent(str, ioMode));
             self._mode = ioMode;
-            return self;
-        }
+            self._initialMode = ioMode;
 
-        [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-        public static StringIO/*!*/ Reinitialize(StringIO/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ content, int mode) {
-            IOMode ioMode = (IOMode)mode | IOMode.PreserveEndOfLines;
-            self.SetContent(CheckContent(content, ioMode));
-            self._mode = ioMode;
-            return self;
+            // Measured against CRuby 4.0: the encoding the mode or the options ask for is only
+            // taken when the mode slot was there to ask in.  StringIO.new(str, encoding: 'X')
+            // keeps the string's own encoding, StringIO.new(str, nil, encoding: 'X') does not,
+            // and neither does StringIO.new(encoding: 'X') - which has no string to ask.
+            // The string itself is never re-tagged: only the stream's answer changes.
+            if (!hasContent || hasMode) {
+                RubyEncoding encoding = info.InternalEncoding ?? info.ExternalEncoding;
+                if (encoding == null && binary) {
+                    encoding = RubyEncoding.Binary;
+                }
+                if (encoding != null) {
+                    self._externalEncoding = encoding;
+                }
+            }
         }
 
         [RubyMethod("open", RubyMethodAttributes.PublicSingleton)]
@@ -150,7 +254,7 @@ namespace IronRuby.StandardLibrary.StringIO {
         [RubyMethod("reopen")]
         public static StringIO/*!*/ Reopen(StringIO/*!*/ self) {
             self.SetContent(MutableString.CreateBinary());
-            self._mode = IOMode.ReadWrite;
+            self._mode = self._initialMode = IOMode.ReadWrite;
             return self;
         }
 
@@ -160,7 +264,7 @@ namespace IronRuby.StandardLibrary.StringIO {
             StringIO/*!*/ self, [NotNull]object/*!*/ other) {
 
             if (!Protocols.RespondTo(respondToStorage, other, "to_strio")) {
-                throw RubyExceptions.CreateTypeConversionError(respondToStorage.Context.GetClassName(other), "StringIO");
+                throw RubyExceptions.CreateImplicitConversionError(respondToStorage.Context.GetClassName(other), "StringIO");
             }
 
             var site = toStringIoStorage.GetCallSite("to_strio", 0);
@@ -177,12 +281,9 @@ namespace IronRuby.StandardLibrary.StringIO {
         public static StringIO/*!*/ Reopen(RubyContext/*!*/ context, [NotNull]StringIO/*!*/ self, [NotNull]StringIO/*!*/ other) {
             self.SetContent(other._content);
             self._mode = other._mode;
+            self._initialMode = other._initialMode;
             self._lineNumber = other._lineNumber;
             self._position = other._position;
-
-            // TODO: this seems to be MRI bug
-            // Shouldn't StringIO's taint be always same as the underlying string's taint?
-            context.TaintObjectBy(self, other);
             return self;
         }
 
@@ -196,7 +297,7 @@ namespace IronRuby.StandardLibrary.StringIO {
             [DefaultProtocol, NotNull]MutableString mode) {
             IOMode ioMode = IOModeEnum.Parse(mode, content.IsFrozen ? IOMode.ReadOnly : IOMode.ReadWrite) | IOMode.PreserveEndOfLines;
             self.SetContent(CheckContent(content, ioMode));
-            self._mode = ioMode;
+            self._mode = self._initialMode = ioMode;
             return self;
         }
 
@@ -204,7 +305,7 @@ namespace IronRuby.StandardLibrary.StringIO {
         public static StringIO/*!*/ Reopen(StringIO/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ content, int mode) {
             IOMode ioMode = (IOMode)mode | IOMode.PreserveEndOfLines;
             self.SetContent(CheckContent(content, ioMode));
-            self._mode = ioMode;
+            self._mode = self._initialMode = ioMode;
             return self;
         }
 
@@ -212,21 +313,30 @@ namespace IronRuby.StandardLibrary.StringIO {
 
         #region close(_read|_write), closed(_read|_write)?
 
+        // MRI: closing a StringIO that is already closed is not an error.
         [RubyMethod("close")]
         public static void Close(StringIO/*!*/ self) {
-            self.GetContent();
             self.Close();
         }
 
+        /// <summary>
+        /// The complaint is about an end that never existed - MRI's "non-duplex" - and not about
+        /// one that is merely already closed, which is a no-op answering nil.  That is why the
+        /// question is put to the mode the stream was opened with rather than its current one.
+        /// </summary>
         [RubyMethod("close_read")]
         public static void CloseRead(StringIO/*!*/ self) {
-            self.GetReadableContent();
+            if (!self._initialMode.CanRead()) {
+                throw RubyExceptions.CreateIOError("closing non-duplex IO for reading");
+            }
             self._mode = self._mode.CloseRead();
         }
 
         [RubyMethod("close_write")]
         public static void CloseWrite(StringIO/*!*/ self) {
-            self.GetWritableContent();
+            if (!self._initialMode.CanWrite()) {
+                throw RubyExceptions.CreateIOError("closing non-duplex IO for writing");
+            }
             self._mode = self._mode.CloseWrite();
         }
 
@@ -273,22 +383,37 @@ namespace IronRuby.StandardLibrary.StringIO {
                 throw RubyExceptions.CreateEINVAL("negative length");
             }
             self.GetWritableContent().SetByteCount(length);
-            return lengthObj;
+            // MRI answers 0, whatever the length
+            return 0;
         }
 
+        // MRI's strio_rewind does not check that the stream is open: a StringIO that a
+        // GzipWriter has closed can still be rewound, and its #string read back.
         [RubyMethod("rewind")]
         public static int Rewind(StringIO/*!*/ self) {
-            self.GetContent();
             self._position = 0;
             self._lineNumber = 0;
             return 0;
         }
 
+        /// <summary>
+        /// Unlike #pos= and #rewind, which MRI still answers on a closed stream, #seek wants an
+        /// open one.  A whence that is none of the three is Errno::EINVAL - the error the system
+        /// call would give - rather than an ArgumentError.
+        /// </summary>
         [RubyMethod("seek")]
         public static int Seek(StringIO/*!*/ self, [DefaultProtocol]int pos, [DefaultProtocol, DefaultParameterValue(RubyIO.SEEK_SET)]int seekOrigin) {
-            self.SetPosition(RubyIO.GetSeekPosition(
-                self._content.GetByteCount(), self._position, pos, RubyIO.ToSeekOrigin(seekOrigin)
-            ));
+            MutableString content = self.GetContent();
+
+            SeekOrigin origin;
+            switch (seekOrigin) {
+                case RubyIO.SEEK_SET: origin = SeekOrigin.Begin; break;
+                case RubyIO.SEEK_CUR: origin = SeekOrigin.Current; break;
+                case RubyIO.SEEK_END: origin = SeekOrigin.End; break;
+                default: throw RubyExceptions.CreateEINVAL("invalid whence");
+            }
+
+            self.SetPosition(RubyIO.GetSeekPosition(content.GetByteCount(), self._position, pos, origin));
             return 0;
         }
 
@@ -304,7 +429,7 @@ namespace IronRuby.StandardLibrary.StringIO {
         #region string, string=
 
         [RubyMethod("string")]
-        public static MutableString/*!*/ GetString(StringIO/*!*/ self) {
+        public static MutableString GetString(StringIO/*!*/ self) {
             return self._content;
         }
 
@@ -323,9 +448,11 @@ namespace IronRuby.StandardLibrary.StringIO {
             return PrintOps.Output(writeStorage, self, value);
         }
 
+        // With no arguments MRI prints $_, and it prints it as a string: nil's string is empty,
+        // not "nil".
         [RubyMethod("print")]
         public static void Print(BinaryOpStorage/*!*/ writeStorage, RubyScope/*!*/ scope, object self) {
-            Print(writeStorage, self, scope.GetInnerMostClosureScope().LastInputLine);
+            Print(writeStorage, self, (object)scope.GetInnerMostClosureScope().LastInputLine);
         }
 
         [RubyMethod("print")]
@@ -334,7 +461,7 @@ namespace IronRuby.StandardLibrary.StringIO {
             MutableString delimiter = writeStorage.Context.OutputSeparator;
 
             foreach (object arg in args) {
-                Protocols.Write(writeStorage, self, arg ?? MutableString.CreateAscii("nil"));
+                Protocols.Write(writeStorage, self, arg ?? MutableString.CreateEmpty());
             }
 
             if (delimiter != null) {
@@ -344,7 +471,7 @@ namespace IronRuby.StandardLibrary.StringIO {
 
         [RubyMethod("print")]
         public static void Print(BinaryOpStorage/*!*/ writeStorage, object/*!*/ self, object value) {
-            Protocols.Write(writeStorage, self, value ?? MutableString.CreateAscii("nil"));
+            Protocols.Write(writeStorage, self, value ?? MutableString.CreateEmpty());
 
             MutableString delimiter = writeStorage.Context.OutputSeparator;
             if (delimiter != null) {
@@ -358,8 +485,8 @@ namespace IronRuby.StandardLibrary.StringIO {
         }
 
         [RubyMethod("putc")]
-        public static int Putc(BinaryOpStorage/*!*/ writeStorage, object self, [DefaultProtocol]int c) {
-            return PrintOps.Putc(writeStorage, self, c);
+        public static object Putc(ConversionStorage<int>/*!*/ fixnumCast, BinaryOpStorage/*!*/ writeStorage, object self, object c) {
+            return PrintOps.Putc(fixnumCast, writeStorage, self, c);
         }
 
         [RubyMethod("puts")]
@@ -400,35 +527,92 @@ namespace IronRuby.StandardLibrary.StringIO {
 
         #region write, syswrite
 
+        /// <summary>
+        /// MRI converts what is written into the stream's external encoding.  Not when either
+        /// side is BINARY - bytes are bytes then - and not when the conversion cannot be made:
+        /// an unconvertible character does not raise here, the string goes in as it stands.
+        /// </summary>
+        private static MutableString/*!*/ Transcode(StringIO/*!*/ self, MutableString/*!*/ value) {
+            RubyEncoding to = GetExternalEncoding(self);
+            RubyEncoding from = value.Encoding;
+            if (to == null || from == null || ReferenceEquals(to, from)) {
+                return value;
+            }
+            if (ReferenceEquals(to, RubyEncoding.Binary) || ReferenceEquals(from, RubyEncoding.Binary)) {
+                return value;
+            }
+
+            try {
+                return MutableString.CreateBinary(to.StrictEncoding.GetBytes(value.ConvertToString()), to);
+            } catch (EncoderFallbackException) {
+                return value;
+            } catch (DecoderFallbackException) {
+                return value;
+            }
+        }
+
         [RubyMethod("write")]
         [RubyMethod("syswrite")]
         public static int Write(StringIO/*!*/ self, [NotNull]MutableString/*!*/ value) {
             var content = self.GetWritableContent();
-            int length = content.GetByteCount();
+            value = Transcode(self, value);
             var bytesWritten = value.GetByteCount();
-            int pos;
 
-            if ((self._mode & IOMode.WriteAppends) != 0) {
-                pos = length;
-            } else {
-                pos = self._position;
+            // Reading the position, writing at it and moving it on is one step: MRI gets that
+            // from the GVL, and without saying so here two threads write over each other.
+            lock (self._mutex) {
+                int pos = ((self._mode & IOMode.WriteAppends) != 0) ? content.GetByteCount() : self._position;
+
+                try {
+                    content.WriteBytes(pos, value, 0, bytesWritten);
+                } catch (InvalidOperationException) {
+                    throw RubyExceptions.CreateIOError("not modifiable string");
+                }
+
+                self._position = pos + bytesWritten;
             }
-
-            try {
-                content.WriteBytes(pos, value, 0, bytesWritten);
-            } catch (InvalidOperationException) {
-                throw RubyExceptions.CreateIOError("not modifiable string");
-            }
-
-            content.TaintBy(value);
-            self._position = pos + bytesWritten;
             return bytesWritten;
         }
 
         [RubyMethod("write")]
         [RubyMethod("syswrite")]
+        public static int Write(StringIO/*!*/ self, DynamicNull value) {
+            // nil.to_s is "": nothing to write, as for IO#write(nil), but the stream must be writable
+            self.GetWritableContent();
+            return 0;
+        }
+
+        [RubyMethod("write")]
+        [RubyMethod("syswrite")]
         public static int Write(ConversionStorage<MutableString>/*!*/ tosConversion, StringIO/*!*/ self, object obj) {
+            if (obj == null) {
+                return Write(self, (DynamicNull)null);
+            }
             return Write(self, Protocols.ConvertToString(tosConversion, obj));
+        }
+
+        /// <summary>
+        /// IO#write - and so StringIO#write - takes any number of arguments and answers the
+        /// total it wrote. #syswrite does not: it is the one-argument call above.
+        /// </summary>
+        [RubyMethod("write")]
+        public static int Write(ConversionStorage<MutableString>/*!*/ tosConversion, StringIO/*!*/ self,
+            object first, params object[]/*!*/ rest) {
+
+            // A lone nil after the first argument binds as the params array itself.
+            rest = rest ?? new object[] { null };
+            int written = Write(tosConversion, self, first);
+            foreach (object value in rest) {
+                written += Write(tosConversion, self, value);
+            }
+            return written;
+        }
+
+        [RubyMethod("write")]
+        public static int Write(StringIO/*!*/ self) {
+            // Nothing to write, but the stream still has to be writable to say so.
+            self.GetWritableContent();
+            return 0;
         }
 
         #endregion
@@ -445,10 +629,25 @@ namespace IronRuby.StandardLibrary.StringIO {
             return Read(self, buffer, false);
         }
 
+        // read(nil, nil): an explicit nil buffer is the same as none (see read(n, nil) below).
+        [RubyMethod("read")]
+        public static MutableString/*!*/ Read(StringIO/*!*/ self, DynamicNull bytes, DynamicNull buffer) {
+            return Read(self, null, false);
+        }
+
         public static MutableString/*!*/ Read(StringIO/*!*/ self, MutableString buffer, bool eofError) {
             var content = self.GetReadableContent();
             int start = self._position;
             int length = content.GetByteCount();
+
+            if (start == 0 && length > 0 && !ReferenceEquals(buffer, content)) {
+                // All of the string: a copy that shares its content until one of the two changes
+                // (copy-on-write, see MutableString.Replace), as MRI's does - reading a long buffer
+                // used to copy it every time.
+                buffer = (buffer != null) ? buffer.Replace(content) : MutableString.Create(content);
+                self._position = length;
+                return buffer;
+            }
 
             if (buffer != null) {
                 buffer.Clear();
@@ -458,51 +657,129 @@ namespace IronRuby.StandardLibrary.StringIO {
 
             if (start < length) {
                 self._position = length;
-                buffer.Append(content, start, length - start).TaintBy(content);
+                buffer.Append(content, start, length - start);
             } else if (eofError) {
                 throw new EOFError("end of file reached");
             }
 
+            // Only a read of so many bytes answers bytes; the rest of the string keeps its encoding.
+            buffer.ForceEncoding(content.Encoding);
             return buffer;
+        }
+
+        /// <summary>
+        /// read(n, nil). An explicit nil buffer is the same as none - MRI only refuses a buffer
+        /// that is neither. Libraries pass one through from their own optional argument without
+        /// looking: aws-sdk-core's Query::ParamList::IoWrapper#read is `@io.read(bytes, buffer)`,
+        /// which is how every signed AWS request with a body reaches this.
+        /// </summary>
+        [RubyMethod("read")]
+        public static MutableString Read(StringIO/*!*/ self, [DefaultProtocol]int count, DynamicNull buffer) {
+            return Read(self, count, (MutableString)null);
         }
 
         [RubyMethod("read")]
         public static MutableString Read(StringIO/*!*/ self, [DefaultProtocol]int count, [DefaultProtocol, Optional, NotNull]MutableString buffer) {
             var content = self.GetReadableContent();
             if (count < 0) {
-                throw RubyExceptions.CreateArgumentError("negative length -1 given");
+                throw RubyExceptions.CreateArgumentError("negative length {0} given", count);
             }
 
+            // A read of so many bytes answers bytes: MRI tags the result ASCII-8BIT however the
+            // string is encoded, and a buffer it was handed keeps the encoding it came with -
+            // appending to it must not re-tag it the way appending normally would.
+            RubyEncoding encoding;
             if (buffer != null) {
+                encoding = buffer.Encoding;
                 buffer.Clear();
+            } else {
+                encoding = RubyEncoding.Binary;
             }
 
             int length = content.GetByteCount();
+            // A zero length read answers an empty string wherever the position is; only a read
+            // that asked for bytes and found none answers nil.
+            if (count == 0) {
+                return buffer ?? MutableString.CreateBinary();
+            }
+
             if (self._position >= length) {
                 return null;
+            }
+
+            int bytesRead = Math.Min(count, length - self._position);
+            if (buffer == null && self._position == 0 && bytesRead == length) {
+                // All of the string, shared as by read() above, and tagged as bytes.
+                buffer = MutableString.Create(content);
+                buffer.ForceEncoding(encoding);
+                self._position = length;
+                return buffer;
             }
 
             if (buffer == null) {
                 buffer = MutableString.CreateBinary();
             }
 
-            int bytesRead = Math.Min(count, length - self._position);
-            buffer.Append(content, self._position, bytesRead).TaintBy(content);
+            buffer.Append(content, self._position, bytesRead);
+            buffer.ForceEncoding(encoding);
             self._position += bytesRead;
             return buffer;
         }
 
+        /// <summary>
+        /// pread(maxlen, offset, outbuf = nil): a read at an absolute offset that leaves the
+        /// position where it was. As on a real descriptor, reading at or past the end is an
+        /// EOFError rather than nil - except for a zero length, which answers "".
+        /// </summary>
+        [RubyMethod("pread")]
+        public static MutableString/*!*/ PRead(StringIO/*!*/ self, [DefaultProtocol]int count, [DefaultProtocol]int offset,
+            [DefaultProtocol, Optional, NotNull]MutableString buffer) {
+
+            self.GetReadableContent();
+            if (count < 0) {
+                throw RubyExceptions.CreateArgumentError(String.Format("negative string size (or size too big): {0}", count));
+            }
+            // A zero length read is answered before anything is looked at: MRI neither seeks
+            // nor touches a given buffer, so even a negative offset is accepted here.
+            if (count == 0) {
+                return buffer ?? MutableString.CreateBinary();
+            }
+            if (offset < 0) {
+                throw RubyExceptions.CreateEINVAL();
+            }
+
+            lock (self._mutex) {
+                int saved = self._position;
+                try {
+                    self._position = offset;
+                    var result = Read(self, count, buffer);
+                    if (result == null) {
+                        throw new EOFError("end of file reached");
+                    }
+                    return result;
+                } finally {
+                    self._position = saved;
+                }
+            }
+        }
+
+        // MRI's #sysread is #read with the one difference that a nil answer is an error - and
+        // #read without a length never answers nil, it answers "" at the end of the stream.
         [RubyMethod("sysread")]
         public static MutableString/*!*/ SystemRead(StringIO/*!*/ self, [Optional]DynamicNull bytes) {
-            return Read(self, null, true);
+            return Read(self, null, false);
         }
 
         [RubyMethod("sysread")]
         public static MutableString/*!*/ SystemRead(StringIO/*!*/ self, DynamicNull bytes, [DefaultProtocol, NotNull]MutableString buffer) {
-            return Read(self, buffer, true);
+            return Read(self, buffer, false);
         }
 
+        // A string is always ready, so #readpartial is #sysread: it answers the whole of what was
+        // asked for when it is there, clears the buffer whether or not it succeeds, and reports
+        // the end of the stream as an error - except for a zero length, which is always "".
         [RubyMethod("sysread")]
+        [RubyMethod("readpartial")]
         public static MutableString/*!*/ SystemRead(StringIO/*!*/ self, [DefaultProtocol]int bytes, [DefaultProtocol, Optional, NotNull]MutableString buffer) {
             var result = Read(self, bytes, buffer);
             if (result == null) {
@@ -515,15 +792,100 @@ namespace IronRuby.StandardLibrary.StringIO {
 
         #region getc, getbyte (1.9), ungetc, ungetbyte (1.9), readchar, readbyte (1.9)
 
+        /// <summary>
+        /// One character in the stream's encoding, as many bytes as that encoding needs, as MRI's
+        /// strio_getc measures it (rb_enc_mbclen): the shortest run of bytes that is a valid
+        /// character, and when no run of up to four bytes is one, a single code unit - one byte, or
+        /// two in UTF-16 and four in UTF-32 - rather than everything up to the next valid character.
+        /// The result keeps the bytes the stream had.
+        /// </summary>
         [RubyMethod("getc")]
         public static object GetByte(StringIO/*!*/ self) {
             var content = self.GetReadableContent();
+            int position = self._position;
+            int length = content.GetByteCount();
 
-            if (self._position >= content.GetByteCount()) {
+            if (position >= length) {
                 return null;
             }
 
-            return ScriptingRuntimeHelpers.Int32ToObject(content.GetByte(self._position++));
+            RubyEncoding encoding = self._externalEncoding ?? content.Encoding;
+            byte first = content.GetByte(position);
+            int count;
+
+            if ((first < 0x80 && encoding.IsAsciiIdentity) || encoding == RubyEncoding.Binary) {
+                // an ASCII byte is a character of its own in any ASCII-compatible encoding, and
+                // every byte is one in BINARY
+                count = 1;
+            } else if (encoding == RubyEncoding.UTF8) {
+                count = GetUtf8CharacterLength(content, position, length);
+            } else {
+                count = GetCharacterLength(content, position, length, encoding);
+            }
+
+            self._position = position + count;
+            return MutableString.CreateBinary(content.GetBinarySlice(position, count), encoding);
+        }
+
+        /// <summary>
+        /// The length of the well-formed UTF-8 sequence at <paramref name="position"/> (Unicode's
+        /// table 3-7, which is what MRI's UTF-8 accepts: no overlong forms, no surrogates, nothing
+        /// past U+10FFFF), or 1 when the bytes there are not one.
+        /// </summary>
+        private static int GetUtf8CharacterLength(MutableString/*!*/ content, int position, int length) {
+            byte first = content.GetByte(position);
+            int count;
+            byte low = 0x80, high = 0xBF;
+            if (first < 0x80) {
+                return 1;
+            } else if (first >= 0xC2 && first <= 0xDF) {
+                count = 2;
+            } else if (first >= 0xE0 && first <= 0xEF) {
+                count = 3;
+                if (first == 0xE0) {
+                    low = 0xA0;
+                } else if (first == 0xED) {
+                    high = 0x9F;
+                }
+            } else if (first >= 0xF0 && first <= 0xF4) {
+                count = 4;
+                if (first == 0xF0) {
+                    low = 0x90;
+                } else if (first == 0xF4) {
+                    high = 0x8F;
+                }
+            } else {
+                return 1;
+            }
+
+            if (position + count > length) {
+                return 1;
+            }
+            byte second = content.GetByte(position + 1);
+            if (second < low || second > high) {
+                return 1;
+            }
+            for (int i = 2; i < count; i++) {
+                byte next = content.GetByte(position + i);
+                if (next < 0x80 || next > 0xBF) {
+                    return 1;
+                }
+            }
+            return count;
+        }
+
+        /// <summary>
+        /// The same measure for any other encoding, by asking which prefix of the bytes at
+        /// <paramref name="position"/> the encoding calls valid - what String#valid_encoding? asks.
+        /// </summary>
+        private static int GetCharacterLength(MutableString/*!*/ content, int position, int length, RubyEncoding/*!*/ encoding) {
+            int available = Math.Min(length - position, 4);
+            for (int count = 1; count <= available; count++) {
+                if (!MutableString.CreateBinary(content.GetBinarySlice(position, count), encoding).ContainsInvalidCharacters()) {
+                    return count;
+                }
+            }
+            return Math.Min(encoding.MinBytesPerChar, available);
         }
 
         [RubyMethod("ungetc")]
@@ -583,65 +945,151 @@ namespace IronRuby.StandardLibrary.StringIO {
             self._lineNumber = value;
         }
 
-        [RubyMethod("gets")]
-        public static MutableString Gets(RubyScope/*!*/ scope, StringIO/*!*/ self) {
-            return Gets(scope, self, scope.RubyContext.InputSeparator, -1);
-        }
-
-        [RubyMethod("gets")]
-        public static MutableString Gets(RubyScope/*!*/ scope, StringIO/*!*/ self, DynamicNull separator) {
-            return Gets(scope, self, null, -1);
-        }
-
-        [RubyMethod("gets")]
-        public static MutableString Gets(RubyScope/*!*/ scope, StringIO/*!*/ self, [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
-            if (separatorOrLimit.IsFixnum()) {
-                return Gets(scope, self, scope.RubyContext.InputSeparator, separatorOrLimit.Fixnum());
-            } else {
-                return Gets(scope, self, separatorOrLimit.String(), -1);
+        /// <summary>
+        /// A limit of zero would read an empty line for ever, so MRI refuses it where a reader
+        /// loops rather than looping - the same message IO#each_line gives.
+        /// </summary>
+        private static void CheckLineLimit(int limit, string/*!*/ methodName) {
+            if (limit == 0) {
+                throw RubyExceptions.CreateArgumentError("invalid limit: 0 for {0}", methodName);
             }
         }
 
+        /// <summary>
+        /// The argument shapes the four line readers share: (), (separator), (limit),
+        /// (separator, limit), with a chomp: keyword on any of them. A lone Integer is the limit
+        /// rather than the separator - the one shape that arity cannot tell apart - and a nil
+        /// separator means "read everything".
+        /// </summary>
+        private static void ParseLineArguments(ConversionStorage<IDictionary<object, object>>/*!*/ toHash,
+            ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt, RubyContext/*!*/ context,
+            object first, object second, IDictionary<object, object> options,
+            out MutableString separator, out int limit, out bool chomp) {
+
+            Protocols.TryConvertToOptions(toHash, ref options, ref first, ref second);
+
+            separator = context.InputSeparator;
+            limit = -1;
+            chomp = false;
+
+            object value;
+            if (options != null && options.TryGetValue(context.CreateAsciiSymbol("chomp"), out value)) {
+                chomp = RubyOps.IsTrue(value);
+            }
+
+            if (second != Missing.Value) {
+                separator = (first == null) ? null : Protocols.CastToString(toStr, first);
+                limit = (second == null) ? -1 : Protocols.CastToFixnum(toInt, second);
+            } else if (first != Missing.Value) {
+                if (first == null) {
+                    separator = null;
+                } else if (first is int) {
+                    limit = (int)first;
+                } else if (first is MutableString) {
+                    separator = (MutableString)first;
+                } else {
+                    // to_str is tried before to_int, which is the order MRI tries them in
+                    MutableString asString = Protocols.TryCastToString(toStr, first);
+                    if (asString != null) {
+                        separator = asString;
+                    } else {
+                        limit = Protocols.CastToFixnum(toInt, first);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// chomp takes off the separator that was actually found: a nil separator read to the end
+        /// and has nothing to take off, and an empty one read a paragraph, whose separator is the
+        /// run of blank lines that ended it.
+        /// </summary>
+        private static MutableString Chomp(MutableString line, MutableString separator, bool chomp) {
+            if (!chomp || line == null || separator == null) {
+                return line;
+            }
+
+            int length = line.GetByteCount();
+            if (separator.IsEmpty) {
+                int end = length;
+                while (end > 0 && line.GetByte(end - 1) == '\n') {
+                    end--;
+                }
+                return (end == length) ? line : line.GetSlice(0, end);
+            }
+
+            int separatorLength = separator.GetByteCount();
+            if (separatorLength == 0 || length < separatorLength) {
+                return line;
+            }
+            // The separator is compared as bytes - the line is a slice of the content and its
+            // separator was found as bytes - and the line, which nothing else holds yet, is cut
+            // where it is rather than sliced into another string.
+            for (int i = 0; i < separatorLength; i++) {
+                if (line.GetByte(length - separatorLength + i) != separator.GetByte(i)) {
+                    return line;
+                }
+            }
+
+            int cut = length - separatorLength;
+            // A line ended by "\n" gives up the "\r" in front of it too - MRI chomps the pair -
+            // but only that separator does: gets(">", chomp: true) leaves a "\r" alone.
+            if (separatorLength == 1 && separator.GetByte(0) == (byte)'\n' && cut > 0 && line.GetByte(cut - 1) == (byte)'\r') {
+                cut--;
+            }
+            line.SetByteCount(cut);
+            return line;
+        }
+
+        // The bare call - nearly every gets - binds without the optional arguments' conversions.
         [RubyMethod("gets")]
-        public static MutableString Gets(RubyScope/*!*/ scope, StringIO/*!*/ self, [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
+        public static MutableString Gets(RubyScope/*!*/ scope, StringIO/*!*/ self) {
+            return Gets(scope, self, scope.RubyContext.InputSeparator, -1, false);
+        }
+
+        private static MutableString Gets(RubyScope/*!*/ scope, StringIO/*!*/ self, MutableString separator, int limit, bool chomp) {
             var content = self.GetReadableContent();
 
-            // TODO: limit
-
             int position = self._position;
-            MutableString result = ReadLine(content, separator, ref position);
+            MutableString result = Chomp(ReadLine(content, separator, limit, ref position), separator, chomp);
             self._position = position;
 
+            // $_ is frame local, and the frame it belongs in is the caller's - which is why this
+            // is not wrapped in Ruby the way the chomp: option once was.
             scope.GetInnerMostClosureScope().LastInputLine = result;
-            self._lineNumber++;
+            // Every read that answers a line counts, cut short by a limit or not - but the nil at
+            // the end is not a line, and neither is the "" of gets(0) (MRI's strio_gets).
+            if (result != null && limit != 0) {
+                self._lineNumber++;
+            }
 
             return result;
         }
 
-        [RubyMethod("readline")]
-        public static MutableString/*!*/ ReadLine(RubyScope/*!*/ scope, StringIO/*!*/ self) {
-            return ReadLine(scope, self, scope.RubyContext.InputSeparator, -1);
+        [RubyMethod("gets")]
+        public static MutableString Gets(ConversionStorage<IDictionary<object, object>>/*!*/ toHash,
+            ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
+            RubyScope/*!*/ scope, StringIO/*!*/ self,
+            [Optional]object separatorOrLimit, [Optional]object limitOrOptions,
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+
+            MutableString separator;
+            int limit;
+            bool chomp;
+            ParseLineArguments(toHash, toStr, toInt, scope.RubyContext, separatorOrLimit, limitOrOptions, options,
+                out separator, out limit, out chomp);
+            return Gets(scope, self, separator, limit, chomp);
         }
 
         [RubyMethod("readline")]
-        public static MutableString/*!*/ ReadLine(RubyScope/*!*/ scope, StringIO/*!*/ self, DynamicNull separator) {
-            return ReadLine(scope, self, null, -1);
-        }
-
-        [RubyMethod("readline")]
-        public static MutableString/*!*/ ReadLine(RubyScope/*!*/ scope, StringIO/*!*/ self, [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
-            if (separatorOrLimit.IsFixnum()) {
-                return ReadLine(scope, self, scope.RubyContext.InputSeparator, separatorOrLimit.Fixnum());
-            } else {
-                return ReadLine(scope, self, separatorOrLimit.String(), -1);
-            }
-        }
-
-        [RubyMethod("readline")]
-        public static MutableString/*!*/ ReadLine(RubyScope/*!*/ scope, StringIO/*!*/ self, [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
+        public static MutableString/*!*/ ReadLine(ConversionStorage<IDictionary<object, object>>/*!*/ toHash,
+            ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
+            RubyScope/*!*/ scope, StringIO/*!*/ self,
+            [Optional]object separatorOrLimit, [Optional]object limitOrOptions,
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             // no dynamic call, modifies $_ scope variable:
-            MutableString result = Gets(scope, self, separator, limit);
+            MutableString result = Gets(toHash, toStr, toInt, scope, self, separatorOrLimit, limitOrOptions, options);
             if (result == null) {
                 throw new EOFError("end of file reached");
             }
@@ -650,36 +1098,27 @@ namespace IronRuby.StandardLibrary.StringIO {
         }
 
         [RubyMethod("readlines")]
-        public static RubyArray/*!*/ ReadLines(RubyContext/*!*/ context, StringIO/*!*/ self) {
-            return ReadLines(self, context.InputSeparator, -1);
-        }
+        public static RubyArray/*!*/ ReadLines(ConversionStorage<IDictionary<object, object>>/*!*/ toHash,
+            ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
+            RubyContext/*!*/ context, StringIO/*!*/ self,
+            [Optional]object separatorOrLimit, [Optional]object limitOrOptions,
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
-        [RubyMethod("readlines")]
-        public static RubyArray/*!*/ ReadLines(RubyContext/*!*/ context, StringIO/*!*/ self, DynamicNull separator) {
-            return ReadLines(self, null, -1);
-        }
+            MutableString separator;
+            int limit;
+            bool chomp;
+            ParseLineArguments(toHash, toStr, toInt, context, separatorOrLimit, limitOrOptions, options,
+                out separator, out limit, out chomp);
 
-        [RubyMethod("readlines")]
-        public static RubyArray/*!*/ ReadLines(RubyContext/*!*/ context, StringIO/*!*/ self, [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
-            if (separatorOrLimit.IsFixnum()) {
-                return ReadLines(self, context.InputSeparator, separatorOrLimit.Fixnum());
-            } else {
-                return ReadLines(self, separatorOrLimit.String(), -1);
-            }
-        }
-
-        [RubyMethod("readlines")]
-        public static RubyArray/*!*/ ReadLines(StringIO/*!*/ self, [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
             var content = self.GetReadableContent();
+            CheckLineLimit(limit, "readlines");
             RubyArray result = new RubyArray();
-
-            // TODO: limit
 
             // no dynamic call, doesn't modify $_ scope variable:
             MutableString line;
             int position = self._position;
-            while ((line = ReadLine(content, separator, ref position)) != null) {
-                result.Add(line);
+            while ((line = ReadLine(content, separator, limit, ref position)) != null) {
+                result.Add(Chomp(line, separator, chomp));
                 self._lineNumber++;
             }
             self._position = position;
@@ -688,8 +1127,21 @@ namespace IronRuby.StandardLibrary.StringIO {
 
         private static readonly byte[] ParagraphSeparator = new byte[] { (byte)'\n', (byte)'\n' };
 
-        private static MutableString ReadLine(MutableString/*!*/ content, MutableString separator, ref int position) {
+        /// <summary>
+        /// One line: up to and including the separator, or <paramref name="limit"/> bytes,
+        /// whichever ends first - a negative limit means there is none. A nil separator reads to
+        /// the end of the string and an empty one reads a paragraph, skipping the blank lines in
+        /// front of it and ending at the blank line after it.
+        /// </summary>
+        private static MutableString ReadLine(MutableString/*!*/ content, MutableString separator, int limit, ref int position) {
             int length = content.GetByteCount();
+
+            if (limit == 0) {
+                // A limit of nothing answers an empty string and reads nothing, rather than nil -
+                // at the end of the string as anywhere else.
+                return content.GetSlice(0, 0);
+            }
+
             if (position >= length) {
                 return null;
             }
@@ -704,11 +1156,41 @@ namespace IronRuby.StandardLibrary.StringIO {
                     oldPosition++;
                 }
 
-                position = content.IndexOf(ParagraphSeparator, oldPosition);
+                int terminator = content.IndexOf(ParagraphSeparator, oldPosition);
+                if (terminator == -1) {
+                    position = length;
+                } else {
+                    // A paragraph ends with the whole run of blank lines that closed it, not
+                    // with the first newline of that run: "a\n\n\nb" reads as "a\n\n\n".
+                    position = terminator + 1;
+                    while (position < length && content.GetByte(position) == '\n') {
+                        position++;
+                    }
+                }
+            } else if (separator.GetByteCount() == 1) {
+                // the usual "\n": one byte to look for, and no copy of the separator to look with
+                position = content.IndexOf(separator.GetByte(0), oldPosition);
                 position = (position != -1) ? position + 1 : length;
             } else {
-                position = content.IndexOf(separator, oldPosition);
-                position = (position != -1) ? position + separator.Length : length;
+                // Positions are byte offsets, so the separator is looked for as bytes too: searching
+                // for it as a string switched a non-ASCII content to characters, giving a character
+                // index (and a copy of the whole content on every call).
+                byte[] separatorBytes = separator.ToByteArray();
+                position = content.IndexOf(separatorBytes, oldPosition);
+                position = (position != -1) ? position + separatorBytes.Length : length;
+            }
+
+            // The limit counts bytes from where the line started and wins when it is the shorter
+            // of the two: gets(">", 2) answers "th", not "this>".
+            if (limit > 0 && position - oldPosition > limit) {
+                position = oldPosition + limit;
+                // MRI relaxes the limit while it would split a character, by 16 bytes at most:
+                // gets(1) on "é" answers "é". A UTF-8 continuation byte at the cut marks the split.
+                if (content.Encoding.StrictEncoding.CodePage == 65001) {
+                    for (int extra = 16; extra > 0 && position < length && (content.GetByte(position) & 0xC0) == 0x80; extra--) {
+                        position++;
+                    }
+                }
             }
 
             return content.GetSlice(oldPosition, position - oldPosition);
@@ -718,36 +1200,40 @@ namespace IronRuby.StandardLibrary.StringIO {
 
         #region each, each_line, each_byte, each_char (1.9)
 
-        [RubyMethod("each")]
+        // #each_line first: a backtrace names the frame by it, which makes it one frame with the Ruby
+        // #each_line that wraps it (stringio.rb)
         [RubyMethod("each_line")]
-        public static object EachLine(RubyContext/*!*/ context, BlockParam block, StringIO/*!*/ self) {
-            return EachLine(block, self, context.InputSeparator, -1);
-        }
+        [RubyMethod("each")]
+        public static object EachLine(ConversionStorage<IDictionary<object, object>>/*!*/ toHash,
+            ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
+            RubyContext/*!*/ context, BlockParam block, StringIO/*!*/ self,
+            [Optional]object separatorOrLimit, [Optional]object limitOrOptions,
+            [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
-        [RubyMethod("each")]
-        [RubyMethod("each_line")]
-        public static object EachLine(RubyContext/*!*/ context, BlockParam block, StringIO/*!*/ self, DynamicNull separator) {
-            return EachLine(block, self, null, -1);
-        }
+            MutableString separator;
+            int limit;
+            bool chomp;
+            ParseLineArguments(toHash, toStr, toInt, context, separatorOrLimit, limitOrOptions, options,
+                out separator, out limit, out chomp);
 
-        [RubyMethod("each")]
-        [RubyMethod("each_line")]
-        public static object EachLine(RubyContext/*!*/ context, BlockParam block, StringIO/*!*/ self, [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
-            if (separatorOrLimit.IsFixnum()) {
-                return EachLine(block, self, context.InputSeparator, separatorOrLimit.Fixnum());
-            } else {
-                return EachLine(block, self, separatorOrLimit.String(), -1);
-            }
-        }
-
-        [RubyMethod("each")]
-        [RubyMethod("each_line")]
-        public static object EachLine(BlockParam block, StringIO/*!*/ self, [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
-            // TODO: improve MSOps.EachLine
-            // TODO: limit
             var content = self.GetReadableContent();
-            var result = MutableStringOps.EachLine(block, content, separator, self._position);
-            return ReferenceEquals(result, content) ? self : result;
+            CheckLineLimit(limit, "each_line");
+            if (block == null) {
+                throw RubyExceptions.NoBlockGiven();
+            }
+
+            // Reading through the stream rather than over the string, so that the position moves
+            // as the lines are yielded and the limit means the same thing it does to #gets.
+            MutableString line;
+            while ((line = ReadLine(content, separator, limit, ref self._position)) != null) {
+                self._lineNumber++;
+
+                object result;
+                if (block.Yield(Chomp(line, separator, chomp), out result)) {
+                    return result;
+                }
+            }
+            return self;
         }
 
         [RubyMethod("each_byte")]
@@ -766,30 +1252,169 @@ namespace IronRuby.StandardLibrary.StringIO {
                     return result;
                 }
             }
-            return null;
+            return self;
         }
 
         #endregion
         
-        #region TODO: chars, bytes, lines (1.9)
+        #region ungetc, ungetbyte primitive
+
+        /// <summary>
+        /// What #ungetc and #ungetbyte are built on. Both write backwards over the string - the
+        /// position moves back by as much as is pushed and those bytes replace what was there -
+        /// which is MRI's behaviour rather than a pushback buffer of its own. Pushing back past
+        /// the start moves the rest of the string along instead of dropping what does not fit.
+        /// </summary>
+        [RubyMethod("__ir_unget_bytes__", RubyMethodAttributes.PrivateInstance)]
+        public static void UngetBytes(StringIO/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ pushed) {
+            // MRI asks for a readable stream even though this writes to the string:
+            MutableString content = self.GetReadableContent();
+            int count = pushed.GetByteCount();
+            if (count == 0) {
+                return;
+            }
+
+            // io.ungetc(io.string) pushes the content back over itself: the writes below would
+            // then be reading from the string they are rewriting. Work from a copy in that case.
+            if (ReferenceEquals(pushed, content)) {
+                pushed = content.Clone();
+            }
+
+            try {
+                int position = self._position;
+                int length = content.GetByteCount();
+                if (position < count) {
+                    MutableString tail = content.GetSlice(position, length - position);
+                    content.SetByteCount(0);
+                    content.WriteBytes(0, pushed, 0, count);
+                    if (tail != null && tail.GetByteCount() > 0) {
+                        content.WriteBytes(count, tail, 0, tail.GetByteCount());
+                    }
+                    self._position = 0;
+                } else {
+                    if (position > length) {
+                        content.Append(0, position - length);
+                    }
+                    content.WriteBytes(position - count, pushed, 0, count);
+                    self._position = position - count;
+                }
+            } catch (InvalidOperationException) {
+                throw RubyExceptions.CreateIOError("not modifiable string");
+            }
+        }
 
         #endregion
 
-        #region TODO: external_encoding, internal_encoding, set_encoding (1.9)
+        #region external_encoding, internal_encoding, set_encoding (1.9)
+
+        /// <summary>
+        /// A StringIO's external encoding is its string's - there is no descriptor to carry one
+        /// of its own - and it never transcodes, so the internal encoding is always nil.
+        /// </summary>
+        [RubyMethod("external_encoding")]
+        public static RubyEncoding/*!*/ GetExternalEncoding(StringIO/*!*/ self) {
+            return self._externalEncoding ?? self.GetContent().Encoding;
+        }
+
+        [RubyMethod("internal_encoding")]
+        public static RubyEncoding GetInternalEncoding(StringIO/*!*/ self) {
+            return null;
+        }
+
+        // Separate arities rather than [Optional]: an omitted [Optional]object arrives as
+        // Missing.Value, which is neither nil nor null and has caught this codebase out before.
+        [RubyMethod("set_encoding")]
+        public static StringIO/*!*/ SetEncoding(ConversionStorage<MutableString>/*!*/ toStr, StringIO/*!*/ self, object external) {
+            return SetExternalEncoding(toStr, self, external);
+        }
+
+        [RubyMethod("set_encoding")]
+        public static StringIO/*!*/ SetEncoding(ConversionStorage<MutableString>/*!*/ toStr, StringIO/*!*/ self,
+            object external, object @internal) {
+            return SetExternalEncoding(toStr, self, external);
+        }
+
+        [RubyMethod("set_encoding")]
+        public static StringIO/*!*/ SetEncoding(ConversionStorage<MutableString>/*!*/ toStr, StringIO/*!*/ self,
+            object external, object @internal, [Keywords]object options) {
+            return SetExternalEncoding(toStr, self, external);
+        }
+
+        /// <summary>
+        /// The encoding belongs to the string, so this is String#force_encoding on it. There is
+        /// nothing here to transcode between, which is why the internal encoding and the
+        /// conversion options are accepted and then ignored, as MRI's stringio does.
+        /// </summary>
+        private static StringIO/*!*/ SetExternalEncoding(ConversionStorage<MutableString>/*!*/ toStr, StringIO/*!*/ self, object external) {
+            MutableString content = self.GetContent();
+            if (external == null) {
+                return self;
+            }
+
+            RubyEncoding encoding = Protocols.ConvertToEncoding(toStr, external);
+            self._externalEncoding = encoding;
+            // The encoding belongs to the string, so tell the string too - unless it is frozen,
+            // which MRI does not treat as a failure: the StringIO keeps the answer either way.
+            if (!content.IsFrozen) {
+                content.ForceEncoding(encoding);
+            }
+            return self;
+        }
 
         #endregion
 
         #region Stubs: binmode, fcntl, fileno, pid, fsync, sync, sync=, isatty, tty?, flush
 
+        /// <summary>
+        /// MRI's StringIO#binmode declares the string to be bytes - it sets the encoding to
+        /// BINARY - rather than doing nothing at all, and #set_encoding_by_bom will not read a
+        /// mark until that is true.
+        /// </summary>
         [RubyMethod("binmode")]
         public static StringIO/*!*/ SetBinaryMode(StringIO/*!*/ self) {
-            // nop
+            MutableString content = self.GetContent();
+            self._externalEncoding = RubyEncoding.Binary;
+            if (!content.IsFrozen) {
+                content.ForceEncoding(RubyEncoding.Binary);
+            }
             return self;
+        }
+
+        [RubyMethod("binmode?")]
+        public static bool IsBinmode(StringIO/*!*/ self) {
+            return ReferenceEquals(GetExternalEncoding(self), RubyEncoding.Binary);
+        }
+
+        [RubyMethod("__readable_stream__?", RubyMethodAttributes.PrivateInstance)]
+        public static bool IsReadableStream(StringIO/*!*/ self) {
+            return self._mode.CanRead();
+        }
+
+        /// <summary>
+        /// A StringIO has no #inspect of its own in MRI: it shows as the plain object it is,
+        /// without the string it wraps.  Left alone a CLR class prints its type name instead,
+        /// which is neither that shape nor the same as #to_s.
+        /// </summary>
+        [RubyMethod("inspect")]
+        [RubyMethod("to_s")]
+        public static MutableString/*!*/ Inspect(UnaryOpStorage/*!*/ inspectStorage,
+            ConversionStorage<MutableString>/*!*/ tosConversion, StringIO/*!*/ self) {
+            return RubyUtils.InspectObject(inspectStorage, tosConversion, self);
+        }
+
+        /// <summary>
+        /// What StringIO.open does to the stream once its block has finished: MRI closes it and
+        /// lets the string go, so #string answers nil rather than the text that was there.
+        /// </summary>
+        [RubyMethod("__ir_finalize__", RubyMethodAttributes.PrivateInstance)]
+        public static void Finalize(StringIO/*!*/ self) {
+            self._content = null;
+            self._mode = self._mode.Close();
         }
 
         [RubyMethod("fcntl")]
         public static void FileControl(StringIO/*!*/ self) {
-            throw new NotImplementedError();
+            throw new NotImplementedError("fcntl() function is unimplemented on this machine");
         }
 
         [RubyMethod("fileno")]

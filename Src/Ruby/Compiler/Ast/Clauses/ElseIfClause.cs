@@ -13,7 +13,6 @@
  *
  * ***************************************************************************/
 
-using System.Collections.Generic;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
 
@@ -34,6 +33,12 @@ namespace IronRuby.Compiler.Ast {
         public Expression Condition {
             get { return _condition; }
         }
+
+        /// <summary>
+        /// An elsif, which has a TracePoint :line event of its own before its condition (in MRI it is
+        /// a nested if). Not set for clauses the front end makes up, such as case/in's.
+        /// </summary>
+        public bool IsElsif { get; set; }
 
         public ElseIfClause(Expression condition, Statements/*!*/ statements, SourceSpan location)
             : base(location) {

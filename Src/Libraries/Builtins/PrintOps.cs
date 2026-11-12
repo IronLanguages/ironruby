@@ -15,10 +15,8 @@
 
 using System.Collections;
 using System.Collections.Generic;
-using System.Globalization;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;
-using IronRuby.Runtime.Conversions;
 
 namespace IronRuby.Builtins {
     /// <summary>
@@ -37,16 +35,31 @@ namespace IronRuby.Builtins {
             Print(writeStorage, self, scope.GetInnerMostClosureScope().LastInputLine);
         }
 
+        // $, goes between the arguments and $\ after the last one; writing $\ after every
+        // argument made `print a, b` come out as "a$\b$\".
         [RubyMethod("print")]
         public static void Print(BinaryOpStorage/*!*/ writeStorage, object self, params object[]/*!*/ args) {
-            foreach (object arg in args) {
-                Print(writeStorage, self, arg);
+            MutableString fieldSeparator = writeStorage.Context.ItemSeparator;
+            if (fieldSeparator != null && args.Length > 1) {
+                writeStorage.Context.ReportDeprecationWarning("$, is set to non-nil value");
+            }
+            for (int i = 0; i < args.Length; i++) {
+                if (i > 0 && fieldSeparator != null) {
+                    Protocols.Write(writeStorage, self, fieldSeparator);
+                }
+                // nil prints as an empty string, like every other argument's to_s
+                Protocols.Write(writeStorage, self, args[i] ?? MutableString.CreateEmpty());
+            }
+
+            MutableString recordSeparator = writeStorage.Context.OutputSeparator;
+            if (recordSeparator != null) {
+                Protocols.Write(writeStorage, self, recordSeparator);
             }
         }
 
         [RubyMethod("print")]
         public static void Print(BinaryOpStorage/*!*/ writeStorage, object self, object value) {
-            Protocols.Write(writeStorage, self, value ?? MutableString.CreateAscii("nil"));
+            Protocols.Write(writeStorage, self, value ?? MutableString.CreateEmpty());
 
             MutableString delimiter = writeStorage.Context.OutputSeparator;
             if (delimiter != null) {
@@ -56,19 +69,22 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("putc")]
         public static MutableString/*!*/ Putc(BinaryOpStorage/*!*/ writeStorage, object self, [NotNull]MutableString/*!*/ val) {
-            if (val.IsEmpty) {
-                throw RubyExceptions.CreateTypeError("can't convert String into Integer");
+            // writes the first character of the string - the whole of it when multibyte;
+            // an empty string writes nothing
+            if (!val.IsEmpty) {
+                Protocols.Write(writeStorage, self, val.GetSlice(0, 1));
             }
-
-            // writes a single byte into the output stream:
-            var c = MutableString.CreateBinary(val.GetBinarySlice(0, 1));
-            Protocols.Write(writeStorage, self, c);
             return val;
         }
 
+        // MRI hands back the argument it was given, not the Integer it made of it.
         [RubyMethod("putc")]
-        public static int Putc(BinaryOpStorage/*!*/ writeStorage, object self, [DefaultProtocol]int c) {
-            MutableString str = MutableString.CreateBinary(1).Append(unchecked((byte)c));
+        public static object Putc(ConversionStorage<int>/*!*/ fixnumCast, BinaryOpStorage/*!*/ writeStorage, object self, object c) {
+            if (c == null) {
+                throw RubyExceptions.CreateImplicitConversionError("nil", "Integer");
+            }
+            int value = Protocols.CastToFixnum(fixnumCast, c);
+            MutableString str = MutableString.CreateBinary(1).Append(unchecked((byte)value));
             Protocols.Write(writeStorage, self, str);
             return c;
         }
@@ -99,14 +115,46 @@ namespace IronRuby.Builtins {
         public static void Puts(BinaryOpStorage/*!*/ writeStorage, ConversionStorage<MutableString>/*!*/ tosConversion,
             ConversionStorage<IList>/*!*/ tryToAry, object self, [NotNull]object/*!*/ val) {
 
+            if (val == null) {
+                // `puts nil` is an empty line; only Kernel#p and #inspect spell nil out.
+                PutsEmptyLine(writeStorage, self);
+                return;
+            }
+
             IList list = Protocols.TryCastToArray(tryToAry, val);
-            if (list != null) {
-                IEnumerable recEnum = IListOps.EnumerateRecursively(tryToAry, list, -1, (_) => MutableString.CreateAscii("[...]"));
-                foreach (object item in recEnum ?? list) {
-                    Puts(writeStorage, self, ToPrintedString(tosConversion, item));
-                }
-            } else {
+            if (list == null) {
                 Puts(writeStorage, self, ToPrintedString(tosConversion, val));
+                return;
+            }
+
+            // MRI's rb_io_puts goes into an array with rb_exec_recursive on the object it was given, not on
+            // what its to_ary returned, and writes "[...]" when it meets that object again inside itself: an
+            // object whose to_ary answers a new [self] each time used to be followed forever. The descent
+            // keeps a stack of its own, so a deeply nested array does not take the machine stack.
+            var path = new HashSet<object>(ReferenceEqualityComparer.Instance) { val };
+            var stack = new Stack<(IList List, int Index, object Owner)>();
+            stack.Push((list, 0, val));
+            while (stack.Count > 0) {
+                var (current, index, owner) = stack.Pop();
+                if (index >= current.Count) {
+                    path.Remove(owner);
+                    continue;
+                }
+                stack.Push((current, index + 1, owner));
+
+                object item = current[index];
+                if (item == null) {
+                    PutsEmptyLine(writeStorage, self);
+                    continue;
+                }
+                IList nested = item is MutableString ? null : Protocols.TryCastToArray(tryToAry, item);
+                if (nested == null) {
+                    Puts(writeStorage, self, ToPrintedString(tosConversion, item));
+                } else if (path.Add(item)) {
+                    stack.Push((nested, 0, item));
+                } else {
+                    Puts(writeStorage, self, MutableString.CreateAscii("[...]"));
+                }
             }
         }
 
@@ -131,11 +179,8 @@ namespace IronRuby.Builtins {
 
         internal static void ReportWarning(BinaryOpStorage/*!*/ writeStorage, ConversionStorage<MutableString>/*!*/ tosConversion, object message) {
             if (writeStorage.Context.Verbose != null) {
-                var output = writeStorage.Context.StandardErrorOutput;
-                // MRI: unlike Kernel#puts this outputs \n even if the message ends with \n:
-                var site = writeStorage.GetCallSite("write", 1);
-                site.Target(site, output, PrintOps.ToPrintedString(tosConversion, message));
-                PrintOps.PutsEmptyLine(writeStorage, output);
+                // through the runtime's warning sink, so it carries "file:line: warning: " like rb_warn
+                writeStorage.Context.ReportWarning(PrintOps.ToPrintedString(tosConversion, message).ToString());
             }
         }
 

@@ -14,9 +14,7 @@
  * ***************************************************************************/
 
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.Reflection;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
 using IronRuby.Compiler.Generation;
@@ -26,13 +24,24 @@ namespace IronRuby.Runtime {
     public static partial class RubyOps {
         #region RFC Flags
 
+        /// <summary>
+        /// The flow-control frame of a call to a Ruby method with a block: a break from the block unwinds to it.
+        /// A literal block (ProcKind.Block) is a Proc made for this call alone, so the Proc itself is that frame -
+        /// active until LeaveMethodFrame - and becomes the block's converter. Any other block has been converted
+        /// already, so nothing can target this call: it shares one frame that is never active and never a converter.
+        /// </summary>
         [Emitted]
+        // AggressiveOptimization: see RubyOps.Yield0.
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveOptimization)]
         public static RuntimeFlowControl/*!*/ CreateRfcForMethod(Proc proc) {
-            var result = new RuntimeFlowControl();
-            result._activeFlowControlScope = result;
-            result.InitializeRfc(proc);
-            return result;
+            if (proc != null && proc.Kind == ProcKind.Block) {
+                proc.ConvertAsFrame();
+                return proc;
+            }
+            return InactiveRfc;
         }
+
+        private static readonly RuntimeFlowControl/*!*/ InactiveRfc = new RuntimeFlowControl();
 
         [Emitted]
         public static void EnterLoop(RubyScope/*!*/ scope) {
@@ -67,7 +76,7 @@ namespace IronRuby.Runtime {
                 blockFlowControl.SetFlowControl(BlockReturnReason.Retry, null, blockFlowControl.Proc.Kind);
                 return BlockReturnResult.Retry;
             } else {
-                throw new LocalJumpError("retry from proc-closure");
+                throw new LocalJumpError("retry from proc-closure", "retry", null);
             }
         }
 
@@ -82,7 +91,7 @@ namespace IronRuby.Runtime {
                 // TODO: can this happen? 
                 // If proc was null then the block argument passed to the call-with-block that returned RetrySingleton would be null and thus 
                 // the call cannot yield to any block that retries.
-                throw new LocalJumpError("retry used out of rescue", scope.FlowControlScope);
+                throw new LocalJumpError("retry used out of rescue", scope.FlowControlScope, "retry", null);
             }
         }
 
@@ -105,11 +114,10 @@ namespace IronRuby.Runtime {
                 if (blockScope.BlockFlowControl.CallerKind == BlockCallerKind.Yield) {
                     throw new EvalUnwinder(BlockReturnReason.Retry, null, blockScope.BlockFlowControl.Proc.Kind, BlockReturnResult.Retry);
                 }
-                //if (blockScope.BlockFlowControl.IsMethod) {
-                throw new LocalJumpError("retry from proc-closure");// TODO: RFC
+                throw new LocalJumpError("retry from proc-closure", "retry", null);// TODO: RFC
             }
 
-            throw new LocalJumpError("retry used out of rescue", scope.FlowControlScope);
+            throw new LocalJumpError("retry used out of rescue", scope.FlowControlScope, "retry", null);
         }
 
         #endregion
@@ -129,7 +137,7 @@ namespace IronRuby.Runtime {
         /// </summary>
         [Emitted]
         public static void MethodBreak(object returnValue) {
-            throw new LocalJumpError("unexpected break");
+            throw new LocalJumpError("unexpected break", "break", returnValue);
         }
 
         /// <summary>
@@ -148,7 +156,7 @@ namespace IronRuby.Runtime {
                 var proc = blockScope.BlockFlowControl.Proc;
                 throw new EvalUnwinder(BlockReturnReason.Break, proc.Converter, proc.Kind, returnValue);
             } else {
-                throw new LocalJumpError("unexpected break");
+                throw new LocalJumpError("unexpected break", "break", returnValue);
             }
         }
 
@@ -158,12 +166,12 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static void MethodNext(RubyScope/*!*/ scope, object returnValue) {
-            throw new LocalJumpError("unexpected next", scope.FlowControlScope);
+            throw new LocalJumpError("unexpected next", scope.FlowControlScope, "next", returnValue);
         }
 
         [Emitted]
         public static void MethodRedo(RubyScope/*!*/ scope) {
-            throw new LocalJumpError("unexpected redo", scope.FlowControlScope);
+            throw new LocalJumpError("unexpected redo", scope.FlowControlScope, "redo", null);
         }
 
         [Emitted]
@@ -188,7 +196,7 @@ namespace IronRuby.Runtime {
                 throw new BlockUnwinder(returnValue, isRedo); 
             }
 
-            throw new LocalJumpError(String.Format("unexpected {0}", isRedo ? "redo" : "next"));
+            throw new LocalJumpError(String.Format("unexpected {0}", isRedo ? "redo" : "next"), isRedo ? "redo" : "next", returnValue);
         }
 
         #endregion
@@ -201,17 +209,21 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static object BlockReturn(BlockParam/*!*/ blockFlowControl, object returnValue) {
             Proc proc = blockFlowControl.Proc;
-            if (blockFlowControl.CallerKind == BlockCallerKind.Call && proc.Kind == ProcKind.Lambda) {
+            // a lambda stays a lambda when it is passed as a block and yielded to: return leaves
+            // just the lambda (MRI 3.0+)
+            if (proc.Kind == ProcKind.Lambda) {
                 return returnValue;
             }
 
+            ReturnToEnclosingLambda(proc.LocalScope, returnValue);
+
             RuntimeFlowControl owner = proc.LocalScope.FlowControlScope;
-            if (owner.IsActiveMethod) {
+            if (CanReturnTo(proc.LocalScope, owner)) {
                 blockFlowControl.ReturnReason = BlockReturnReason.Return;
                 return new BlockReturnResult(owner, returnValue);
             }
             
-            throw new LocalJumpError("unexpected return");
+            throw new LocalJumpError("unexpected return", "return", returnValue);
         }
 
         /// <summary>
@@ -226,20 +238,105 @@ namespace IronRuby.Runtime {
             if (blockScope != null) {
                 Proc proc = blockScope.BlockFlowControl.Proc;
 
-                if (blockScope.BlockFlowControl.CallerKind == BlockCallerKind.Call && proc.Kind == ProcKind.Lambda) {
+                if (proc.Kind == ProcKind.Lambda) {
                     throw new BlockUnwinder(returnValue, false);
                 }
 
+                ReturnToEnclosingLambda(proc.LocalScope, returnValue);
+
                 RuntimeFlowControl owner = proc.LocalScope.FlowControlScope;
-                if (owner.IsActiveMethod) {
+                // unlike a return written in the block itself, one in an eval cannot end the file
+                if (!(owner is RubyTopLevelScope) && CanReturnTo(proc.LocalScope, owner)) {
                     throw new MethodUnwinder(owner, returnValue);
                 }
 
-                throw new LocalJumpError("unexpected return");
+                throw new LocalJumpError("unexpected return", "return", returnValue);
             } else {
                 // return from the current method:
                 throw new MethodUnwinder(scope.FlowControlScope, returnValue);
             }
+        }
+
+        /// <summary>
+        /// A return in a (non-lambda) block defined in <paramref name="scope"/> leaves the innermost
+        /// lambda the block is lexically nested in, if any, rather than the method: throws to that
+        /// lambda's call while it runs, and raises LocalJumpError once the call has finished.
+        /// A lambda that was yielded to rather than called keeps the old behaviour.
+        /// </summary>
+        private static void ReturnToEnclosingLambda(RubyScope/*!*/ scope, object returnValue) {
+            for (var blockScope = scope as RubyBlockScope; blockScope != null; blockScope = blockScope.Parent as RubyBlockScope) {
+                BlockParam call = blockScope.BlockFlowControl;
+                if (call.Proc.Kind == ProcKind.Lambda) {
+                    // the lambda's body catches the return itself (however the lambda was invoked):
+                    if (blockScope.LambdaReturnState == 1) {
+                        throw new LambdaUnwinder(blockScope, returnValue);
+                    }
+                    if (call.IsActiveLambdaCall) {
+                        throw new LambdaUnwinder(call, returnValue);
+                    }
+                    if (call.CallerKind == BlockCallerKind.Call || blockScope.LambdaReturnState == 2) {
+                        throw new LocalJumpError("unexpected return", "return", returnValue);
+                    }
+                    return;
+                }
+            }
+        }
+
+        [Emitted]
+        public static bool IsLambdaUnwinderTarget(BlockParam/*!*/ call, Exception/*!*/ exception) {
+            var unwinder = exception as LambdaUnwinder;
+            return unwinder != null && unwinder.Target == call;
+        }
+
+        [Emitted]
+        public static bool IsLambdaScopeUnwinderTarget(RubyBlockScope/*!*/ scope, Exception/*!*/ exception) {
+            var unwinder = exception as LambdaUnwinder;
+            return unwinder != null && unwinder.Target == scope;
+        }
+
+        [Emitted]
+        public static void EnterLambdaReturnScope(RubyBlockScope/*!*/ scope) {
+            scope.LambdaReturnState = 1;
+        }
+
+        [Emitted]
+        public static void LeaveLambdaReturnScope(RubyBlockScope/*!*/ scope) {
+            scope.LambdaReturnState = 2;
+        }
+
+        [Emitted]
+        public static object GetLambdaUnwinderReturnValue(Exception/*!*/ exception) {
+            return ((LambdaUnwinder)exception).ReturnValue;
+        }
+
+        [Emitted]
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveOptimization)]
+        public static void LeaveProcCall(BlockParam/*!*/ call) {
+            call.IsActiveLambdaCall = false;
+        }
+
+        /// <summary>
+        /// Whether a return in a block defined in <paramref name="scope"/> can reach
+        /// <paramref name="owner"/>, the frame it returns from. A file's top level qualifies while it
+        /// runs, but not from another thread, and not from a block in a class body, whose flow
+        /// control is the top level's too although MRI rejects a return there.
+        /// </summary>
+        private static bool CanReturnTo(RubyScope/*!*/ scope, RuntimeFlowControl/*!*/ owner) {
+            if (!owner.IsActiveMethod) {
+                return false;
+            }
+
+            var topLevel = owner as RubyTopLevelScope;
+            if (topLevel == null) {
+                return true;
+            }
+
+            for (RubyScope s = scope; s != null && s != topLevel; s = s.Parent) {
+                if (s.Kind == ScopeKind.Module) {
+                    return false;
+                }
+            }
+            return topLevel.ActiveThreadId == Environment.CurrentManagedThreadId;
         }
 
         // post-yield return ops:
@@ -262,6 +359,7 @@ namespace IronRuby.Runtime {
         /// </summary>
         /// <returns>True if the block should terminate returning the result of yield.</returns>
         [Emitted]
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveOptimization)]
         public static bool BlockYield(RubyScope/*!*/ scope, BlockParam/*!*/ ownerBlockFlowControl, BlockParam/*!*/ yieldedBlockFlowControl, object returnValue) {
             Assert.NotNull(scope, ownerBlockFlowControl, yieldedBlockFlowControl);
 
@@ -288,7 +386,11 @@ namespace IronRuby.Runtime {
         /// </summary>
         /// <returns>True if the method should terminate returning the result of yield.</returns>
         [Emitted]
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveOptimization)]
         public static bool MethodYield(RubyScope/*!*/ scope, BlockParam/*!*/ yieldedBlockFlowControl, object returnValue) {
+            if (yieldedBlockFlowControl.ReturnReason == BlockReturnReason.Undefined) {
+                return false;
+            }
             return MethodYieldRfc(scope.FlowControlScope, yieldedBlockFlowControl, returnValue);
         }
 
@@ -353,7 +455,7 @@ namespace IronRuby.Runtime {
                     throw new MethodUnwinder(targetFrame, returnValue);
                 }
             } else {
-                throw new LocalJumpError("break from proc-closure");
+                throw new LocalJumpError("break from proc-closure", "break", returnValue);
             }
         }
 
@@ -365,17 +467,9 @@ namespace IronRuby.Runtime {
             Debug.Assert(targetFrame != null);
 
             if (targetFrame.IsActiveMethod) {
-                // TODO: this optimization doesn't work (see test RubyBlocks14B)
-                //if (targetFrame == scope.FlowControlScope) {
-                //    // The current primary super-frame is the proc-converter, however we are still in the block frame that needs to be unwound.
-                //    // Sets the owner's BFC to exit the current block (recursively up to the primary frame).
-                //    ownerBlockFlowControl.SetFlowControl(BlockReturnReason.Break, targetFrame, yieldedBlockFlowControl.SourceProcKind);
-                //    return;
-                //} else {
-                    throw new MethodUnwinder(targetFrame, returnValue);
-                //}
+                throw new MethodUnwinder(targetFrame, returnValue);
             } else {
-                throw new LocalJumpError("break from proc-closure");
+                throw new LocalJumpError("break from proc-closure", "break", returnValue);
             }
         }
 
@@ -384,7 +478,7 @@ namespace IronRuby.Runtime {
                 // do not "optimize" for current RFC, we need to unwind stack anyway
                 throw new MethodUnwinder(blockFlowControl.TargetFrame, returnValue);
             } else {
-                throw new LocalJumpError("break from proc-closure");
+                throw new LocalJumpError("break from proc-closure", "break", returnValue);
             }
         }
 
@@ -396,6 +490,7 @@ namespace IronRuby.Runtime {
         /// Post-proc-call: Handles break and return from the called block.
         /// </summary>
         [Emitted]
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveOptimization)]
         public static object MethodProcCall(BlockParam/*!*/ blockFlowControl, object returnValue) {
             switch (blockFlowControl.ReturnReason) {
                 case BlockReturnReason.Break:

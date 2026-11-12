@@ -1,0 +1,59 @@
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/Instructions/CallInstruction.cs b/src/core/Microsoft.Dynamic/Interpreter/Instructions/CallInstruction.cs
+index 3b7bbb5..a979b25 100644
+--- a/src/core/Microsoft.Dynamic/Interpreter/Instructions/CallInstruction.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/Instructions/CallInstruction.cs
+@@ -25,6 +25,19 @@ namespace Microsoft.Scripting.Interpreter {
+         
+         private static readonly Dictionary<MethodInfo, CallInstruction> _cache = new();
+ 
++        /// <summary>
++        /// The instruction <see cref="Create(MethodInfo, ParameterInfo[])"/> made and cached for <paramref name="info"/>
++        /// before, if any. A method is cached only once it is known to need none of the special handling Create
++        /// checks for (array accessors, by-ref parameters, value-type instance methods, dynamic methods, too many
++        /// arguments), so a hit can skip GetParameters() - which copies the parameter array on every call - and
++        /// those checks altogether.
++        /// </summary>
++        internal static bool TryGetCached(MethodInfo info, out CallInstruction instruction) {
++            lock (_cache) {
++                return _cache.TryGetValue(info, out instruction);
++            }
++        }
++
+         /// <exception cref="SecurityException">Instruction can't be created due to insufficient privileges.</exception>
+         public static CallInstruction Create(MethodInfo info) {
+             return Create(info, info.GetParameters());
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs b/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs
+index 457ec85..84b88f7 100644
+--- a/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs
+@@ -1153,6 +1153,19 @@ namespace Microsoft.Scripting.Interpreter {
+         private void CompileMethodCallExpression(Expression expr) {
+             var node = (MethodCallExpression)expr;
+ 
++            // A method compiled before has its instruction cached, which also says it takes no by-ref
++            // parameters and is not an instance method of a value type (see CallInstruction.TryGetCached).
++            if (CallInstruction.TryGetCached(node.Method, out CallInstruction cached)) {
++                if (!node.Method.IsStatic) {
++                    Compile(node.Object);
++                }
++                foreach (var arg in node.Arguments) {
++                    Compile(arg);
++                }
++                Instructions.Emit(cached);
++                return;
++            }
++
+             var parameters = node.Method.GetParameters();
+ 
+             // TODO:
+@@ -1180,6 +1193,10 @@ namespace Microsoft.Scripting.Interpreter {
+         }
+ 
+         public void EmitCall(MethodInfo method) {
++            if (CallInstruction.TryGetCached(method, out CallInstruction cached)) {
++                Instructions.Emit(cached);
++                return;
++            }
+             EmitCall(method, method.GetParameters());
+         }
+ 

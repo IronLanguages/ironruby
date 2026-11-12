@@ -13,14 +13,10 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
-using System.Reflection;
 using Microsoft.Scripting;
+using IronRuby.Builtins;
 using IronRuby.Runtime;
 
 namespace IronRuby.Compiler.Ast {
@@ -32,8 +28,9 @@ namespace IronRuby.Compiler.Ast {
             : base(arguments, location) {
         }
 
-        // see Ruby Language.doc/Runtime/Control Flow Implementation/Return
-        internal override MSA.Expression/*!*/ Transform(AstGenerator/*!*/ gen) {
+        // return, by where it stands: in eval, in a block (it returns from the method that defined the
+        // block) or in a method; the runtime halves are in RubyOps.FlowControl.cs
+        internal override MSA.Expression/*!*/ TransformJump(AstGenerator/*!*/ gen) {
             MSA.Expression transformedReturnValue = TransformReturnValue(gen);
 
             // eval:
@@ -43,10 +40,24 @@ namespace IronRuby.Compiler.Ast {
 
             // block:
             if (gen.CurrentBlock != null) {
+                for (var block = gen.CurrentBlock.ParentBlock; block != null; block = block.ParentBlock) {
+                    block.HasNestedReturn = true;
+                }
                 return gen.Return(Methods.BlockReturn.OpCall(gen.CurrentBlock.BfcVariable, AstUtils.Box(transformedReturnValue)));
             }
 
             // method:
+            var method = gen.CurrentMethod;
+            if (gen.Traceable && method.MethodName != null && method != gen.TopLevelScope && gen.GetEnclosingModuleFrame() == null) {
+                // TracePoint :return reports the line of the `return', not that of `end'.
+                if (method.ExplicitReturnLabel == null) {
+                    method.ExplicitReturnLabel = Ast.Label(typeof(object));
+                }
+                return Ast.Return(method.ExplicitReturnLabel, new TraceReturnExpression(
+                    gen.CurrentScopeVariable, AstUtils.Box(transformedReturnValue), TraceEvents.Return, gen.SourcePath, Location.Start.Line
+                ));
+            }
+
             return gen.Return(transformedReturnValue);
         }
 

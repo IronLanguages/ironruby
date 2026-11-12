@@ -13,11 +13,6 @@
  *
  * ***************************************************************************/
 
-using System;
-using System.Collections.Generic;
-using Microsoft.Scripting;
-using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Actions;
 using IronRuby.Runtime;
 
 namespace IronRuby.Builtins {
@@ -35,9 +30,29 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("start", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("garbage_collect", RubyMethodAttributes.PublicInstance)]
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Reliability", "CA2001:AvoidCallingProblematicMethods")]
         public static void GarbageCollect(object self) {
-            GC.Collect();
+            // MRI runs object finalizers as part of a GC. IronRuby parks them for the main thread
+            // (see ObjectSpace._pending), so the caller of GC.start is the one that runs them.
+            ObjectSpace.CollectAndRunFinalizers();
+        }
+
+        /// <summary>
+        /// What GC.stat_heap and ObjectSpace.count_objects estimate from: the bytes in use and the
+        /// bytes free (fragmented) in each of the CLR's heaps after the last collection - gen0, gen1,
+        /// gen2, the large and the pinned object heap, which MRI's five size pools stand in for.
+        /// </summary>
+        [RubyMethod("__heap_sizes__", RubyMethodAttributes.PrivateSingleton)]
+        public static RubyArray/*!*/ GetHeapSizes(object self) {
+            var info = System.GC.GetGCMemoryInfo();
+            var generations = info.GenerationInfo;
+            var result = new RubyArray(generations.Length);
+            for (int i = 0; i < generations.Length; i++) {
+                var sizes = new RubyArray(2);
+                sizes.Add(Protocols.Normalize(generations[i].SizeAfterBytes));
+                sizes.Add(Protocols.Normalize(generations[i].FragmentationAfterBytes));
+                result.Add(sizes);
+            }
+            return result;
         }
     }
 }

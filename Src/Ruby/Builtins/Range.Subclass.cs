@@ -15,7 +15,6 @@
 
 using IronRuby.Runtime;
 using Microsoft.Scripting.Utils;
-using IronRuby.Compiler.Generation;
 using System.Diagnostics;
 
 namespace IronRuby.Builtins {
@@ -31,6 +30,13 @@ namespace IronRuby.Builtins {
             private Subclass(Range.Subclass/*!*/ range)
                 : base(range) {
                 ImmediateClass = range.ImmediateClass.NominalClass;
+            }
+
+            // Marshal.load of a Range subclass: the class travels in the SerializationInfo.
+            // Private, as for any sealed ISerializable type: serialization finds it anyway.
+            private Subclass(System.Runtime.Serialization.SerializationInfo/*!*/ info, System.Runtime.Serialization.StreamingContext context)
+                : base(info, context) {
+                ImmediateClass = (RubyClass)info.GetValue(RubyUtils.SerializationInfoClassKey, typeof(RubyClass));
             }
 
             protected override Range/*!*/ Copy() {

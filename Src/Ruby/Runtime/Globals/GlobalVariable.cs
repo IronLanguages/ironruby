@@ -14,7 +14,8 @@
  * ***************************************************************************/
 
 using System;
-using Microsoft.Scripting;
+
+using IronRuby.Builtins;
 
 namespace IronRuby.Runtime {
     public abstract class GlobalVariable {
@@ -42,9 +43,27 @@ namespace IronRuby.Runtime {
 
         internal T RequireType<T>(object value, string/*!*/ variableName, string/*!*/ typeName) {
             if (!(value is T)) {
-                throw RubyExceptions.CreateTypeError(String.Format("Value of ${0} must be {1}", variableName, typeName));
+                throw RubyExceptions.CreateTypeError(String.Format("value of ${0} must be {1}", variableName, typeName));
             }
             return (T)value;
+        }
+
+        /// <summary>
+        /// The input separator ($/, $-0) keeps a frozen plain String, so that neither a later
+        /// change to the caller's string nor a String subclass or its instance variables come
+        /// along. An already frozen plain String is kept as it is.
+        /// </summary>
+        internal MutableString RequireInputSeparator(RubyContext/*!*/ context, object value, string/*!*/ variableName) {
+            if (value == null) {
+                return null;
+            }
+
+            var str = RequireType<MutableString>(value, variableName, "String");
+            bool isPlainFrozenString = str.IsFrozen
+                && !context.HasInstanceVariables(str)
+                && context.GetClassOf(str) == context.GetClass(typeof(MutableString));
+
+            return isPlainFrozenString ? str : MutableString.Create(str).Freeze();
         }
     }
 }

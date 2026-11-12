@@ -17,7 +17,6 @@ using System.Diagnostics;
 using System.Runtime.Serialization;
 using IronRuby.Compiler.Generation;
 using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Builtins {
@@ -34,7 +33,8 @@ namespace IronRuby.Builtins {
         internal const string DebuggerDisplayValue = "{" + ImmediateClassFieldName + ".GetDebuggerDisplayValue(this),nq}";
         internal const string DebuggerDisplayType = "{" + ImmediateClassFieldName + ".GetDebuggerDisplayType(),nq}";
 
-        private RubyInstanceData _instanceData;
+        // internal: the instance variable fast paths read it directly (RubyOps.GetInstanceVariable)
+        internal RubyInstanceData _instanceData;
         private RubyClass/*!*/ _immediateClass;
 
         /// <summary>
@@ -44,6 +44,13 @@ namespace IronRuby.Builtins {
             Assert.NotNull(cls);
             Debug.Assert(!cls.IsSingletonClass);
             _immediateClass = cls;
+            var registry = cls.Context.ObjectSpaceObjects;
+            if (registry != null) {
+                registry.Add(this);
+            }
+            if (ObjectTracking.Enabled) {
+                ObjectTracking.Track(this);
+            }
         }
 
         /// <summary>
@@ -67,11 +74,6 @@ namespace IronRuby.Builtins {
         #region ToString, Equals, GetHashCode
 
         public override string/*!*/ ToString() {
-#if DEBUG && !SILVERLIGHT && CLR2
-            if (RubyBinder._DumpingExpression) {
-                return RubyUtils.ObjectBaseToMutableString(this).ToString();
-            }
-#endif
             var site = _immediateClass.ToStringSite;
             object toStringResult = site.Target(site, this);
             if (ReferenceEquals(toStringResult, RubyOps.ForwardToBase)) {
@@ -147,16 +149,6 @@ namespace IronRuby.Builtins {
             get { return _instanceData != null && _instanceData.IsFrozen; }
         }
 
-        public bool IsTainted {
-            get { return _instanceData != null && _instanceData.IsTainted; }
-            set { GetInstanceData().IsTainted = value; }
-        }
-
-        public bool IsUntrusted {
-            get { return _instanceData != null && _instanceData.IsUntrusted; }
-            set { GetInstanceData().IsUntrusted = value; }
-        }
-
         public void Freeze() {
             GetInstanceData().Freeze();
         }
@@ -165,7 +157,6 @@ namespace IronRuby.Builtins {
 
         #region Serialization
 
-#if FEATURE_SERIALIZATION
         protected RubyObject(SerializationInfo/*!*/ info, StreamingContext context) {
             RubyOps.DeserializeObject(out _instanceData, out _immediateClass, info);
         }
@@ -173,7 +164,6 @@ namespace IronRuby.Builtins {
         public virtual void GetObjectData(SerializationInfo/*!*/ info, StreamingContext context) {
             RubyOps.SerializeObject(_instanceData, _immediateClass, info);
         }
-#endif
 
         #endregion
     }

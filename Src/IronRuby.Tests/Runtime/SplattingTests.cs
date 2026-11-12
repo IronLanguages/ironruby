@@ -21,7 +21,6 @@ using IronRuby.Builtins;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Generation;
 using Microsoft.Scripting.Utils;
-using IronRuby.Runtime;
 using Microsoft.Scripting.Actions.Calls;
 
 namespace IronRuby.Tests {
@@ -87,20 +86,20 @@ foo(1,2,*3)
         public void Scenario_RubyArgSplatting4() {
             AssertOutput(delegate() {
                 CompilerTest(@"
-a,b,c = System::Array[Fixnum].new([1,2,3])
+a,b,c = System::Array[Integer].new([1,2,3])
 p [a,b,c]
 
-def y1; yield System::Array[Fixnum].new([4]); end
-def y2; yield System::Array[Fixnum].new([4,5]); end
-def y3; yield System::Array[Fixnum].new([4,5,6]); end
-def y10; yield System::Array[Fixnum].new([1,2,3,4,5,6,7,8,9,10]); end
+def y1; yield System::Array[Integer].new([4]); end
+def y2; yield System::Array[Integer].new([4,5]); end
+def y3; yield System::Array[Integer].new([4,5,6]); end
+def y10; yield System::Array[Integer].new([1,2,3,4,5,6,7,8,9,10]); end
 
 y1 { |x| p [x] }
 y2 { |x,y| p [x,y] }
 y3 { |x,y,z| p [x,y,z] }
 y10 { |a1,a2,a3,a4,a5,a6,a7,a8,a9,a10| p [a1,a2,a3,a4,a5,a6,a7,a8,a9,a10] }
 
-dict = System::Collections::Generic::Dictionary[Fixnum, Fixnum].new
+dict = System::Collections::Generic::Dictionary[Integer, Integer].new
 dict.add(1,1)
 has_value, value = dict.try_get_value(1)
 p [has_value, value]
@@ -160,8 +159,8 @@ p x.key, x.value
 end
 ");
             }, @"
-#<ArgumentError: wrong number of arguments (1 for 3)>
-#<ArgumentError: wrong number of arguments (2 for 3)>
+#<ArgumentError: wrong number of arguments (given 1, expected 3+)>
+#<ArgumentError: wrong number of arguments (given 2, expected 3+)>
 B1 -> 0
 B1 -> 1
 B1 -> 2
@@ -219,7 +218,7 @@ end
 ");
             }, @"
 Z2 -> 10000
-#<TypeError: can't convert String into Fixnum>
+#<TypeError: no implicit conversion of String into Integer>
 Z1 -> 10000
 ");
 
@@ -246,7 +245,7 @@ x = *nil
 p x
 ", @"
 [1, 2]
-[:nil]
+[]
 ");
         }
 
@@ -258,7 +257,7 @@ p x
     when *[5]; print 1
     when *[6,7]; print 2
     when *8; print 3
-    when *System::Array[Fixnum].new([9]); print 4
+    when *System::Array[Integer].new([9]); print 4
   end
 end
 ", @"
@@ -299,6 +298,11 @@ class C
     false
   end
   
+  # #inspect, which is what Kernel#p asks for, no longer falls back to #to_s
+  def inspect
+    'c'
+  end
+
   def to_s
     'c'
   end

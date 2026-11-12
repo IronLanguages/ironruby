@@ -1,0 +1,68 @@
+From c45faa56ae2f771634365b151712a97be6a2cbff Mon Sep 17 00:00:00 2001
+From: Largo <Largo@users.noreply.github.com>
+Date: Sun, 13 Sep 2026 20:11:06 +0200
+Subject: [PATCH] ThreadLocal<T> can be read for a thread other than the
+ caller's
+
+The storage is already an array indexed by managed thread id whose slots
+remember their owning thread, so everything a cross-thread read needs is there;
+only the entry point was missing.  IronRuby wants it so that Thread#backtrace
+can read another thread's interpreted frame list, which .NET Core otherwise
+gives no way to reach - there is no Thread.Suspend and no StackTrace(Thread).
+
+The value is read without synchronising, because the owner is running and any
+answer is a snapshot the moment it is given.  The array swap that happens when
+the storage grows is waited out, so a thread that does have a value is never
+reported as having none.
+---
+ .../Microsoft.Dynamic/Utils/ThreadLocal.cs    | 34 +++++++++++++++++++
+ 1 file changed, 34 insertions(+)
+
+diff --git a/src/core/Microsoft.Dynamic/Utils/ThreadLocal.cs b/src/core/Microsoft.Dynamic/Utils/ThreadLocal.cs
+index eb418c0..84ff189 100644
+--- a/src/core/Microsoft.Dynamic/Utils/ThreadLocal.cs
++++ b/src/core/Microsoft.Dynamic/Utils/ThreadLocal.cs
+@@ -84,6 +84,40 @@ namespace Microsoft.Scripting.Utils {
+             return oldValue;
+         }
+ 
++        /// <summary>
++        /// Reads the value belonging to <paramref name="thread"/>, which may be a thread other than the
++        /// caller's.  Returns false if that thread has never stored a value here.
++        ///
++        /// The storage array is indexed by managed thread id and each slot remembers its owning thread,
++        /// so this is a lookup rather than a scan, and it cannot hand back a value left behind by an
++        /// earlier thread that happened to be given the same id.  The value itself is read without
++        /// synchronisation: the owner may be in the middle of changing it, so what comes back is a
++        /// snapshot that was true at some moment at or shortly before the call.  That is the most any
++        /// observer of a running thread can have.
++        /// </summary>
++        public bool TryGetValue(Thread thread, out T value) {
++            ContractUtils.RequiresNotNull(thread, nameof(thread));
++
++            StorageInfo[] curStorage;
++            // Another thread may be swapping the array out to grow it; wait for it rather than
++            // reporting "no value" for a thread that has one.
++            while ((curStorage = _stores) == Updating) {
++                Thread.Sleep(0);
++            }
++
++            int threadId = thread.ManagedThreadId;
++            if (curStorage is not null && curStorage.Length > threadId) {
++                StorageInfo res = curStorage[threadId];
++                if (res is not null && res.Thread == thread) {
++                    value = res.Value;
++                    return true;
++                }
++            }
++
++            value = default(T);
++            return false;
++        }
++
+         #endregion
+ 
+         #region Storage implementation
+-- 
+2.47.3
+

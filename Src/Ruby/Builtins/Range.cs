@@ -15,16 +15,15 @@
 
 using System;
 using System.Runtime.Serialization;
-using Microsoft.Scripting.Runtime;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Generation;
-using System.Runtime.CompilerServices;
-using IronRuby.Runtime.Calls;
 using System.Text;
 
 namespace IronRuby.Builtins {
 
-    public partial class Range : IDuplicable, ISerializable {
+    public partial class Range : IDuplicable, ISerializable, IRubyObjectState {
+        private const int FrozenFlag = 1;
+
+        private int _flags;
         private object _begin;
         private object _end;
         private bool _excludeEnd;
@@ -34,12 +33,49 @@ namespace IronRuby.Builtins {
         public object End { get { return _end; } }
         public bool ExcludeEnd { get { return _excludeEnd; } }
 
-#if !SILVERLIGHT // SerializationInfo
         protected Range(SerializationInfo info, StreamingContext context) {
-            _begin = info.GetValue("begin", typeof(object));
-            _end = info.GetValue("end", typeof(object));
-            _excludeEnd = info.GetBoolean("excl");
+            // A record Marshal read may lack any of the three (MRI's range_loader takes what
+            // is there): a missing end is an endless range, a missing excl is inclusive.
+            foreach (SerializationEntry entry in info) {
+                switch (entry.Name) {
+                    case "begin": _begin = entry.Value; break;
+                    case "end": _end = entry.Value; break;
+                    case "excl": _excludeEnd = entry.Value is bool && (bool)entry.Value; break;
+                }
+            }
             _initialized = true;
+            // every Range is frozen, a loaded one included
+            _flags |= FrozenFlag;
+        }
+
+        /// <summary>
+        /// Range#initialize_copy: only an instance that was never initialized (Range.allocate)
+        /// can take another range's data; every other Range is frozen.
+        /// </summary>
+        public void InitializeCopy(RubyContext/*!*/ context, Range/*!*/ other) {
+            if (_initialized) {
+                throw RubyExceptions.CreateObjectFrozenError(context, this);
+            }
+            _begin = other._begin;
+            _end = other._end;
+            _excludeEnd = other._excludeEnd;
+            _initialized = true;
+            // a copy is not frozen: (1..3).dup.frozen? is false in MRI
+        }
+
+        /// <summary>
+        /// Marshal.load's range_loader: the range is allocated, and in the table of loaded objects, before its
+        /// ends are read, so a range that is its own begin or end comes back as one. Like MRI's, a loaded Range is
+        /// frozen and an instance of a subclass is not.
+        /// </summary>
+        public void InitializeLoaded(object begin, object end, bool excludeEnd, bool freeze) {
+            _begin = begin;
+            _end = end;
+            _excludeEnd = excludeEnd;
+            _initialized = true;
+            if (freeze) {
+                _flags |= FrozenFlag;
+            }
         }
 
         public void GetObjectData(SerializationInfo info, StreamingContext context) {
@@ -47,7 +83,6 @@ namespace IronRuby.Builtins {
             info.AddValue("end", _end);
             info.AddValue("excl", _excludeEnd);
         }
-#endif
 
         protected Range(Range/*!*/ range) {
             _begin = range._begin;
@@ -63,6 +98,7 @@ namespace IronRuby.Builtins {
             _end = end;
             _excludeEnd = excludeEnd;
             _initialized = true;
+            _flags |= FrozenFlag;
         }
 
         public Range(MutableString/*!*/ begin, MutableString/*!*/ end, bool excludeEnd) {
@@ -70,8 +106,23 @@ namespace IronRuby.Builtins {
             _end = end;
             _excludeEnd = excludeEnd;
             _initialized = true;
+            _flags |= FrozenFlag;
         }
         
+        /// <summary>
+        /// A range of endpoints already known to be valid together: a copy of an existing range
+        /// with copies of its endpoints (a Ractor message).
+        /// </summary>
+        public static Range/*!*/ CreateValidated(object begin, object end, bool excludeEnd) {
+            var result = new Range();
+            result._begin = begin;
+            result._end = end;
+            result._excludeEnd = excludeEnd;
+            result._initialized = true;
+            result._flags |= FrozenFlag;
+            return result;
+        }
+
         // Convience function for constructing from C#, calls initialize
         public Range(BinaryOpStorage/*!*/ comparisonStorage, 
             RubyContext/*!*/ context, object begin, object end, bool excludeEnd) {
@@ -82,29 +133,46 @@ namespace IronRuby.Builtins {
             RubyContext/*!*/ context, object begin, object end, bool excludeEnd) {
 
             if (_initialized) {
-                throw RubyExceptions.CreateNameError("`initialize' called twice");
+                // A range is frozen the moment it is initialized, so a second call is
+                // a modification of a frozen object rather than a naming problem.
+                throw RubyExceptions.CreateObjectFrozenError(context, this);
             }
 
             // Range tests whether the items can be compared, and uses that to determine if the range is valid
             // Only a non-existent <=> method or a result of nil seems to trigger the exception.
-            object compareResult;
+            // A nil end (endless range, 2.6) or nil begin (beginless range, 2.7) skips the test.
+            if (begin != null && end != null) {
+                object compareResult;
 
-            var site = comparisonStorage.GetCallSite("<=>");
-            try {
+                // An exception raised by #<=> belongs to the caller: MRI only turns a
+                // nil answer into "bad value for range".
+                var site = comparisonStorage.GetCallSite("<=>");
                 compareResult = site.Target(site, begin, end);
-            } catch (Exception) {
-                compareResult = null;
-            }
 
-            if (compareResult == null) {
-                throw RubyExceptions.CreateArgumentError("bad value for range");
+                if (compareResult == null) {
+                    throw RubyExceptions.CreateArgumentError("bad value for range");
+                }
             }
 
             _begin = begin;
             _end = end;
             _excludeEnd = excludeEnd;
             _initialized = true;
+            // Ruby 3.0 froze every Range on creation.
+            _flags |= FrozenFlag;
         }
+
+        #region IRubyObjectState Members
+
+        public bool IsFrozen {
+            get { return (_flags & FrozenFlag) != 0; }
+        }
+
+        public void Freeze() {
+            _flags |= FrozenFlag;
+        }
+
+        #endregion
 
         protected virtual Range/*!*/ Copy() {
             return new Range(this);
@@ -129,19 +197,47 @@ namespace IronRuby.Builtins {
             return result.ToString();
         }
 
+        // MRI's inspect_range: an endless range drops its end and a beginless one drops
+        // its begin, but (nil..nil) prints both so that it is not just "..".
         public MutableString/*!*/ Inspect(RubyContext/*!*/ context) {
-            var result = MutableString.CreateMutable(RubyEncoding.Binary);
-            result.Append(context.Inspect(_begin));
+            // A range that contains itself inspects as "(... .. ...)" where it recurs, as MRI's
+            // (rb_exec_recursive): it used to overflow the stack.
+            using (IDisposable handle = RubyUtils.InfiniteInspectTracker.TrackObject(this)) {
+                if (handle == null) {
+                    return MutableString.CreateAscii(_excludeEnd ? "(... ... ...)" : "(... .. ...)");
+                }
+                return InspectEndpoints(context);
+            }
+        }
+
+        private MutableString/*!*/ InspectEndpoints(RubyContext/*!*/ context) {
+            // The result takes the encoding of the first endpoint's inspect, as MRI's does:
+            // US-ASCII for (1..3), UTF-8 for ("a".."c").
+            MutableString first = (_begin != null || _end == null) ? context.Inspect(_begin) : null;
+            MutableString last = (_begin == null || _end != null) ? context.Inspect(_end) : null;
+            var result = MutableString.CreateMutable((first ?? last).Encoding);
+            if (first != null) {
+                result.Append(first);
+            }
             result.Append(Separator);
-            result.Append(context.Inspect(_end));
+            if (last != null) {
+                result.Append(last);
+            }
             return result;
         }
 
         public MutableString/*!*/ ToMutableString(ConversionStorage<MutableString>/*!*/ tosConversion) {
-            MutableString str = Protocols.ConvertToString(tosConversion, _begin);
-            str.Append(Separator);
-            str.Append(Protocols.ConvertToString(tosConversion, _end));
-            return str;
+            // String#to_s answers the string itself, so appending to what the conversion
+            // returns rewrites the range's own endpoint: ("ab".."zz").to_s used to leave
+            // the begin string reading "ab..zz".
+            MutableString begin = Protocols.ConvertToString(tosConversion, _begin);
+            MutableString end = Protocols.ConvertToString(tosConversion, _end);
+
+            var result = MutableString.CreateMutable(begin.Encoding);
+            result.Append(begin);
+            result.Append(Separator);
+            result.Append(end);
+            return result;
         }
     }
 }

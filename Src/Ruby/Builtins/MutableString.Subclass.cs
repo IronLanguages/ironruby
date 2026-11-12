@@ -13,13 +13,8 @@
  *
  * ***************************************************************************/
 
-using System;
-using System.Collections.Generic;
-using System.Text;
-using Microsoft.Scripting.Runtime;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Utils;
-using IronRuby.Compiler.Generation;
 
 namespace IronRuby.Builtins {
     // Represents any Ruby subclass of String. The actual class object is remembered.
@@ -46,17 +41,20 @@ namespace IronRuby.Builtins {
 
             private Subclass(Subclass/*!*/ str)
                 : base(str) {
-                ImmediateClass = str.ImmediateClass;
+                // The new instance must not start out with a singleton class: if the source has one its
+                // ImmediateClass *is* that singleton, and RubyContext.CopyInstanceData asserts that the
+                // freshly created target has none before it duplicates the singleton onto it.
+                ImmediateClass = str.ImmediateClass.NominalClass;
             }
 
             // creates an instance of self type with given content and encoding:
             internal override MutableString/*!*/ CreateInstance(Content/*!*/ content, RubyEncoding/*!*/ encoding) {
-                return new Subclass(ImmediateClass, content, encoding);
+                return new Subclass(ImmediateClass.NominalClass, content, encoding);
             }
 
             // creates a blank instance of self type:
             public override MutableString/*!*/ CreateInstance() {
-                return new Subclass(ImmediateClass, _encoding);
+                return new Subclass(ImmediateClass.NominalClass, _encoding);
             }
 
             // creates a copy including the version and flags:

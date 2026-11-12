@@ -1,0 +1,64 @@
+
+This is CRuby 4.0.9's library directory (lib/ and ext/*/lib/ of the ruby-4.0.9
+source tarball; RubyGems and Bundler 4.0.20), with the changes below.  To move
+it to a later release, run Util/sync-stdlib.rb with this release's tarball and
+the new one: it copies what IronRuby has not changed and merges the new
+release's changes into what it has.
+
+IronRuby's changes to the vendored files, each marked by an IronRuby comment
+where it is made:
+  rubygems.rb                  - IronRuby evaluates kernel_require.rb as an
+                                 <internal:> file, like CRuby
+  bundler/self_manager.rb      - never restarts into another Bundler release
+  bundler/stub_specification.rb - an unbuilt C extension is not "missing"
+  bundled_gems.rb              - no "leaving the default gems" warning for
+                                 the libraries IronRuby implements itself
+  delegate.rb                  - tolerates an already-undefined forwarder
+  cgi/escape.rb                - StringValue() conversion the C version does
+  random/formatter.rb          - #random_number/#rand and Random's mixin,
+                                 which are C (random.c) in CRuby
+  rubygems/defaults/ironruby.rb, gem_prelude.rb, fiber.rb, io/nonblock.rb
+                               - IronRuby's own files
+  prism.rb, prism/             - the Ruby half of the prism IronRuby parses
+                                 with (Prism 2.0.0), not CRuby 4.0's 1.8;
+                                 it has to match the parser's serialization
+
+Removed from the vendored copy because MRI implements them as C extensions
+(or on top of one), so the 1.9 pure-Ruby versions behind them on the load
+path are the working ones here:
+  pathname.rb  - the Pathname class is pathname.so; 4.0's .rb is a stub
+  yaml.rb      - delegates to psych.so; IronRuby has its own YAML library
+
+Patched in place (uri/common.rb reaches these through require_relative, so a
+shim elsewhere on the load path cannot shadow them):
+  uri/rfc3986_parser.rb - the \g subexpression calls (none recursive) in the
+                          HOST and RFC3986_URI/relative_ref regexps written out
+                          inline, which is exactly equivalent (the helper
+                          constants that build them are removed again)
+  uri/mailto.rb         - one non-recursive \g<hfield> reference expanded
+                          inline, which is exactly equivalent
+  irb/startup_message.rb - the banner names the interpreter running,
+                          "IronRuby 4.0.2 (4.0.0)", not "Ruby 4.0.0"
+
+Added from the gems MRI 4.0 ships (lib/ copied verbatim):
+  irb.rb, irb/       - irb 1.18.0, with its LICENSE.txt.  MRI 4.0.9 ships
+                       1.16.0; 1.18.0 is the release from rubygems.org,
+                       for its startup banner
+  reline.rb, reline/ - reline 0.6.3, irb's line editor, with COPYING, BSDL and
+                       license_of_rb-readline
+  rdoc.rb, rdoc/     - rdoc 7.0.4, which irb's `show_doc` and its completion
+                       dialog load, with LICENSE.rdoc.  rdoc's own
+                       rubygems_plugin.rb is left out: it is a plugin for the
+                       RubyGems that installs gems, not part of the library,
+                       and the 1.3.7 RubyGems in the 1.9 tree cannot run it.
+
+MRI 4.0's bundled gems - rake, rexml, minitest, test-unit, csv, logger,
+matrix, getoptlong, pstore, ostruct, net-ftp/imap/pop/smtp, drb, racc and the
+rest - are NOT here.  They are installed as real gems into IronRuby's own gem
+home, Src/StdLib/ruby/gems/4.0.0, by Util/install-bundled-gems.rb, the way MRI
+installs them into its own; that script says which ones are left out and why.
+
+io/console is NOT one of these.  MRI's is the io-console gem's C extension
+(console.so); IronRuby's own is Src/StdLib/ironruby/io/console.rb over the
+Termios library (Src/Libraries/Termios/Termios.cs), and it comes first on the
+load path.

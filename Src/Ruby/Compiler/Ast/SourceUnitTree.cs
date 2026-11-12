@@ -13,21 +13,12 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Diagnostics;
-using System.Dynamic;
-using System.Runtime.CompilerServices;
-using System.Text;
 using Microsoft.Scripting;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
@@ -37,22 +28,15 @@ using IronRuby.Runtime.Conversions;
 namespace IronRuby.Compiler.Ast {
     using Ast = MSA.Expression;
     using AstUtils = Microsoft.Scripting.Ast.Utils;
-    using AstBlock = Microsoft.Scripting.Ast.BlockBuilder;
-    using AstExpressions = ReadOnlyCollectionBuilder<MSA.Expression>;
     
     public partial class SourceUnitTree : Node {
 
         private readonly LexicalScope/*!*/ _definedScope;
-        private readonly List<FileInitializerStatement> _initializers;
         private readonly Statements/*!*/ _statements;
         private readonly RubyEncoding/*!*/ _encoding;
 
         // An offset of the first byte after __END__ that can be read via DATA constant or -1 if __END__ is not present.
         private readonly int _dataOffset;
-
-        public List<FileInitializerStatement> Initializers {
-            get { return _initializers; }
-        }
 
         public Statements/*!*/ Statements {
             get { return _statements; }
@@ -62,16 +46,32 @@ namespace IronRuby.Compiler.Ast {
             get { return _encoding; }
         }
 
-        public SourceUnitTree(LexicalScope/*!*/ definedScope, Statements/*!*/ statements, List<FileInitializerStatement> initializers, 
-            RubyEncoding/*!*/ encoding, int dataOffset)
+        public SourceUnitTree(LexicalScope/*!*/ definedScope, Statements/*!*/ statements, RubyEncoding/*!*/ encoding, int dataOffset)
             : base(SourceSpan.None) {
             Assert.NotNull(definedScope, statements, encoding);
 
             _definedScope = definedScope;
             _statements = statements;
-            _initializers = initializers;
             _encoding = encoding;
             _dataOffset = dataOffset;
+        }
+
+        // The locals an eval's string declares at its top level, which live in the scope it runs in
+        // rather than in storage of its own. Those the scope already has belong to the outer lexical scope.
+        // A flip-flop's state is one of them too: left undeclared, a flip-flop inside a block would
+        // create it afresh in the block's scope on every iteration and never stay on.
+        private string/*!*/[]/*!*/ GetEvalDeclaredVariables() {
+            var result = new List<string>();
+            foreach (var entry in _definedScope) {
+                string name = entry.Key;
+                // A flip-flop's hidden state too: a block in the eval would otherwise define it in its
+                // own scope on every call and lose the state between iterations.
+                if (entry.Value.DefinitionLexicalDepth < 0 && name.Length > 0 &&
+                    (name[0] == '_' || Char.IsLetter(name[0]) || name.StartsWith(RangeExpression.FlipFlopVariablePrefix, StringComparison.Ordinal))) {
+                    result.Add(name);
+                }
+            }
+            return result.ToArray();
         }
 
         private ScopeBuilder/*!*/ DefineLocals() {
@@ -113,6 +113,7 @@ namespace IronRuby.Compiler.Ast {
                 gen.CompilerOptions.TopLevelMethodName, // method name for blocks
                 null                                    // parameters for super calls
             );
+            gen.CurrentMethod.HasOwnCompiledFrame = true;
 
             MSA.Expression body;
 
@@ -135,11 +136,23 @@ namespace IronRuby.Compiler.Ast {
 
                 // TODO:
                 var exceptionVariable = Ast.Parameter(typeof(Exception), "#exception");
-                body = AstUtils.Try(
-                    body
-                ).Filter(exceptionVariable, Methods.TraceTopLevelCodeFrame.OpCall(runtimeScopeVariable, exceptionVariable),
-                    Ast.Empty()
-                );
+                var kind = gen.CompilerOptions.FactoryKind;
+                if (kind == TopScopeFactoryKind.None || kind == TopScopeFactoryKind.ModuleEval) {
+                    body = AstUtils.Try(
+                        body
+                    ).Filter(exceptionVariable, Methods.TraceTopLevelCodeFrame.OpCall(runtimeScopeVariable, exceptionVariable),
+                        Ast.Empty()
+                    );
+                } else {
+                    // a file's top level: `return` from a block in it ends the file
+                    body = AstUtils.Try(
+                        body
+                    ).Filter(exceptionVariable, Methods.IsTopLevelReturn.OpCall(runtimeScopeVariable, exceptionVariable),
+                        Ast.Empty()
+                    ).Finally(
+                        Methods.LeaveMethodFrame.OpCall(runtimeScopeVariable)
+                    );
+                }
             } else {
                 body = AstUtils.Constant(null);
             }
@@ -148,6 +161,12 @@ namespace IronRuby.Compiler.Ast {
             MSA.Expression prologue;
             switch (gen.CompilerOptions.FactoryKind) {
                 case TopScopeFactoryKind.None:
+                    var declared = GetEvalDeclaredVariables();
+                    prologue = declared.Length == 0 ?
+                        Methods.InitializeScopeNoLocals.OpCall(runtimeScopeVariable, EnterInterpretedFrameExpression.Instance) :
+                        Methods.InitializeEvalScope.OpCall(runtimeScopeVariable, AstUtils.Constant(declared), EnterInterpretedFrameExpression.Instance);
+                    break;
+
                 case TopScopeFactoryKind.ModuleEval:
                     prologue = Methods.InitializeScopeNoLocals.OpCall(runtimeScopeVariable, EnterInterpretedFrameExpression.Instance);
                     break;
@@ -182,24 +201,18 @@ namespace IronRuby.Compiler.Ast {
                     throw Assert.Unreachable;
             }
 
-            // BEGIN blocks:
-            if (gen.FileInitializers != null) {
-                var b = new AstBlock();
-                b.Add(prologue);
-                b.Add(gen.FileInitializers);
-                b.Add(body);
-                body = b;
-            }
+            body = Ast.Block(prologue, body);
 
             body = gen.AddReturnTarget(scope.CreateScope(body));
 
             gen.LeaveSourceUnit();
 
-            return Ast.Lambda<T>(body, GetEncodedName(gen), parameters);
+            string encodedName = GetEncodedName(gen);
+            return Ast.Lambda<T>(new CompiledFrameExpression(body, encodedName, 0), encodedName, parameters);
         }
 
         private static string/*!*/ GetEncodedName(AstGenerator/*!*/ gen) {
-            return RubyStackTraceBuilder.EncodeMethodName(RubyStackTraceBuilder.TopLevelMethodName, gen.SourcePath, SourceSpan.None, gen.DebugMode);
+            return RubyStackTraceBuilder.EncodeMethodName(gen.TopLevelFrameLabel, gen.SourcePath, SourceSpan.None, gen.DebugMode);
         }
     }
 }

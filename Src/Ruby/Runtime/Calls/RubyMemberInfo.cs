@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -16,8 +16,6 @@
 using System;
 using System.Diagnostics;
 using System.Reflection;
-using Microsoft.Scripting.Actions;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
@@ -227,10 +225,28 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public override string/*!*/ ToString() {
-            return 
+            return
                 IsHidden ? "<hidden>" :
                 IsUndefined ? "<undefined>" :
                 (GetType().Name + " " + _flags.ToString() + " (" + _declaringModule.Name + ")");
+        }
+
+        /// <summary>
+        /// True if this member and <paramref name="other"/> are two names for the same method body.
+        /// Method/UnboundMethod#== uses this: Ruby considers `alias` and library methods registered
+        /// under several names (`length`/`size`, `map`/`collect`, ...) to be the same method, but each
+        /// of them gets its own RubyMemberInfo instance here.
+        /// </summary>
+        public virtual bool IsEquivalentTo(RubyMemberInfo/*!*/ other) {
+            return ReferenceEquals(this, other);
+        }
+
+        /// <summary>
+        /// A hash code shared by every info IsEquivalentTo agrees with, so that Method#hash can
+        /// keep its contract with Method#eql?.
+        /// </summary>
+        public virtual int GetEquivalenceHashCode() {
+            return System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(this);
         }
 
         /// <summary>
@@ -238,6 +254,24 @@ namespace IronRuby.Runtime.Calls {
         /// </summary>
         public virtual MemberInfo/*!*/[]/*!*/ GetMembers() {
             throw Assert.Unreachable;
+        }
+
+        /// <summary>
+        /// For a method entry that `alias' or `define_method' created out of another method: the
+        /// module the new name was defined in, and the name the body was originally given.
+        /// #owner and #original_name report these; dispatch and `super' deliberately do not look
+        /// at them, because `super' has to keep resolving from the module that holds the body.
+        /// </summary>
+        public RubyModule AliasOwner { get; internal set; }
+
+        public string OriginalName { get; internal set; }
+
+        /// <summary>
+        /// The parameter list the method was written with, or null if it is not known (a CLR
+        /// method, an attribute accessor, anything not defined by Ruby source).
+        /// </summary>
+        public virtual RubyParameterSignature GetParameterSignature() {
+            return null;
         }
 
         /// <summary>
@@ -298,6 +332,7 @@ namespace IronRuby.Runtime.Calls {
 
         internal void BuildCall(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ name) {
             BuildCallNoFlow(metaBuilder, args, name);
+            metaBuilder.AddCalleeFrame(this, name);
             metaBuilder.BuildControlFlow(args);
         }
 
@@ -312,6 +347,7 @@ namespace IronRuby.Runtime.Calls {
 
         internal void BuildSuperCall(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ name, RubyModule/*!*/ declaringModule) {
             BuildSuperCallNoFlow(metaBuilder, args, name, declaringModule);
+            metaBuilder.AddCalleeFrame(this, name);
             metaBuilder.BuildControlFlow(args);
         }
 

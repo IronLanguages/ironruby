@@ -12,7 +12,6 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_REFEMIT
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -21,7 +20,6 @@ using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.Serialization;
 using Microsoft.Scripting.Generation;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
@@ -58,18 +56,14 @@ namespace IronRuby.Compiler.Generation {
                 DefineSerializer();
                 DefineDynamicObjectImplementation();
 
-#if !SILVERLIGHT // ICustomTypeDescriptor
                 DefineCustomTypeDescriptor();
-#endif
                 DefineRubyTypeImplementation();
             }
         }
 
         #region Constructors
 
-#if !SILVERLIGHT
         private static readonly Type/*!*/[]/*!*/ _deserializerSignature = new Type[] { typeof(SerializationInfo), typeof(StreamingContext) };
-#endif
         private static readonly Type/*!*/[]/*!*/ _exceptionMessageSignature = new Type[] { typeof(string) };
 
         private static bool IsAvailable(MethodBase/*!*/ method) {
@@ -104,13 +98,11 @@ namespace IronRuby.Compiler.Generation {
 
                 ParameterInfo[] baseParams = baseCtor.GetParameters();
 
-#if !SILVERLIGHT
                 if (baseParams.Length == 2 &&
                     baseParams[0].ParameterType == typeof(SerializationInfo) && baseParams[1].ParameterType == typeof(StreamingContext)) {
                     OverrideDeserializer(baseCtor);
                     continue;
                 }
-#endif
                 AddConstructor(ctors, MakeConstructor(baseCtor, baseParams));
             }
 
@@ -233,7 +225,6 @@ namespace IronRuby.Compiler.Generation {
             }
         }
 
-#if !SILVERLIGHT
         private void OverrideDeserializer(ConstructorInfo/*!*/ baseCtor) {
             // ctor(SerializationInfo! info, StreamingContext! context) : base(info, context) {
             //   RubyOps.DeserializeObject(out this._instanceData, out this._immediateClass, info);
@@ -255,7 +246,6 @@ namespace IronRuby.Compiler.Generation {
             il.EmitCall(Methods.DeserializeObject);
             il.Emit(OpCodes.Ret);
         }
-#endif
         #endregion
 
         #region "Built-in" Interfaces
@@ -317,53 +307,25 @@ namespace IronRuby.Compiler.Generation {
             il.EmitCall(Methods.FreezeObject);
             il.Emit(OpCodes.Ret);
 
-            // bool IRubyObject.IsTainted { 
-            //   get { return RubyOps.IsObjectTainted(_instanceData); }
-            //   set { return RubyOps.SetObjectTaint(ref _instanceData, value); }
-            // }
-            il = DefinePrivateInterfaceMethodOverride(_tb, Methods.IRubyObjectState_get_IsTainted);
-            il.EmitLoadArg(0);
-            il.EmitFieldGet(InstanceDataField);
-            il.EmitCall(Methods.IsObjectTainted);
-            il.Emit(OpCodes.Ret);
-
-            il = DefinePrivateInterfaceMethodOverride(_tb, Methods.IRubyObjectState_set_IsTainted);
-            il.EmitLoadArg(0);
-            il.EmitFieldAddress(InstanceDataField);
-            il.EmitLoadArg(1);
-            il.EmitCall(Methods.SetObjectTaint);
-            il.Emit(OpCodes.Ret);
-
-            // bool IRubyObject.IsUntrusted { 
-            //   get { return RubyOps.IsObjectUntrusted(_instanceData); }
-            //   set { return RubyOps.SetObjectTaint(ref _instanceData, value); }
-            // }
-            il = DefinePrivateInterfaceMethodOverride(_tb, Methods.IRubyObjectState_get_IsUntrusted);
-            il.EmitLoadArg(0);
-            il.EmitFieldGet(InstanceDataField);
-            il.EmitCall(Methods.IsObjectUntrusted);
-            il.Emit(OpCodes.Ret);
-
-            il = DefinePrivateInterfaceMethodOverride(_tb, Methods.IRubyObjectState_set_IsUntrusted);
-            il.EmitLoadArg(0);
-            il.EmitFieldAddress(InstanceDataField);
-            il.EmitLoadArg(1);
-            il.EmitCall(Methods.SetObjectTrustiness);
-            il.Emit(OpCodes.Ret);
-
             // TODO: can we merge this with #base#GetHashCode/Equals/ToString?
+
+            // The base calls below have to be non-virtual (OpCodes.Call, as C#'s base.M() is):
+            // ILGen.EmitCall picks callvirt for a virtual method, which dispatched to this type's
+            // own override - the Ruby #hash/#==/#to_s - so Kernel#equal? on an instance of such a
+            // class ran its #==, and a #== that calls equal? (Set's does) recursed until the stack
+            // overflowed.
 
             // int IRubyObject.BaseGetHashCode() { return base.GetHashCode(); }
             il = DefinePrivateInterfaceMethodOverride(_tb, Methods.IRubyObject_BaseGetHashCode);
             il.EmitLoadArg(0);
-            il.EmitCall(_tb.BaseType.GetMethod("GetHashCode", Type.EmptyTypes));
+            il.Emit(OpCodes.Call, _tb.BaseType.GetMethod("GetHashCode", Type.EmptyTypes));
             il.Emit(OpCodes.Ret);
 
             // int IRubyObject.BaseEquals(object other) { return base.Equals(other); }
             il = DefinePrivateInterfaceMethodOverride(_tb, Methods.IRubyObject_BaseEquals);
             il.EmitLoadArg(0);
             il.EmitLoadArg(1);
-            il.EmitCall(_tb.BaseType.GetMethod("Equals", new[] { typeof(object) }));
+            il.Emit(OpCodes.Call, _tb.BaseType.GetMethod("Equals", new[] { typeof(object) }));
             il.Emit(OpCodes.Ret);
 
             // string IRubyObject.BaseToString() { return base.ToString(); }
@@ -373,7 +335,7 @@ namespace IronRuby.Compiler.Generation {
             if (toString.DeclaringType == typeof(object)) {
                 il.EmitCall(Methods.ObjectToString);
             } else {
-                il.EmitCall(toString);
+                il.Emit(OpCodes.Call, toString);
             }
             il.Emit(OpCodes.Ret);
         }
@@ -394,7 +356,6 @@ namespace IronRuby.Compiler.Generation {
         }
         
         private void DefineSerializer() {
-#if !SILVERLIGHT
             ILGen il;
             _tb.AddInterfaceImplementation(typeof(ISerializable));
 
@@ -426,14 +387,23 @@ namespace IronRuby.Compiler.Generation {
             il.EmitLoadArg(1);
             il.EmitCall(Methods.SerializeObject);
             il.Emit(OpCodes.Ret);
-#endif
         }
 
-#if !SILVERLIGHT // ICustomTypeDescriptor
         private void DefineCustomTypeDescriptor() {
             _tb.AddInterfaceImplementation(typeof(ICustomTypeDescriptor));
 
             foreach (MethodInfo m in typeof(ICustomTypeDescriptor).GetMethods()) {
+                // .NET 9 added GetConverterFromRegisteredType, GetEventsFromRegisteredType,
+                // GetPropertiesFromRegisteredType and the RequireRegisteredTypes property to
+                // ICustomTypeDescriptor as *default* interface methods, for trim-safe
+                // TypeDescriptor.  Only the abstract members have to be - and can be -
+                // implemented here: CustomTypeDescHelpers has no counterpart for the new ones,
+                // and EmitCall would throw "Type doesn't have a method with a given name and
+                // signature".  The interface's own implementation is what a non-abstract member
+                // is for, so leaving it alone is also the right behaviour.
+                if (!m.IsAbstract) {
+                    continue;
+                }
                 ImplementCTDOverride(m);
             }
         }
@@ -455,7 +425,6 @@ namespace IronRuby.Compiler.Generation {
             il.EmitBoxing(m.ReturnType);
             il.Emit(OpCodes.Ret);
         }
-#endif
 
         #endregion
 
@@ -485,8 +454,6 @@ namespace IronRuby.Compiler.Generation {
 
         private static ILGen/*!*/ DefinePrivateInterfaceMethodOverride(TypeBuilder/*!*/ tb, MethodInfo/*!*/ decl, out MethodBuilder/*!*/ impl) {
             string name = decl.DeclaringType.Name + "." + decl.Name;
-            //MethodAttributes attributes = decl.Attributes & ~(MethodAttributes.Abstract | MethodAttributes.ReservedMask | MethodAttributes.MemberAccessMask)
-            //    | MethodAttributes.Final | MethodAttributes.HideBySig | MethodAttributes.NewSlot | MethodAttributes.Private;
             MethodAttributes attributes = decl.Attributes & ~(MethodAttributes.Abstract | MethodAttributes.Public);
             attributes |= MethodAttributes.NewSlot | MethodAttributes.Final;
             impl = tb.DefineMethod(
@@ -503,4 +470,3 @@ namespace IronRuby.Compiler.Generation {
         #endregion
     }
 }
-#endif

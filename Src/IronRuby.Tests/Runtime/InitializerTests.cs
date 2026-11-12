@@ -13,7 +13,6 @@
  *
  * ***************************************************************************/
 
-using IronRuby.Runtime;
 namespace IronRuby.Tests {
     public partial class Tests {
 
@@ -74,59 +73,8 @@ end
 
 x = A.new { break 'foo' }
 1.times(&$b) rescue p $!
-");
+", 1, 0);
             }, @"#<LocalJumpError: break from proc-closure>");
-        }
-
-        /// <summary>
-        /// Retry returns from the 'new' frame (skipping initialize frame) as that frame is its proc-converter.
-        /// The block is not redefined however. Only the proc-converter frame is updated to the new instance of the 'new' frame.
-        /// </summary>
-        public void Scenario_RubyInitializers3() {
-            AssertOutput(delegate() {
-                CompilerTest(@"
-class A
-  def initialize *a
-    yield
-  end
-end
-
-$i = 0
-y = A.new($i += 1) {
-  puts $i
-  if $i < 3 then
-    retry
-  end
-}
-");
-            }, @"
-1
-2
-3");
-        }
-
-        /// <summary>
-        /// The same case as Scenario_RubyInitializers3, but with initializer defined in library.
-        /// </summary>
-        public void Scenario_RubyInitializers4A() {
-            AssertOutput(delegate() {
-                CompilerTest(@"
-$i = 0
-y = Array.new($i += 1) {
-  puts $i
-  if $i < 3 then
-    retry
-  end
-}
-puts y.inspect
-");
-            }, @"
-1
-2
-3
-3
-3
-[nil, nil, nil]");
         }
 
         /// <summary>
@@ -189,7 +137,7 @@ class C
   new
 end
 ", @"
-#<TypeError: Cannot undefine `initialize' method>
+#<TypeError: Cannot undefine 'initialize' method>
 [1, 2, 3]
 init
 ");
@@ -244,6 +192,12 @@ end
 ");
         }
 
+        /// <summary>
+        /// What CRuby 4.0.6 prints for the same code: it undefines MatchData.allocate and
+        /// Module.allocate (Class.allocate is defined again on Class itself), an uninitialized
+        /// Regexp inspects as a plain object, and an anonymous Struct class is left out of its
+        /// instances' inspect. ("?" matches CRuby's quote and IronRuby's backtick alike.)
+        /// </summary>
         public void RubyAllocators1() {
             AssertOutput(delegate() {
                 CompilerTest(@"
@@ -252,9 +206,9 @@ p Hash.allocate
 p Range.allocate
 p Regexp.allocate
 p String.allocate
-p MatchData.allocate
+p MatchData.allocate rescue p $!
 p Object.allocate
-p Module.allocate
+p Module.allocate rescue p $!
 p Class.allocate
 p Struct.new(:f,:g).allocate
 p Exception.allocate
@@ -264,8 +218,7 @@ p Binding.allocate rescue p $!
 p Struct.allocate rescue p $!
 p Method.allocate rescue p $!
 p UnboundMethod.allocate rescue p $!
-p Bignum.allocate rescue p $!
-p Fixnum.allocate rescue p $!
+p Integer.allocate rescue p $!
 p Float.allocate rescue p $!
 p TrueClass.allocate rescue p $!
 p FalseClass.allocate rescue p $!
@@ -276,27 +229,107 @@ p Proc.allocate rescue p $!
 []
 {}
 nil..nil
-//
+#<Regexp:*>
 """"
-#<MatchData:*>
+#<NoMethodError: undefined method ?allocate' for class MatchData>
 #<Object:*>
-#<Module:*>
+#<NoMethodError: undefined method ?allocate' for class Module>
 #<Class:*>
-#<struct #<Class:*> f=nil, g=nil>
+#<struct f=nil, g=nil>
 #<Exception: Exception>
 #<IO:*>
 #<TypeError: allocator undefined for Binding>
 #<TypeError: allocator undefined for Struct>
 #<TypeError: allocator undefined for Method>
 #<TypeError: allocator undefined for UnboundMethod>
-#<TypeError: allocator undefined for Bignum>
-#<TypeError: allocator undefined for Fixnum>
+#<TypeError: allocator undefined for Integer>
 #<TypeError: allocator undefined for Float>
 #<TypeError: allocator undefined for TrueClass>
 #<TypeError: allocator undefined for FalseClass>
 #<TypeError: allocator undefined for NilClass>
 #<TypeError: allocator undefined for Proc>
 ", OutputFlags.Match);
+        }
+
+        /// <summary>
+        /// `C.new(k: v)' from a JIT keyword call site allocates the instance and calls C's specialized initialize
+        /// directly, without the keyword Hash (JitKeywordCall.ResolveConstruction). Anything that changes what new
+        /// would do - another class at the site, a prepended initialize, a singleton new, private_class_method,
+        /// TracePoint, an error from the prologue, an exception class - is the ordinary call's, as before.
+        /// The output is CRuby 4.0's (whose opt_new reports no c_call for new either).
+        /// </summary>
+        public void NewKeywordsDirect1() {
+            TestOutput(@"
+require 'ruby4'
+class Pt
+  attr_reader :x, :y
+  def initialize(x:, y: 0)
+    @x = x
+    @y = y
+  end
+end
+class Pt3 < Pt
+  def initialize(x:, y: 1)
+    @x = -x
+    @y = y
+  end
+end
+class Cmp
+  include Comparable
+  attr_reader :v
+  def initialize(v:) = @v = v
+  def <=>(o) = v <=> o.v
+end
+def make(c, i) = c.new(x: i, y: 2)
+def make1(c, i) = c.new(x: i)
+def try = yield rescue ""#{$!.class}: #{$!.message}""
+a = 100.times.map { |i| make(Pt, i) }
+p a.last.class, a.last.x, a.last.y, a.map(&:x).sum, a.map(&:object_id).uniq.size
+p 100.times.map { |i| make1(Pt, i).y }.uniq
+p [make(Pt3, 5).x, make(Pt, 5).x, make1(Pt3, 5).y]
+p 100.times.map { |i| Cmp.new(v: i) }.max.v
+p try { Pt.new(x: 1, z: 2) }
+p try { Pt.new(y: 2) }
+p try { make1(Class, 1) }
+Pt.prepend(Module.new { def initialize(x:, y: 0) = (super; @x *= 10) })
+p make(Pt, 3).x
+class << Pt
+  def new(**kw) = ""custom #{kw}""
+end
+p make(Pt, 4)
+class << Pt
+  remove_method :new
+end
+p make(Pt, 5).x
+calls = []
+tp = TracePoint.new(:c_call, :c_return, :call, :return) { |t| calls << [t.event, t.method_id] if [:new, :initialize].include?(t.method_id) }
+tp.enable { make(Pt, 6) }
+p calls
+class Pt; private_class_method :new; end
+p try { make(Pt, 7) }
+class E < StandardError
+  def initialize(msg:) = super(msg)
+end
+p 50.times.map { |i| E.new(msg: ""m#{i}"") }.last.message
+", @"
+Pt
+99
+2
+4950
+100
+[0]
+[-5, 5, 1]
+99
+""ArgumentError: unknown keyword: :z""
+""ArgumentError: missing keyword: :x""
+""TypeError: superclass must be an instance of Class (given an instance of Hash)""
+30
+""custom {x: 4, y: 2}""
+50
+[[:call, :initialize], [:call, :initialize], [:return, :initialize], [:return, :initialize]]
+""NoMethodError: private method 'new' called for class Pt""
+""m49""
+");
         }
     }
 }

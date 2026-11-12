@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -32,7 +28,6 @@ using IronRuby.Runtime.Calls;
 
 namespace IronRuby.Runtime.Conversions {
     using Ast = Expression;
-    using Microsoft.Scripting.Generation;
 
     public sealed class GenericConversionAction : RubyConversionAction {
         private readonly Type/*!*/ _type;
@@ -46,7 +41,7 @@ namespace IronRuby.Runtime.Conversions {
             Assert.NotNull(type);
 
             // Type must be visible so that we can serialize it in MakeShared.
-            Debug.Assert(type.IsVisible());
+            Debug.Assert(type.IsVisible);
 
             _type = type;
         }
@@ -104,7 +99,7 @@ namespace IronRuby.Runtime.Conversions {
         private static Expression TryImplicitConversion(DynamicMetaObject/*!*/ target, Type/*!*/ toType) {
             // TODO: include this into ImplicitConvert?
             if (target.Value == null) {
-                if (!toType.IsValueType() || toType.IsGenericType() && toType.GetGenericTypeDefinition() == typeof(Nullable<>)) {
+                if (!toType.IsValueType || toType.IsGenericType && toType.GetGenericTypeDefinition() == typeof(Nullable<>)) {
                     return AstUtils.Constant(null, toType);
                 } else {
                     return null;

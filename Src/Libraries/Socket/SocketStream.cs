@@ -12,22 +12,33 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_SYNC_SOCKETS
 
 using System;
-using System.Collections.Generic;
 using System.Net.Sockets;
 using System.IO;
-using System.Diagnostics;
 using Microsoft.Scripting.Utils;
+using IronRuby.Builtins;
 
 namespace IronRuby.StandardLibrary.Sockets {
-    internal class SocketStream : Stream {
+    internal class SocketStream : Stream, IDescriptorStream, INonBlockingWriteStream {
         internal readonly Socket/*!*/ _socket;
+
+        internal Socket/*!*/ Socket {
+            get { return _socket; }
+        }
 
         public SocketStream(Socket/*!*/ s) {
             Assert.NotNull(s);
             _socket = s;
+        }
+
+        /// <summary>
+        /// The socket's own descriptor. Without it IO.select had nothing to hand poll(2) and
+        /// fell back to "no descriptor, so assume ready", which reported every socket as
+        /// readable whether or not anything had arrived.
+        /// </summary>
+        public int Descriptor {
+            get { return (int)_socket.Handle; }
         }
 
         public override bool CanRead {
@@ -66,7 +77,7 @@ namespace IronRuby.StandardLibrary.Sockets {
         }
 
         public override int Read(byte[] buffer, int offset, int count) {
-            return _socket.Receive(buffer, offset, count, SocketFlags.None);
+            return RubyBasicSocket.Blocking(_socket, SelectMode.SelectRead, () => _socket.Receive(buffer, offset, count, SocketFlags.None));
         }
 
         public override long Seek(long offset, SeekOrigin origin) {
@@ -78,8 +89,13 @@ namespace IronRuby.StandardLibrary.Sockets {
         }
 
         public override void Write(byte[] buffer, int offset, int count) {
-            _socket.Send(buffer, offset, count, SocketFlags.None);
+            RubyBasicSocket.Blocking<int>(() => _socket.Send(buffer, offset, count, SocketFlags.None));
+        }
+
+        // On a non-blocking socket Send takes what fits in the kernel buffer and says how much;
+        // Write above drops that count, so #write_nonblock has to come here instead.
+        public int WriteNonBlocking(byte[]/*!*/ buffer, int offset, int count) {
+            return _socket.Send(buffer, offset, count, SocketFlags.None);
         }
     }
 }
-#endif

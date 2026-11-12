@@ -20,7 +20,9 @@ namespace IronRuby.Compiler.Ast {
 
     public abstract class DefinitionExpression : Expression {
         private readonly LexicalScope/*!*/ _definedScope;
-        private readonly Body/*!*/ _body;
+        private volatile Body _body;
+        // A body the front end builds when it is first asked for (see MethodDefinition), or null.
+        private System.Func<Body> _bodyFactory;
 
         public LexicalScope/*!*/ DefinedScope {
             get {
@@ -30,6 +32,18 @@ namespace IronRuby.Compiler.Ast {
 
         public Body/*!*/ Body {
             get {
+                return _body ?? BuildBody();
+            }
+        }
+
+        private Body/*!*/ BuildBody() {
+            lock (this) {
+                if (_body == null) {
+                    var body = _bodyFactory();
+                    ContractUtils.RequiresNotNull(body, "body");
+                    _body = body;
+                    _bodyFactory = null;
+                }
                 return _body;
             }
         }
@@ -41,6 +55,15 @@ namespace IronRuby.Compiler.Ast {
 
             _definedScope = definedScope;
             _body = body;
+        }
+
+        protected DefinitionExpression(LexicalScope/*!*/ definedScope, System.Func<Body>/*!*/ bodyFactory, SourceSpan location)
+            : base(location) {
+            ContractUtils.RequiresNotNull(definedScope, "definedScope");
+            ContractUtils.RequiresNotNull(bodyFactory, "bodyFactory");
+
+            _definedScope = definedScope;
+            _bodyFactory = bodyFactory;
         }
     }
 }

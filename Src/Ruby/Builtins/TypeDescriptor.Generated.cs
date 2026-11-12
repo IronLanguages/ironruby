@@ -13,7 +13,6 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CUSTOM_TYPE_DESCRIPTOR
 
 using System;
 using System.ComponentModel;
@@ -78,4 +77,3 @@ namespace IronRuby.Builtins {
     }
 }
 
-#endif

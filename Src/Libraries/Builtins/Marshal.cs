@@ -1,11 +1,11 @@
-﻿/* ****************************************************************************
+/* ****************************************************************************
  *
- * Copyright (c) Microsoft Corporation. 
+ * Copyright (c) Microsoft Corporation.
  *
- * This source code is subject to terms and conditions of the Apache License, Version 2.0. A 
- * copy of the license can be found in the License.html file at the root of this distribution. If 
- * you cannot locate the  Apache License, Version 2.0, please send an email to 
- * ironruby@microsoft.com. By using this source code in any fashion, you are agreeing to be bound 
+ * This source code is subject to terms and conditions of the Apache License, Version 2.0. A
+ * copy of the license can be found in the License.html file at the root of this distribution. If
+ * you cannot locate the  Apache License, Version 2.0, please send an email to
+ * ironruby@microsoft.com. By using this source code in any fashion, you are agreeing to be bound
  * by the terms of the Apache License, Version 2.0.
  *
  * You must not remove this notice, or any other, from this software.
@@ -16,15 +16,13 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Runtime.Serialization;
 using IronRuby.Runtime;
-using Microsoft.Scripting;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
-using Microsoft.Scripting.Generation;
 using IronRuby.Runtime.Calls;
 using System.Globalization;
 using System.Text;
@@ -36,7 +34,7 @@ namespace IronRuby.Builtins {
 
         public sealed class WriterSites : RubyCallSiteStorage {
             public WriterSites(RubyContext/*!*/ context) : base(context) { }
-            
+
             private CallSite<Func<CallSite, object, object>> _marshalDump;
             private CallSite<Func<CallSite, object, int, object>> _dump;
 
@@ -47,34 +45,151 @@ namespace IronRuby.Builtins {
             public CallSite<Func<CallSite, object, int, object>>/*!*/ Dump {
                 get { return RubyUtils.GetCallSite(ref _dump, Context, "_dump", 1); }
             }
+
+            private CallSite<Func<CallSite, object, object>> _binmode;
+
+            public CallSite<Func<CallSite, object, object>>/*!*/ Binmode {
+                get { return RubyUtils.GetCallSite(ref _binmode, Context, "binmode", 0); }
+            }
+
+            private RespondToStorage _respondTo;
+
+            public RespondToStorage/*!*/ RespondTo {
+                get { return _respondTo ?? (_respondTo = new RespondToStorage(Context)); }
+            }
+
+            // respond_to?(name, true) and respond_to_missing?(name, true), called the way MRI's
+            // rb_obj_respond_to does: as if from the object itself, so a private one is called too
+            private CallSite<Func<CallSite, object, object, object, object>> _respondToIncludeAll;
+            private CallSite<Func<CallSite, object, object, object, object>> _respondToMissing;
+
+            public CallSite<Func<CallSite, object, object, object, object>>/*!*/ RespondToIncludeAll {
+                get { return RubyUtils.GetCallSite(ref _respondToIncludeAll, Context, "respond_to?", RubyCallSignature.WithImplicitSelf(2)); }
+            }
+
+            public CallSite<Func<CallSite, object, object, object, object>>/*!*/ RespondToMissing {
+                get { return RubyUtils.GetCallSite(ref _respondToMissing, Context, "respond_to_missing?", RubyCallSignature.WithImplicitSelf(2)); }
+            }
         }
 
         public sealed class ReaderSites : RubyCallSiteStorage {
             public ReaderSites(RubyContext/*!*/ context) : base(context) { }
-           
+
             private CallSite<Func<CallSite, object, object, object>> _marshalLoad;
             private CallSite<Func<CallSite, object, MutableString, object>> _load;
-            public CallSite<Func<CallSite, Proc, object, object>> _procCall;
+            public CallSite<Func<CallSite, object, object, object>> _procCall;
 
             public CallSite<Func<CallSite, object, object, object>>/*!*/ MarshalLoad {
                 get { return RubyUtils.GetCallSite(ref _marshalLoad, Context, "marshal_load", 1); }
+            }
+
+            private CallSite<Func<CallSite, object, object, object>> _compare;
+
+            public CallSite<Func<CallSite, object, object, object>>/*!*/ Compare {
+                get { return RubyUtils.GetCallSite(ref _compare, Context, "<=>", 1); }
             }
 
             public CallSite<Func<CallSite, object, MutableString, object>>/*!*/ Load {
                 get { return RubyUtils.GetCallSite(ref _load, Context, "_load", 1); }
             }
 
-            public CallSite<Func<CallSite, Proc, object, object>>/*!*/ ProcCall {
+            // private in MRI's classes, so called as if from the object itself
+            private CallSite<Func<CallSite, object, object, object>> _loadData;
+
+            public CallSite<Func<CallSite, object, object, object>>/*!*/ LoadData {
+                get { return RubyUtils.GetCallSite(ref _loadData, Context, "_load_data", RubyCallSignature.WithImplicitSelf(1)); }
+            }
+
+            public CallSite<Func<CallSite, object, object, object>>/*!*/ ProcCall {
                 get { return RubyUtils.GetCallSite(ref _procCall, Context, "call", 1); }
+            }
+
+            private CallSite<Func<CallSite, object, object>> _binmode;
+
+            public CallSite<Func<CallSite, object, object>>/*!*/ Binmode {
+                get { return RubyUtils.GetCallSite(ref _binmode, Context, "binmode", 0); }
             }
         }
 
-            
+
         #region Constants
 
-        private static readonly MutableString _positiveInfinityString = MutableString.CreateAscii("inf").Freeze();
-        private static readonly MutableString _negativeInfinityString = MutableString.CreateAscii("-inf").Freeze();
-        private static readonly MutableString _nanString = MutableString.CreateAscii("nan").Freeze();
+        // The two "pseudo instance variables" MRI uses to carry an object's encoding through the
+        // marshal stream. ":E" is a shorthand for the two encodings that appear everywhere
+        // (true => UTF-8, false => US-ASCII); everything else is spelled out by name under
+        // ":encoding". ASCII-8BIT is represented by the absence of both.
+        internal const string EncodingShortIVarName = "E";
+        // MRI's ARG_ENCODING_NONE option bit in a regexp record (/n)
+        internal const int NoEncodingFlag = 0x20;
+        internal const string EncodingIVarName = "encoding";
+
+        #endregion
+
+        #region Encoding helpers
+
+        /// <summary>
+        /// The encoding MRI would record for <paramref name="obj"/>, or null if the object carries none
+        /// (in which case no encoding instance variable is written and the object loads as ASCII-8BIT).
+        /// </summary>
+        internal static RubyEncoding GetMarshalEncoding(object obj) {
+            var str = obj as MutableString;
+            if (str != null) {
+                return str.Encoding;
+            }
+
+            var regex = obj as RubyRegex;
+            if (regex != null) {
+                return regex.Encoding;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// An 'o' record is instance variables and nothing else, so it can only carry an object
+        /// whose whole state is instance variables. MRI refuses anything backed by C data - a
+        /// StringIO, a Dir, a Method - unless its class defines _dump_data, and the classes here
+        /// that are backed by a CLR object are the same set. The two exceptions are the two that
+        /// Marshal writes as 'o' records itself: an exception, whose message and backtrace are
+        /// written as pseudo instance variables, and a Range.
+        /// </summary>
+        internal static bool IsDumpableAsObject(RubyClass/*!*/ theClass) {
+            for (RubyClass cls = theClass; cls != null; cls = cls.SuperClass) {
+                // Reaching a root - Object, or BasicObject for a class that descends from it
+                // directly - means nothing along the way was backed by a CLR object.
+                if (cls.IsObjectClass || cls == cls.Context.BasicObjectClass) {
+                    return true;
+                }
+                if (cls.IsRubyClass) {
+                    continue;
+                }
+
+                Type type = cls.GetUnderlyingSystemType();
+                return typeof(Exception).IsAssignableFrom(type) || typeof(Range).IsAssignableFrom(type);
+            }
+            return true;
+        }
+
+        internal static bool NeedsEncodingIVar(RubyEncoding encoding) {
+            return encoding != null && encoding != RubyEncoding.Binary;
+        }
+
+        internal static void ForceMarshalEncoding(object obj, RubyEncoding/*!*/ encoding) {
+            var str = obj as MutableString;
+            if (str != null) {
+                str.ForceEncoding(encoding);
+                return;
+            }
+
+            var regex = obj as RubyRegex;
+            if (regex != null) {
+                // A regexp freezes the pattern it holds, so the encoding goes on a copy that
+                // replaces it rather than on the pattern itself.
+                var pattern = regex.Pattern.Clone();
+                pattern.ForceEncoding(encoding);
+                regex.Set(pattern, regex.Options);
+            }
+        }
 
         #endregion
 
@@ -144,7 +259,7 @@ namespace IronRuby.Builtins {
                 } else if (value < 0 && value > -124) {
                     _writer.Write((sbyte)(value - 5));
                 } else {
-                    byte[] _buffer = new byte[5];
+                    Span<byte> _buffer = stackalloc byte[5];
                     _buffer[1] = (byte)(value & 0xff);
                     _buffer[2] = (byte)((value >> 8) & 0xff);
                     _buffer[3] = (byte)((value >> 16) & 0xff);
@@ -165,7 +280,7 @@ namespace IronRuby.Builtins {
                     }
                     _buffer[0] = unchecked((byte)lenbyte);
 
-                    _writer.Write(_buffer, 0, len + 1);
+                    _writer.Write(_buffer.Slice(0, len + 1));
                 }
             }
 
@@ -175,27 +290,13 @@ namespace IronRuby.Builtins {
             }
 
             private void WriteFloat(double value) {
-                // TODO: Ruby appears to have an optimization that saves the (binary) mantissa at the end of the string
                 _writer.Write((byte)'f');
-                if (Double.IsInfinity(value)) {
-                    if (Double.IsPositiveInfinity(value)) {
-                        WriteStringValue(_positiveInfinityString);
-                    } else {
-                        WriteStringValue(_negativeInfinityString);
-                    }
-                } else if (Double.IsNaN(value)) {
-                    WriteStringValue(_nanString);
-                } else {
-                    StringFormatter sf = new StringFormatter(_context, "%.15g", RubyEncoding.Binary, new object[] { value });
-                    sf.TrailingZeroAfterWholeFloat = false;
-                    WriteStringValue(sf.Format());
-                }
+                WriteStringValue(FormatFloat(value), RubyEncoding.Binary);
             }
 
-            
-            private void WriteSubclassData(object/*!*/ obj, Type type) {
+
+            private void WriteSubclassData(object/*!*/ obj, RubyClass/*!*/ theClass, Type type) {
                 RubyClass libClass = _context.GetClass(type);
-                RubyClass theClass = _context.GetClassOf(obj);
 
                 if (libClass != theClass && !(obj is RubyStruct)) {
                     _writer.Write((byte)'C');
@@ -210,6 +311,7 @@ namespace IronRuby.Builtins {
             }
 
             private void WriteModuleName(RubyModule/*!*/ module) {
+                TestForAnonymous(module);
                 WriteSymbol(module.Name, module.Context.GetIdentifierEncoding());
             }
 
@@ -219,21 +321,32 @@ namespace IronRuby.Builtins {
                 _writer.Write(data);
             }
 
-            private void WriteString(MutableString/*!*/ value) {
-                WriteSubclassData(value, typeof(MutableString));
+            private void WriteString(MutableString/*!*/ value, RubyClass/*!*/ theClass) {
+                WriteSubclassData(value, theClass, typeof(MutableString));
                 _writer.Write((byte)'"');
                 WriteStringValue(value);
             }
 
-            private void WriteRegex(RubyRegex/*!*/ value) {
-                WriteSubclassData(value, typeof(RubyRegex));
+            private void WriteRegex(RubyRegex/*!*/ value, RubyClass/*!*/ theClass) {
+                WriteSubclassData(value, theClass, typeof(RubyRegex));
                 _writer.Write((byte)'/');
                 WriteStringValue(value.Pattern);
-                _writer.Write((byte)value.Options);
+                // MRI only stores the three matching flags plus its "encoding is fixed" bit, which
+                // it sets for any regexp that can only match one encoding - whether that is because
+                // the source is not ASCII only or because Regexp::FIXEDENCODING said so.
+                int flags = (int)(value.Options & (RubyRegexOptions.IgnoreCase | RubyRegexOptions.Extended | RubyRegexOptions.Multiline));
+                if (value.IsFixedEncoding) {
+                    flags |= (int)RubyRegexOptions.FIXED;
+                }
+                if ((value.Options & RubyRegexOptions.FIXED) != 0) {
+                    // /n: MRI's ARG_ENCODING_NONE bit
+                    flags |= NoEncodingFlag;
+                }
+                _writer.Write((byte)flags);
             }
 
-            private void WriteArray(RubyArray/*!*/ value) {
-                WriteSubclassData(value, typeof(RubyArray));
+            private void WriteArray(RubyArray/*!*/ value, RubyClass/*!*/ theClass) {
+                WriteSubclassData(value, theClass, typeof(RubyArray));
                 _writer.Write((byte)'[');
                 WriteInt32(value.Count);
                 foreach (object obj in value) {
@@ -241,12 +354,18 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            private void WriteHash(Hash/*!*/ value) {
+            private void WriteHash(Hash/*!*/ value, RubyClass/*!*/ theClass) {
                 if (value.DefaultProc != null) {
                     throw RubyExceptions.CreateTypeError("can't dump hash with default proc");
                 }
 
-                WriteSubclassData(value, typeof(Hash));
+                WriteSubclassData(value, theClass, typeof(Hash));
+                if (value.ComparesByIdentity) {
+                    // MRI wraps a compare_by_identity hash in a "user class" record naming Hash,
+                    // which is how the flag survives a round trip.
+                    _writer.Write((byte)'C');
+                    WriteSymbol("Hash", _context.GetIdentifierEncoding());
+                }
                 char typeFlag = (value.DefaultValue != null) ? '}' : '{';
                 _writer.Write((byte)typeFlag);
                 WriteInt32(value.Count);
@@ -260,22 +379,67 @@ namespace IronRuby.Builtins {
             }
 
             private void WriteSymbol(string/*!*/ value, RubyEncoding/*!*/ encoding) {
+                WriteSymbol(value, encoding.StrictEncoding.GetBytes(value), encoding);
+            }
+
+            private void WriteSymbol(RubySymbol/*!*/ symbol) {
+                WriteSymbol(symbol.ToString(), symbol.String.ToByteArray(), symbol.Encoding);
+            }
+
+            private void WriteSymbol(string/*!*/ value, byte[]/*!*/ data, RubyEncoding/*!*/ encoding) {
                 int position;
                 if (_symbols.TryGetValue(value, out position)) {
                     _writer.Write((byte)';');
                     WriteInt32(position);
                 } else {
+                    // MRI only records an encoding for a symbol whose name is not ASCII only.
+                    bool writeEncoding = NeedsEncodingIVar(encoding) && !IsAscii(data);
+                    if (writeEncoding) {
+                        _writer.Write((byte)'I');
+                    }
                     position = _symbols.Count;
                     _symbols[value] = position;
                     _writer.Write((byte)':');
-                    WriteStringValue(value, encoding);
+                    WriteInt32(data.Length);
+                    _writer.Write(data);
+                    if (writeEncoding) {
+                        WriteInt32(1);
+                        WriteEncodingIVar(encoding);
+                    }
+                }
+            }
+
+            private static bool IsAscii(byte[]/*!*/ data) {
+                for (int i = 0; i < data.Length; i++) {
+                    if (data[i] >= 0x80) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            private static readonly byte[]/*!*/ _encodingShortIVarNameBytes = Encoding.ASCII.GetBytes(EncodingShortIVarName);
+            private static readonly byte[]/*!*/ _encodingIVarNameBytes = Encoding.ASCII.GetBytes(EncodingIVarName);
+
+            private void WriteEncodingIVar(RubyEncoding/*!*/ encoding) {
+                if (encoding == RubyEncoding.UTF8) {
+                    WriteSymbol(EncodingShortIVarName, _encodingShortIVarNameBytes, RubyEncoding.Binary);
+                    WriteAnObject(true);
+                } else if (encoding == RubyEncoding.Ascii) {
+                    WriteSymbol(EncodingShortIVarName, _encodingShortIVarNameBytes, RubyEncoding.Binary);
+                    WriteAnObject(false);
+                } else {
+                    WriteSymbol(EncodingIVarName, _encodingIVarNameBytes, RubyEncoding.Binary);
+                    WriteAnObject(MutableString.CreateBinary(Encoding.UTF8.GetBytes(encoding.Name)));
                 }
             }
 
             private void TestForAnonymous(RubyModule/*!*/ theModule) {
-                if (theModule.Name == null) {
-                    throw RubyExceptions.CreateTypeError("can't dump anonymous {0} {1}", 
-                        theModule.IsClass ? "class" : "module", 
+                // MRI's class2path: a module whose path starts with "#" is anonymous too - a class
+                // defined in a singleton class ("#<Class:#<Object:...>>::C") has no name to load by.
+                if (theModule.Name == null || theModule.GetDisplayName(_context, false).ToString().StartsWith("#", StringComparison.Ordinal)) {
+                    throw RubyExceptions.CreateTypeError("can't dump anonymous {0} {1}",
+                        theModule.IsClass ? "class" : "module",
                         theModule.GetDisplayName(_context, false)
                     );
                 }
@@ -284,33 +448,122 @@ namespace IronRuby.Builtins {
             private void WriteRange(Range/*!*/ range) {
                 WriteObject(range);
                 WriteInt32(3);
-                // Write the attributes that are implemented in C#. Any user-defined attributes (for subtypes of Range)
-                // will be handled by the default handling of IRubyObject
+                // MRI writes the three attributes, in the order excl, begin, end, as an 'o' record of
+                // their own; the instance variables of a Range subclass's instance go in an "I" wrapper.
+                WriteSymbol("excl", RubyEncoding.Binary);
+                WriteAnObject(range.ExcludeEnd);
                 WriteSymbol("begin", RubyEncoding.Binary);
                 WriteAnObject(range.Begin);
                 WriteSymbol("end", RubyEncoding.Binary);
                 WriteAnObject(range.End);
-                WriteSymbol("excl", RubyEncoding.Binary);
-                WriteAnObject(range.ExcludeEnd);
             }
 
             private void WriteObject(object/*!*/ obj) {
-                _writer.Write((byte)'o');
                 RubyClass theClass = _context.GetClassOf(obj);
+                _writer.Write((byte)'o');
                 TestForAnonymous(theClass);
                 WriteModuleName(theClass);
             }
 
+            private void RequireDumpableAsObject(RubyClass/*!*/ theClass) {
+                if (!IsDumpableAsObject(theClass)) {
+                    throw RubyExceptions.CreateTypeError("no _dump_data is defined for class {0}",
+                        theClass.Name ?? theClass.GetDisplayName(_context, false).ToString()
+                    );
+                }
+            }
+
+            /// <summary>
+            /// An exception's message and backtrace live outside the instance variable table in
+            /// IronRuby, but MRI writes them as the "mesg" and "bt" instance variables.
+            /// </summary>
+            private void WriteException(Exception/*!*/ exception, string[]/*!*/ instanceNames) {
+                var data = RubyExceptionData.GetInstance(exception);
+                Exception cause = data.HasCause ? data.Cause : null;
+
+                // NameError#name, NoMethodError#args and #private_call?, which MRI keeps as internal ivars too
+                RubyClass theClass = _context.GetClassOf(exception);
+                bool isNameError = theClass.IsSubclassOf(_context.GetClass(typeof(MemberAccessException)));
+                bool isNoMethodError = isNameError && theClass.IsSubclassOf(_context.GetClass(typeof(MissingMethodException)));
+
+                // MRI's internal ones - KeyError#receiver and the like - which the prelude keeps hidden
+                var internalNames = new List<string>();
+                foreach (string name in ExceptionInternalIVars) {
+                    object value;
+                    if (_context.TryGetInstanceVariable(exception, HiddenIVarName(name), out value)) {
+                        internalNames.Add(name);
+                    }
+                }
+
+                WriteObject(exception);
+                WriteInt32(2 + (isNameError ? 1 : 0) + (isNoMethodError ? 2 : 0) + (cause != null ? 1 : 0) + internalNames.Count + instanceNames.Length);
+                WriteSymbol("mesg", RubyEncoding.Binary);
+                object message = data.Message;
+                var messageString = message as MutableString;
+                if (messageString != null && messageString.Equals(
+                        RubyExceptionData.GetDefaultMessage(_context.GetClassOf(exception)))) {
+                    // MRI leaves "mesg" nil when #initialize was never given one; the class name it
+                    // reports from #message is synthesised on demand, exactly as IronRuby does.
+                    message = null;
+                }
+                WriteAnObject(message);
+
+                WriteSymbol("bt", RubyEncoding.Binary);
+                WriteAnObject(data.Backtrace);
+
+                if (isNameError) {
+                    WriteSymbol("name", RubyEncoding.Binary);
+                    WriteAnObject(data.Name);
+                }
+                if (isNoMethodError) {
+                    WriteSymbol("args", RubyEncoding.Binary);
+                    WriteAnObject(data.Arguments);
+                    WriteSymbol("private_call?", RubyEncoding.Binary);
+                    WriteAnObject(data.PrivateCall);
+                }
+
+                // MRI writes the cause as another pseudo instance variable, and only when the
+                // exception has one - an exception that was never raised inside a rescue has not.
+                if (cause != null) {
+                    WriteSymbol("cause", RubyEncoding.Binary);
+                    WriteAnObject(cause);
+                }
+
+                foreach (string name in internalNames) {
+                    object value;
+                    _context.TryGetInstanceVariable(exception, HiddenIVarName(name), out value);
+                    WriteSymbol(name, RubyEncoding.Binary);
+                    WriteAnObject(value);
+                }
+
+                WriteIVarPairs(exception, instanceNames);
+            }
+
             private void WriteUsingDump(object/*!*/ obj) {
-                _writer.Write((byte)'u');
-                RubyClass theClass = _context.GetClassOf(obj);
-                TestForAnonymous(theClass);
-                WriteModuleName(theClass);
                 MutableString dumpResult = _sites.Dump.Target(_sites.Dump, obj, _recursionLimit) as MutableString;
                 if (dumpResult == null) {
                     throw RubyExceptions.CreateTypeError("_dump() must return string");
                 }
+
+                // What gets written are the instance variables of the string _dump returned, and
+                // never the object's own: a class that wants those kept copies them onto the string
+                // itself, which is what Time does with its zone, its offset and anything else it
+                // was carrying.
+                string[] resultIVars = _context.GetInstanceVariableNames(dumpResult);
+                RubyEncoding resultEncoding = GetMarshalEncoding(dumpResult);
+                bool hasIVars = resultIVars.Length > 0 || NeedsEncodingIVar(resultEncoding);
+
+                if (hasIVars) {
+                    _writer.Write((byte)'I');
+                }
+                _writer.Write((byte)'u');
+                RubyClass theClass = _context.GetClassOf(obj);
+                TestForAnonymous(theClass);
+                WriteModuleName(theClass);
                 WriteStringValue(dumpResult);
+                if (hasIVars) {
+                    WriteIVars(dumpResult, resultIVars, resultEncoding);
+                }
             }
 
             private void WriteUsingMarshalDump(object/*!*/ obj) {
@@ -318,35 +571,245 @@ namespace IronRuby.Builtins {
                 RubyClass theClass = _context.GetClassOf(obj);
                 TestForAnonymous(theClass);
                 WriteModuleName(theClass);
-                WriteAnObject(_sites.MarshalDump.Target(_sites.MarshalDump, obj));
+                object data = _sites.MarshalDump.Target(_sites.MarshalDump, obj);
+                // The dumped form has to be something else, or loading it would never end. MRI
+                // compares the immediate classes, so an object with a singleton class may answer
+                // another instance of its own class as long as that one has no singleton of its own.
+                if (data != null && ReferenceEquals(_context.GetImmediateClassOf(data), _context.GetImmediateClassOf(obj))) {
+                    throw RubyExceptions.CreateRuntimeError("{0}#marshal_dump returned same class instance",
+                        _context.GetImmediateClassOf(obj).GetDisplayName(_context, false));
+                }
+                WriteAnObject(data);
             }
 
             private void WriteClass(RubyClass/*!*/ obj) {
-                _writer.Write((byte)'c');
-                TestForAnonymous(obj);
-                WriteStringValue(obj.Name, _context.GetIdentifierEncoding());
+                if (obj.IsSingletonClass) {
+                    throw RubyExceptions.CreateTypeError("singleton class can't be dumped");
+                }
+                WriteModuleDefinition((byte)'c', obj);
             }
 
             private void WriteModule(RubyModule/*!*/ obj) {
-                _writer.Write((byte)'m');
-                TestForAnonymous(obj);
-                WriteStringValue(obj.Name, _context.GetIdentifierEncoding());
+                WriteModuleDefinition((byte)'m', obj);
             }
 
-            private void WriteStruct(RubyStruct/*!*/ obj) {
-                WriteSubclassData(obj, typeof(RubyStruct));
+            /// <summary>
+            /// A 'c' or 'm' record is the module's name written as a string, so a name that is not
+            /// ASCII only carries its encoding the same way a String does: the record is wrapped in
+            /// an 'I' and followed by the one 'E' flag.
+            /// </summary>
+            private void WriteModuleDefinition(byte tag, RubyModule/*!*/ obj) {
+                TestForAnonymous(obj);
+
+                RubyEncoding encoding = _context.GetIdentifierEncoding();
+                byte[] data = encoding.StrictEncoding.GetBytes(obj.Name);
+                bool writeEncoding = NeedsEncodingIVar(encoding) && !IsAscii(data);
+
+                if (writeEncoding) {
+                    _writer.Write((byte)'I');
+                }
+                _writer.Write(tag);
+                WriteInt32(data.Length);
+                _writer.Write(data);
+                if (writeEncoding) {
+                    WriteInt32(1);
+                    WriteEncodingIVar(encoding);
+                }
+            }
+
+            /// <summary>
+            /// A Data instance, and the members its class was defined with. Data keeps its values
+            /// in hidden instance variables (RubyUtils.GetHiddenInstanceVariableName), and it is
+            /// dumped the way a Struct is - an 'S' record of member-name/value pairs.
+            /// </summary>
+            private bool TryGetDataMembers(object obj, out RubyArray members) {
+                members = null;
+
+                object dataClass;
+                if (!_context.ObjectClass.TryGetConstant(null, "Data", out dataClass)) {
+                    return false;
+                }
+
+                var theClass = _context.GetClassOf(obj) as RubyClass;
+                var dataBase = dataClass as RubyClass;
+                if (theClass == null || dataBase == null || !theClass.IsSubclassOf(dataBase)) {
+                    return false;
+                }
+
+                for (RubyClass klass = theClass; klass != null; klass = klass.SuperClass) {
+                    object names;
+                    if (_context.TryGetInstanceVariable(klass, RubyUtils.GetHiddenInstanceVariableName("data_members"), out names)) {
+                        members = names as RubyArray;
+                        return members != null;
+                    }
+                }
+                return false;
+            }
+
+            private void WriteData(object/*!*/ obj, RubyArray/*!*/ members) {
                 _writer.Write((byte)'S');
                 RubyClass theClass = _context.GetClassOf(obj);
+                TestForAnonymous(theClass);
+                WriteModuleName(theClass);
+                WriteInt32(members.Count);
+
+                var identifierEncoding = _context.GetIdentifierEncoding();
+                foreach (object member in members) {
+                    string name = member.ToString();
+                    object value;
+                    if (!_context.TryGetInstanceVariable(obj, RubyUtils.GetHiddenInstanceVariableName(name), out value)) {
+                        value = null;
+                    }
+                    WriteSymbol(name, identifierEncoding);
+                    WriteAnObject(value);
+                }
+            }
+
+            private void WriteStruct(RubyStruct/*!*/ obj, RubyClass/*!*/ theClass) {
+                WriteSubclassData(obj, theClass, typeof(RubyStruct));
+                _writer.Write((byte)'S');
                 TestForAnonymous(theClass);
                 WriteModuleName(theClass);
                 var names = obj.GetNames();
                 WriteInt32(names.Count);
                 foreach (string name in names) {
                     int index = obj.GetIndex(name);
-                    // TODO (encoding):
                     WriteSymbol(name, _context.GetIdentifierEncoding());
                     WriteAnObject(obj[index]);
                 }
+            }
+
+            private void WriteIVars(object/*!*/ obj, string[]/*!*/ names, RubyEncoding encoding) {
+                bool writeEncoding = NeedsEncodingIVar(encoding);
+                WriteInt32(names.Length + (writeEncoding ? 1 : 0));
+                if (writeEncoding) {
+                    WriteEncodingIVar(encoding);
+                }
+                WriteIVarPairs(obj, names);
+            }
+
+            /// <summary>
+            /// A Set: MRI 4.0 writes its table as the "@hash" instance variable the Set of set.rb had, which
+            /// the prelude's Set keeps in a hidden one. Any instance variables of the set's own go in an
+            /// "I" wrapper around this record.
+            /// </summary>
+            private void WriteSetObject(object setTable) {
+                WriteInt32(1);
+                WriteSymbol("@hash", _context.GetIdentifierEncoding());
+                WriteAnObject(setTable);
+            }
+
+            private void WriteIVarPairs(object/*!*/ obj, string[]/*!*/ names) {
+                var identifierEncoding = _context.GetIdentifierEncoding();
+                foreach (string name in names) {
+                    object value;
+                    if (!_context.TryGetInstanceVariable(obj, name, out value)) {
+                        value = null;
+                    }
+                    WriteSymbol(name, identifierEncoding);
+                    WriteAnObject(value);
+                }
+            }
+
+            /// <summary>
+            /// MRI raises rather than serialize objects whose state lives outside the Ruby heap.
+            /// </summary>
+            private void CheckDumpable(object/*!*/ obj) {
+                if (obj is Proc || obj is RubyMethod || obj is UnboundMethod ||
+                    obj is IronRuby.StandardLibrary.Threading.RubyMutex ||
+                    obj is IronRuby.StandardLibrary.Monitors.RubyMonitor ||
+                    obj is System.Threading.Thread || obj is Binding) {
+
+                    throw RubyExceptions.CreateTypeError("no _dump_data is defined for class {0}",
+                        _context.GetClassDisplayName(obj));
+                }
+
+                if (obj is RubyIO || obj is MatchData) {
+                    throw RubyExceptions.CreateTypeError("can't dump {0}", _context.GetClassDisplayName(obj));
+                }
+            }
+
+            private void CheckSingleton(RubyClass/*!*/ immediate) {
+                if (immediate.IsSingletonClass && !immediate.IsDummySingletonClass) {
+                    bool hasState = false;
+                    using (_context.ClassHierarchyLocker()) {
+                        immediate.EnumerateMethods((_module, _name, _member) => { hasState = true; return true; });
+                    }
+                    if (!hasState) {
+                        hasState = _context.GetInstanceVariableNames(immediate).Length > 0;
+                    }
+                    if (hasState) {
+                        throw RubyExceptions.CreateTypeError("singleton can't be dumped");
+                    }
+                }
+            }
+
+            private void WriteExtendedModules(RubyClass/*!*/ theClass) {
+                if (theClass.IsSingletonClass) {
+                    foreach (var mixin in theClass.GetMixins()) {
+                        _writer.Write((byte)'e');
+                        // MRI reaches an extended module through its iclass and reports an
+                        // anonymous one as a class, not as a module.
+                        if (mixin.Name == null) {
+                            throw RubyExceptions.CreateTypeError("can't dump anonymous class {0}",
+                                mixin.GetDisplayName(_context, false)
+                            );
+                        }
+                        WriteModuleName(mixin);
+                    }
+                }
+            }
+
+            /// <summary>
+            /// MRI's rb_obj_respond_to(obj, name, TRUE), for a name the all-visible lookup on <paramref name="immediate"/>
+            /// found no method of. A #respond_to? of the program's own is asked - with include_all true unless it takes
+            /// a single argument; otherwise (Kernel's, or none at all on a BasicObject) only a #respond_to_missing?
+            /// of the program's own can still say yes, and Kernel's answers false without being called. That is
+            /// nearly always the case, and then nothing is dispatched at all.
+            /// </summary>
+            private bool ObjRespondTo(RubyClass/*!*/ immediate, object obj, string/*!*/ name, ref bool ranUserCode) {
+                var respondTo = immediate.GetMethodLookup("respond_to?");
+                if (!respondTo.Found || IsKernelMethod(respondTo.Info, _kernelRespondTo, ref _defaultRespondTo)) {
+                    var missing = immediate.GetMethodLookup("respond_to_missing?");
+                    if (!missing.Found || IsKernelMethod(missing.Info, _kernelRespondToMissing, ref _defaultRespondToMissing)) {
+                        return false;
+                    }
+                    ranUserCode = true;
+                    var missingSite = _sites.RespondToMissing;
+                    return Protocols.IsTrue(missingSite.Target(missingSite, obj, _context.EncodeIdentifier(name), ScriptingRuntimeHelpers.True));
+                }
+
+                ranUserCode = true;
+                if (respondTo.Info.GetArity() == 1) {
+                    return Protocols.RespondTo(_sites.RespondTo, obj, name);
+                }
+                var site = _sites.RespondToIncludeAll;
+                return Protocols.IsTrue(site.Target(site, obj, _context.EncodeIdentifier(name), ScriptingRuntimeHelpers.True));
+            }
+
+            private static readonly MethodInfo/*!*/ _kernelRespondTo = typeof(KernelOps).GetMethod("RespondTo");
+            private static readonly MethodInfo/*!*/ _kernelRespondToMissing = typeof(KernelOps).GetMethod("RespondToMissing");
+
+            // The last method infos found to be the Kernel methods themselves (or aliases of them).
+            private static RubyMemberInfo _defaultRespondTo, _defaultRespondToMissing;
+
+            private static bool IsKernelMethod(RubyMemberInfo method, MethodInfo/*!*/ kernelMethod, ref RubyMemberInfo lastFound) {
+                if (method == null) {
+                    return false;
+                }
+                if (ReferenceEquals(method, lastFound)) {
+                    return true;
+                }
+                var libraryMethod = method as RubyLibraryMethodInfo;
+                if (libraryMethod == null) {
+                    return false;
+                }
+                var members = libraryMethod.GetMembers();
+                if (members.Length == 1 && members[0] == kernelMethod) {
+                    lastFound = method;
+                    return true;
+                }
+                return false;
             }
 
             private void WriteAnObject(object obj) {
@@ -362,9 +825,12 @@ namespace IronRuby.Builtins {
                     if (value < -(1 << 30) || value >= (1 << 30)) {
                         obj = (BigInteger)value;
                     }
+                } else if (obj is long) {
+                    // Marshal has only the two integer records, and a long is always outside the
+                    // fixnum one, so it goes out as a bignum - byte for byte what MRI writes.
+                    obj = (BigInteger)(long)obj;
                 }
 
-                // TODO: use RubyUtils.IsRubyValueType?
                 RubySymbol sym;
                 if (obj == null) {
                     _writer.Write((byte)'0');
@@ -373,92 +839,133 @@ namespace IronRuby.Builtins {
                 } else if (obj is int) {
                     WriteFixnum((int)obj);
                 } else if ((sym = obj as RubySymbol) != null) {
-                    // TODO (encoding):
-                    WriteSymbol(sym.ToString(), sym.Encoding);
+                    WriteSymbol(sym);
                 } else {
                     int objectRef;
                     if (_objects.TryGetValue(obj, out objectRef)) {
                         _writer.Write((byte)'@');
                         WriteInt32(objectRef);
                     } else {
-                        objectRef = _objects.Count;
-                        _objects[obj] = objectRef;
+                        CheckDumpable(obj);
 
-                        // TODO: replace with a table-driven implementation
                         // TODO: visibility?
-                        bool implementsDump = _context.ResolveMethod(obj, "_dump", VisibilityContext.AllVisible).Found;
-                        bool implementsMarshalDump = _context.ResolveMethod(obj, "marshal_dump", VisibilityContext.AllVisible).Found;
-
-                        bool writeInstanceData = false;
-                        string[] instanceNames = null;
-
-                        if (!implementsDump && !implementsMarshalDump) {
-                            // Neither "_dump" nor "marshal_dump" writes instance vars separately
-                            instanceNames = _context.GetInstanceVariableNames(obj);
-                            if (instanceNames.Length > 0) {
-                                _writer.Write((byte)'I');
-                                writeInstanceData = true;
+                        RubyClass immediate = _context.GetImmediateClassOf(obj);
+                        // MRI asks for marshal_dump first, and for _dump only when there is none.
+                        bool ranUserCode = false;
+                        bool implementsMarshalDump = immediate.ResolveMethod("marshal_dump", VisibilityContext.AllVisible).Found
+                            || ObjRespondTo(immediate, obj, "marshal_dump", ref ranUserCode);
+                        bool implementsDump = false;
+                        if (!implementsMarshalDump) {
+                            if (ranUserCode) {
+                                // a respond_to? may have given the object a singleton class
+                                immediate = _context.GetImmediateClassOf(obj);
                             }
+                            implementsDump = immediate.ResolveMethod("_dump", VisibilityContext.AllVisible).Found
+                                || ObjRespondTo(immediate, obj, "_dump", ref ranUserCode);
                         }
 
-                        if (!implementsDump || implementsMarshalDump) {
-                            // "_dump" doesn't write "extend" info but "marshal_dump" does
-                            RubyClass theClass = _context.GetImmediateClassOf(obj);
-                            if (theClass.IsSingletonClass) {
-                                foreach (var mixin in theClass.GetMixins()) {
-                                    _writer.Write((byte)'e');
-                                    WriteModuleName(mixin);
-                                }
-                            }
-                        }
-
-                        if (obj is double) {
-                            WriteFloat((double)obj);
-                        } else if (obj is float) {
-                            WriteFloat((double)(float)obj);
-                        } else if (obj is BigInteger) {
-                            WriteBignum((BigInteger)obj);
-                        } else if (implementsMarshalDump) {
+                        if (implementsMarshalDump) {
+                            _objects[obj] = _objects.Count;
                             WriteUsingMarshalDump(obj);
                         } else if (implementsDump) {
+                            // MRI indexes the object *after* whatever the string returned by #_dump pulls in.
                             WriteUsingDump(obj);
-                        } else if (obj is MutableString) {
-                            WriteString((MutableString)obj);
-                        } else if (obj is RubyArray) {
-                            WriteArray((RubyArray)obj);
-                        } else if (obj is Hash) {
-                            WriteHash((Hash)obj);
-                        } else if (obj is RubyRegex) {
-                            WriteRegex((RubyRegex)obj);
-                        } else if (obj is RubyClass) {
-                            WriteClass((RubyClass)obj);
-                        } else if (obj is RubyModule) {
-                            WriteModule((RubyModule)obj);
-                        } else if (obj is RubyStruct) {
-                            WriteStruct((RubyStruct)obj);
-                        } else if (obj is Range) {
-                            WriteRange((Range)obj);
+                            _objects[obj] = _objects.Count;
                         } else {
-                            if (writeInstanceData) {
-                                // Overwrite the "I"; we always have instance data
-                                _writer.BaseStream.Seek(-1, SeekOrigin.Current);
-                            } else {
-                                writeInstanceData = true;
-                            }
-                            WriteObject(obj);
-                        }
+                            objectRef = _objects.Count;
+                            _objects[obj] = objectRef;
 
-                        if (writeInstanceData) {
-                            WriteInt32(instanceNames.Length);
-                            var encoding = _context.GetIdentifierEncoding();
-                            foreach (string name in instanceNames) {
-                                object value;
-                                if (!_context.TryGetInstanceVariable(obj, name, out value)) {
-                                    value = null;
+                            if (ranUserCode) {
+                                // a respond_to? may have given the object a singleton class
+                                immediate = _context.GetImmediateClassOf(obj);
+                            }
+                            RubyClass theClass = immediate.GetNonSingletonClass();
+
+                            if (!(obj is RubyModule)) {
+                                CheckSingleton(immediate);
+                            }
+
+                            RubyEncoding encoding = GetMarshalEncoding(obj);
+                            string[] instanceNames = _context.GetInstanceVariableNames(obj);
+
+                            // Data instances are plain objects: none of the built-in representations
+                            // below can be one, so they skip the Data class lookup.
+                            RubyArray dataMembers = null;
+                            bool isData = !(obj is double || obj is float || obj is BigInteger || obj is MutableString ||
+                                  obj is RubyArray || obj is Hash || obj is RubyRegex || obj is RubyModule ||
+                                  obj is RubyStruct || obj is Range || obj is Exception)
+                                && TryGetDataMembers(obj, out dataMembers);
+                            if (isData) {
+                                // The members are the instance variables, and the 'S' record is
+                                // already carrying them.
+                                instanceNames = ArrayUtils.EmptyStrings;
+                            }
+
+                            // An 'o' record (a plain object, or an exception) carries its instance data inline
+                            // rather than behind an "I" wrapper. A Range's record holds its three attributes.
+                            bool isObjectRecord =
+                                !(obj is double || obj is float || obj is BigInteger || obj is MutableString ||
+                                  obj is RubyArray || obj is Hash || obj is RubyRegex || obj is RubyModule ||
+                                  obj is RubyStruct || obj is Range || isData);
+
+                            // Except a Set's: MRI 4.0 writes the 'o' record of the Set of set.rb, holding only
+                            // its table, and the instance variables of its own behind an "I" wrapper.
+                            object setTable = null;
+                            bool isSet = isObjectRecord && !(obj is Range || obj is Exception) &&
+                                IsSet(_context, theClass) && _context.TryGetInstanceVariable(obj, SetTableIVar, out setTable);
+                            if (isSet) {
+                                isObjectRecord = false;
+                            }
+
+                            bool writeInstanceData = !isObjectRecord && !(obj is RubyModule) &&
+                                (instanceNames.Length > 0 || NeedsEncodingIVar(encoding));
+
+                            if (writeInstanceData) {
+                                _writer.Write((byte)'I');
+                            }
+
+                            if (!(obj is RubyModule)) {
+                                WriteExtendedModules(immediate);
+                            }
+
+                            if (obj is double) {
+                                WriteFloat((double)obj);
+                            } else if (obj is float) {
+                                WriteFloat((double)(float)obj);
+                            } else if (obj is BigInteger) {
+                                WriteBignum((BigInteger)obj);
+                            } else if (obj is MutableString) {
+                                WriteString((MutableString)obj, theClass);
+                            } else if (obj is RubyArray) {
+                                WriteArray((RubyArray)obj, theClass);
+                            } else if (obj is Hash) {
+                                WriteHash((Hash)obj, theClass);
+                            } else if (obj is RubyRegex) {
+                                WriteRegex((RubyRegex)obj, theClass);
+                            } else if (obj is RubyClass) {
+                                WriteClass((RubyClass)obj);
+                            } else if (obj is RubyModule) {
+                                WriteModule((RubyModule)obj);
+                            } else if (isData) {
+                                WriteData(obj, dataMembers);
+                            } else if (obj is RubyStruct) {
+                                WriteStruct((RubyStruct)obj, theClass);
+                            } else if (obj is Range) {
+                                WriteRange((Range)obj);
+                            } else if (obj is Exception) {
+                                WriteException((Exception)obj, instanceNames);
+                            } else {
+                                RequireDumpableAsObject(theClass);
+                                WriteObject(obj);
+                                if (isSet) {
+                                    WriteSetObject(setTable);
+                                } else {
+                                    WriteIVars(obj, instanceNames, encoding);
                                 }
-                                // TODO (encoding):
-                                WriteSymbol(name, encoding);
-                                WriteAnObject(value);
+                            }
+
+                            if (writeInstanceData) {
+                                WriteIVars(obj, instanceNames, encoding);
                             }
                         }
                     }
@@ -473,6 +980,118 @@ namespace IronRuby.Builtins {
                 WriteAnObject(obj);
                 _writer.BaseStream.Flush();
             }
+        }
+
+        #endregion
+
+        #region Instance variables MRI keeps in C
+
+        /// <summary>
+        /// The instance variables MRI's exceptions keep without an "@" - Marshal writes them by those names -
+        /// that the prelude keeps as hidden ones (@__receiver__, ...): KeyError, FrozenError and
+        /// NoMatchingPatternKeyError's receiver, key and matchee, SignalException's signo, StopIteration's result.
+        /// </summary>
+        private static readonly string/*!*/[]/*!*/ ExceptionInternalIVars = { "receiver", "matchee", "key", "signo", "result" };
+
+        private static string/*!*/ HiddenIVarName(string/*!*/ name) {
+            return RubyUtils.GetCoreStateInstanceVariableName("@__" + name + "__");
+        }
+
+        private static readonly string SetTableIVar = RubyUtils.GetCoreStateInstanceVariableName("@__hash__");
+
+        private static bool IsSet(RubyContext/*!*/ context, RubyClass/*!*/ theClass) {
+            object set;
+            return context.ObjectClass.TryGetConstant(null, "Set", out set) && set is RubyClass setClass && theClass.IsSubclassOf(setClass);
+        }
+
+        #endregion
+
+        #region Float formatting
+
+        /// <summary>
+        /// MRI's marshal.c w_float: the shortest representation that round trips, formatted the way
+        /// "%g" would with a precision equal to the number of significant digits.
+        /// </summary>
+        internal static string/*!*/ FormatFloat(double value) {
+            if (Double.IsPositiveInfinity(value)) {
+                return "inf";
+            }
+            if (Double.IsNegativeInfinity(value)) {
+                return "-inf";
+            }
+            if (Double.IsNaN(value)) {
+                return "nan";
+            }
+            if (value == 0.0) {
+                return Double.IsNegative(value) ? "-0" : "0";
+            }
+
+            bool negative = value < 0;
+            double abs = negative ? -value : value;
+
+            string digits;
+            int decpt;
+            SplitShortestRepresentation(abs.ToString("R", CultureInfo.InvariantCulture), out digits, out decpt);
+
+            int digs = digits.Length;
+            string body;
+            if (decpt - 1 < -4 || decpt - 1 >= digs) {
+                StringBuilder sb = new StringBuilder();
+                sb.Append(digits[0]);
+                if (digs > 1) {
+                    sb.Append('.');
+                    sb.Append(digits, 1, digs - 1);
+                }
+                sb.Append('e');
+                sb.Append((decpt - 1).ToString(CultureInfo.InvariantCulture));
+                body = sb.ToString();
+            } else if (decpt <= 0) {
+                body = "0." + new String('0', -decpt) + digits;
+            } else if (digs <= decpt) {
+                body = digits + new String('0', decpt - digs);
+            } else {
+                body = digits.Substring(0, decpt) + "." + digits.Substring(decpt);
+            }
+
+            return negative ? "-" + body : body;
+        }
+
+        private static void SplitShortestRepresentation(string/*!*/ str, out string/*!*/ digits, out int decpt) {
+            int e = str.IndexOfAny(new[] { 'E', 'e' });
+            int exponent = 0;
+            string mantissa = str;
+            if (e >= 0) {
+                exponent = Int32.Parse(str.Substring(e + 1), CultureInfo.InvariantCulture);
+                mantissa = str.Substring(0, e);
+            }
+
+            int dot = mantissa.IndexOf('.');
+            string integerPart, fractionPart;
+            if (dot >= 0) {
+                integerPart = mantissa.Substring(0, dot);
+                fractionPart = mantissa.Substring(dot + 1);
+            } else {
+                integerPart = mantissa;
+                fractionPart = String.Empty;
+            }
+
+            string all = integerPart + fractionPart;
+            decpt = integerPart.Length + exponent;
+
+            int first = 0;
+            while (first < all.Length - 1 && all[first] == '0') {
+                first++;
+                decpt--;
+            }
+            all = all.Substring(first);
+
+            int last = all.Length;
+            while (last > 1 && all[last - 1] == '0') {
+                last--;
+            }
+            all = all.Substring(0, last);
+
+            digits = all;
         }
 
         #endregion
@@ -501,20 +1120,33 @@ namespace IronRuby.Builtins {
             private readonly BinaryReader/*!*/ _reader;
             private readonly ReaderSites/*!*/ _sites;
             private readonly RubyGlobalScope/*!*/ _globalScope;
-            private readonly Proc _proc;
-            private readonly Dictionary<int, Symbol>/*!*/ _symbols; 
+            private readonly object _proc;
+            private readonly bool _freeze;
+            private readonly Dictionary<int, Symbol>/*!*/ _symbols;
             private readonly Dictionary<int, object>/*!*/ _objects;
+
+            // Whether the dump is being read from a stream, and whether any record has begun:
+            // together they tell "the file is at its end" from "the dump is cut short".
+            private bool _started;
+
+            internal bool FromStream { get; set; }
 
             private RubyContext/*!*/ Context {
                 get { return _globalScope.Context; }
             }
 
-            internal MarshalReader(ReaderSites/*!*/ sites, BinaryReader/*!*/ reader, 
-                RubyGlobalScope/*!*/ globalScope, Proc proc) {
+            internal MarshalReader(ReaderSites/*!*/ sites, BinaryReader/*!*/ reader,
+                RubyGlobalScope/*!*/ globalScope, object proc)
+                : this(sites, reader, globalScope, proc, false) {
+            }
+
+            internal MarshalReader(ReaderSites/*!*/ sites, BinaryReader/*!*/ reader,
+                RubyGlobalScope/*!*/ globalScope, object proc, bool freeze) {
                 _sites = sites;
                 _reader = reader;
                 _globalScope = globalScope;
                 _proc = proc;
+                _freeze = freeze;
                 _symbols = new Dictionary<int, Symbol>();
                 _objects = new Dictionary<int, object>();
             }
@@ -526,17 +1158,28 @@ namespace IronRuby.Builtins {
                     throw RubyExceptions.CreateTypeError(
                         "incompatible marshal file format (can't be read)\n\tformat version {0}.{1} required; {2}.{3} given",
                         MAJOR_VERSION, MINOR_VERSION, major, minor
-                    );                
+                    );
                 }
 
                 if (minor < MINOR_VERSION) {
                     Context.ReportWarning(
-                        String.Format(CultureInfo.InvariantCulture, 
+                        String.Format(CultureInfo.InvariantCulture,
                             "incompatible marshal file format (can be read)\n\tformat version {0}.{1} required; {2}.{3} given",
                             MAJOR_VERSION, MINOR_VERSION, major, minor
                         )
                     );
                 }
+            }
+
+            private byte[]/*!*/ ReadBytes(int count) {
+                if (count < 0) {
+                    throw RubyExceptions.CreateArgumentError("negative string size (or size too big)");
+                }
+                byte[] data = _reader.ReadBytes(count);
+                if (data.Length != count) {
+                    throw RubyExceptions.CreateArgumentError("marshal data too short");
+                }
+                return data;
             }
 
             private BigInteger/*!*/ ReadBignum() {
@@ -560,7 +1203,7 @@ namespace IronRuby.Builtins {
                     bits[dwords_lo] = _reader.ReadUInt16();
                 }
 
-                return new BigInteger(sign, bits);
+                return BigIntegerCompat.Create(sign, bits);
             }
 
             private int ReadInt32() {
@@ -594,50 +1237,189 @@ namespace IronRuby.Builtins {
             }
 
             private double ReadFloat() {
-                MutableString value = ReadString();
-                if (value.Equals(_positiveInfinityString)) {
+                byte[] data = ReadBytes(ReadInt32());
+                if (IsAscii(data, "inf")) {
                     return Double.PositiveInfinity;
                 }
-                if (value.Equals(_negativeInfinityString)) {
+                if (IsAscii(data, "-inf")) {
                     return Double.NegativeInfinity;
                 }
-                if (value.Equals(_nanString)) {
+                if (IsAscii(data, "nan")) {
                     return Double.NaN;
                 }
 
-                // TODO: MRI appears to have an optimization that saves the (binary) mantissa at the end of the string
-                int pos = value.IndexOf((byte)0);
-                if (pos >= 0) {
-                    value.Remove(pos, value.Length - pos);
+                // strtod: the longest numeric prefix counts - [+-]?(\d+(\.\d+)?|\.\d+)([eE][+-]?\d+)? -
+                // and no number at all is 0.0. MRI may append the binary mantissa after a NUL, and
+                // the scan stops there too: the decimal prefix is authoritative. Scanned by hand
+                // rather than with a Regex, which was most of the cost of loading a Float.
+                // As in MRI's ruby_strtod, leading white space is skipped and a '.' is part of the
+                // number only when a digit follows it ("1.e5" is 1.0).
+                int n = data.Length;
+                int i = 0;
+                while (i < n && (data[i] == ' ' || (data[i] >= '\t' && data[i] <= '\r'))) {
+                    i++;
                 }
-                return Protocols.ConvertStringToFloat(Context, value);
+                int numberStart = i;
+                if (i < n && (data[i] == '+' || data[i] == '-')) {
+                    i++;
+                }
+                int intDigits = SkipDigits(data, ref i);
+                int fracDigits = 0;
+                if (i + 1 < n && data[i] == '.' && data[i + 1] >= '0' && data[i + 1] <= '9') {
+                    i++;
+                    fracDigits = SkipDigits(data, ref i);
+                }
+                if (intDigits == 0 && fracDigits == 0) {
+                    return 0.0;
+                }
+                if (i < n && (data[i] == 'e' || data[i] == 'E')) {
+                    int e = i++;
+                    if (i < n && (data[i] == '+' || data[i] == '-')) {
+                        i++;
+                    }
+                    if (SkipDigits(data, ref i) == 0) {
+                        i = e;
+                    }
+                }
+
+                int length = i - numberStart;
+                Span<char> chars = length <= 128 ? stackalloc char[length] : new char[length];
+                for (int j = 0; j < length; j++) {
+                    chars[j] = (char)data[numberStart + j];
+                }
+                double result;
+                return Double.TryParse(chars, NumberStyles.Float, CultureInfo.InvariantCulture, out result) ? result : 0.0;
+            }
+
+            private static int SkipDigits(byte[]/*!*/ data, ref int i) {
+                int start = i;
+                while (i < data.Length && data[i] >= '0' && data[i] <= '9') {
+                    i++;
+                }
+                return i - start;
+            }
+
+            private static bool IsAscii(byte[]/*!*/ data, string/*!*/ text) {
+                if (data.Length != text.Length) {
+                    return false;
+                }
+                for (int i = 0; i < data.Length; i++) {
+                    if (data[i] != text[i]) {
+                        return false;
+                    }
+                }
+                return true;
             }
 
             private MutableString/*!*/ ReadString() {
-                // TODO: encoding
                 int count = ReadInt32();
-                byte[] data = _reader.ReadBytes(count);
+                byte[] data = ReadBytes(count);
                 return MutableString.CreateBinary(data, RubyEncoding.Binary);
             }
 
+            // Set while ReadInstanced reads a Regexp whose "I" wrapper follows with its instance variables.
+            private bool _regexHasIVars;
+
+            // The link id of the Regexp ReadInstanced is about to read, and of the one whose instance variables are
+            // being read (-1: none), which a link among them cannot refer to yet.
+            private int _regexRef = -1, _regexBeingRead = -1;
+
+            // Set while ReadInstanced reads a 'C' record under an "I" wrapper, until ReadUserClass has read its type.
+            private bool _userClassHasIVars;
+
+            // The instance variables of that wrapper, which ReadRegex has to read itself (below); ReadInstanced
+            // assigns them once the Regexp exists.
+            private List<KeyValuePair<string, object>> _regexIVars;
+
             private RubyRegex/*!*/ ReadRegex() {
                 MutableString pattern = ReadString();
-                int flags = _reader.ReadByte();
-                return new RubyRegex(pattern, (RubyRegexOptions)flags);
+                bool wrapped = _regexHasIVars;
+                _regexHasIVars = false;
+                int raw = _reader.ReadByte();
+
+                // MRI's r_object reads the wrapper's instance variables before it looks at the pattern, and takes a
+                // record for a Ruby 1.8 one unless an encoding is among them: an "I" wrapper that only carries
+                // other instance variables (@note) does not make it a 1.9 record.
+                bool hasEncoding = false;
+                if (wrapped) {
+                    var ivars = new List<KeyValuePair<string, object>>();
+                    int count = ReadInt32();
+                    int outer = _regexBeingRead;
+                    _regexBeingRead = _regexRef;
+                    try {
+                        for (int i = 0; i < count; i++) {
+                            string name = ReadIdentifier();
+                            object value = ReadAnObject(false);
+                            hasEncoding |= ParseEncodingIVar(name, value) != null;
+                            ivars.Add(new KeyValuePair<string, object>(name, value));
+                        }
+                    } finally {
+                        _regexBeingRead = outer;
+                    }
+                    _regexIVars = ivars;
+                }
+                if (!hasEncoding) {
+                    pattern = RemoveUndefinedEscapes(pattern);
+                }
+                var flags = (RubyRegexOptions)(raw & (int)(RubyRegexOptions.IgnoreCase | RubyRegexOptions.Extended | RubyRegexOptions.Multiline | RubyRegexOptions.FIXED));
+
+                // The bit MRI writes at 0x10 means "this regexp's encoding is fixed", which is
+                // Regexp::FIXEDENCODING here; 0x10 on its own is /n, which says the opposite,
+                // and is what MRI's 0x20 (ARG_ENCODING_NONE) asks for.
+                if ((flags & RubyRegexOptions.FIXED) != 0) {
+                    flags = (flags & ~RubyRegexOptions.FIXED) | RubyRegexOptions.FixedEncoding;
+                }
+                if ((raw & NoEncodingFlag) != 0) {
+                    flags |= RubyRegexOptions.FIXED;
+                }
+
+                return new RubyRegex(pattern, flags);
             }
 
-            private RubyArray/*!*/ ReadArray() {
+            /// <summary>
+            /// A Regexp record with no encoding (no "I" wrapper) is a Ruby 1.8 one, whose escapes of letters 1.8 did
+            /// not define stood for the letter itself: MRI's r_object drops the backslash of each (an odd run of them)
+            /// before g h i j k l m o p q u y E F H I J K L N O P Q R S T U V X Y, so "a\\u3042" loads as /au3042/.
+            /// </summary>
+            private static MutableString/*!*/ RemoveUndefinedEscapes(MutableString/*!*/ pattern) {
+                byte[] bytes = pattern.ToByteArray();
+                var result = new List<byte>(bytes.Length);
+                int backslashes = 0;
+                foreach (byte b in bytes) {
+                    switch ((char)b) {
+                        case '\\':
+                            backslashes++;
+                            result.Add(b);
+                            continue;
+                        case 'g': case 'h': case 'i': case 'j': case 'k': case 'l':
+                        case 'm': case 'o': case 'p': case 'q': case 'u': case 'y':
+                        case 'E': case 'F': case 'H': case 'I': case 'J': case 'K':
+                        case 'L': case 'N': case 'O': case 'P': case 'Q': case 'R':
+                        case 'S': case 'T': case 'U': case 'V': case 'X': case 'Y':
+                            if ((backslashes & 1) != 0) {
+                                result.RemoveAt(result.Count - 1);
+                            }
+                            break;
+                    }
+                    backslashes = 0;
+                    result.Add(b);
+                }
+                return result.Count == bytes.Length ? pattern : MutableString.CreateBinary(result.ToArray(), RubyEncoding.Binary);
+            }
+
+            private RubyArray/*!*/ ReadArray(RubyArray/*!*/ result) {
                 int count = ReadInt32();
-                RubyArray result = new RubyArray(count);
+                if (count < 0) {
+                    throw RubyExceptions.CreateArgumentError("negative array size (or size too big)");
+                }
                 for (int i = 0; i < count; i++) {
                     result.Add(ReadAnObject(false));
                 }
                 return result;
             }
 
-            private Hash/*!*/ ReadHash(int typeFlag) {
+            private Hash/*!*/ ReadHash(int typeFlag, Hash/*!*/ result) {
                 int count = ReadInt32();
-                Hash result = new Hash(Context);
                 for (int i = 0; i < count; i++) {
                     object key = ReadAnObject(false);
                     result[key] = ReadAnObject(false);
@@ -657,15 +1439,20 @@ namespace IronRuby.Builtins {
                 Symbol result;
                 if (typeFlag == ';') {
                     int position = ReadInt32();
-                    if (!_symbols.TryGetValue(position, out result)) {
+                    if (!_symbols.TryGetValue(position, out result) || result == null) {
                         throw RubyExceptions.CreateArgumentError("bad symbol");
                     }
+                } else if (typeFlag == 'I') {
+                    // An encoded symbol: "I" ":" <bytes> <ivars>.
+                    int inner = _reader.ReadByte();
+                    if (inner != ':') {
+                        throw RubyExceptions.CreateArgumentError("dump format error for symbol");
+                    }
+                    result = ReadEncodedSymbol(symbol);
                 } else {
                     // Ruby appears to assume ':'
-
-                    // TODO: encoding
                     int count = ReadInt32();
-                    byte[] data = _reader.ReadBytes(count);
+                    byte[] data = ReadBytes(count);
                     if (symbol) {
                         result = new Symbol(null, Context.CreateSymbol(data, RubyEncoding.Binary));
                     } else {
@@ -677,6 +1464,50 @@ namespace IronRuby.Builtins {
                 return result;
             }
 
+            private Symbol/*!*/ ReadEncodedSymbol(bool symbol) {
+                int count = ReadInt32();
+                byte[] data = ReadBytes(count);
+                int slot = _symbols.Count;
+                _symbols[slot] = null;
+
+                RubyEncoding encoding = RubyEncoding.Binary;
+                int ivarCount = ReadInt32();
+                for (int i = 0; i < ivarCount; i++) {
+                    string name = ReadIdentifier();
+                    object value = ReadAnObject(false);
+                    RubyEncoding parsed = ParseEncodingIVar(name, value);
+                    if (parsed != null) {
+                        encoding = parsed;
+                    }
+                }
+
+                Symbol result;
+                if (symbol) {
+                    result = new Symbol(null, Context.CreateSymbol(data, encoding));
+                } else {
+                    result = new Symbol(encoding.Encoding.GetString(data, 0, data.Length), null);
+                }
+                _symbols[slot] = result;
+                return result;
+            }
+
+            /// <summary>
+            /// Returns the encoding an ":E"/":encoding" pseudo instance variable denotes, or null if
+            /// the name is an ordinary instance variable.
+            /// </summary>
+            private RubyEncoding ParseEncodingIVar(string/*!*/ name, object value) {
+                if (name == EncodingShortIVarName) {
+                    return (value is bool && (bool)value) ? RubyEncoding.UTF8 : RubyEncoding.Ascii;
+                }
+                if (name == EncodingIVarName) {
+                    var str = value as MutableString;
+                    if (str != null) {
+                        return Context.GetRubyEncoding(str);
+                    }
+                }
+                return null;
+            }
+
             private RubyClass/*!*/ ReadType() {
                 return (RubyClass)ReadClassOrModule('c', ReadIdentifier());
             }
@@ -685,31 +1516,218 @@ namespace IronRuby.Builtins {
                 return RubyUtils.CreateObject(ReadType());
             }
 
-            private object/*!*/ ReadObject() {
+            private object/*!*/ ReadObject(int objectRef) {
                 RubyClass theClass = ReadType();
+
+                // The writing side refuses to put a class backed by a CLR object into an 'o'
+                // record, and the reading side refuses to take one out of it: an 'o' record is
+                // instance variables and nothing else, so it cannot rebuild a File.
+                if (!IsDumpableAsObject(theClass)) {
+                    throw RubyExceptions.CreateArgumentError("dump format error");
+                }
+
                 int count = ReadInt32();
-                var attributes = new Dictionary<string, object>();
+                Type type = theClass.GetUnderlyingSystemType();
+                if (typeof(Range).IsAssignableFrom(type)) {
+                    return ReadRange(theClass, count, objectRef);
+                }
+                if (typeof(Exception).IsAssignableFrom(type)) {
+                    // built from its attributes, which are not instance variables of the result
+                    var attributes = new Dictionary<string, object>();
+                    for (int i = 0; i < count; i++) {
+                        string name = ReadIdentifier();
+                        attributes[name] = ReadAnObject(false);
+                    }
+                    return CreateException(theClass, attributes);
+                }
+
+                // The object is in the link table before its instance variables are read, so one
+                // that refers to itself (@a = self) links back to the object being built.
+                object obj = RubyUtils.CreateObject(theClass);
+                if (objectRef >= 0) {
+                    _objects[objectRef] = obj;
+                }
+                // A Set's record holds its table and nothing else MRI 4.0 keeps: its own instance
+                // variables come in an "I" wrapper, and any others in the record are dropped.
+                bool isSet = IsSet(Context, theClass);
                 for (int i = 0; i < count; i++) {
                     string name = ReadIdentifier();
-                    attributes[name] = ReadAnObject(false);
+                    object value = ReadAnObject(false);
+                    if (isSet) {
+                        if (name != "@hash") {
+                            continue;
+                        }
+                        name = SetTableIVar;
+                    }
+                    Context.SetInstanceVariable(obj, name, value);
                 }
-                return RubyUtils.CreateObject(theClass, attributes);
+                return obj;
+            }
+
+            /// <summary>
+            /// MRI's range_loader: the range is allocated, and in the link table, before its attributes are read, so
+            /// a range that is its own begin or end links back to itself; the ends have to compare (begin &lt;=&gt; end
+            /// not nil). Any other pair in the record is ignored, as MRI ignores it (IronRuby used to write a
+            /// subclass's instance variables there).
+            /// </summary>
+            private object/*!*/ ReadRange(RubyClass/*!*/ theClass, int count, int objectRef) {
+                var range = (Range)RubyUtils.CreateObject(theClass);
+                if (objectRef >= 0) {
+                    _objects[objectRef] = range;
+                }
+                object rangeBegin = null, rangeEnd = null;
+                bool excludeEnd = false;
+                for (int i = 0; i < count; i++) {
+                    string name = ReadIdentifier();
+                    object value = ReadAnObject(false);
+                    switch (name) {
+                        case "begin": rangeBegin = value; break;
+                        case "end": rangeEnd = value; break;
+                        case "excl": excludeEnd = RubyOps.IsTrue(value); break;
+                    }
+                }
+                if (rangeBegin != null && rangeEnd != null) {
+                    var compare = _sites.Compare;
+                    if (compare.Target(compare, rangeBegin, rangeEnd) == null) {
+                        throw RubyExceptions.CreateArgumentError("bad value for range");
+                    }
+                }
+                range.InitializeLoaded(rangeBegin, rangeEnd, excludeEnd, theClass == Context.GetClass(typeof(Range)));
+                return range;
+            }
+
+            private object/*!*/ CreateException(RubyClass/*!*/ theClass, Dictionary<string, object>/*!*/ attributes) {
+                var exception = (Exception)RubyUtils.CreateObject(theClass);
+                var data = RubyExceptionData.GetInstance(exception);
+                bool isNameError = theClass.IsSubclassOf(Context.GetClass(typeof(MemberAccessException)));
+                bool isNoMethodError = isNameError && theClass.IsSubclassOf(Context.GetClass(typeof(MissingMethodException)));
+
+                // A loaded exception was never raised here: like MRI's, it has a backtrace and no Locations
+                // (see Exception#backtrace_locations in the prelude).
+                Context.SetInstanceVariable(exception, RubyUtils.GetCoreStateInstanceVariableName("@__backtrace_from_strings__"), true);
+                foreach (var pair in attributes) {
+                    switch (pair.Key) {
+                        case "mesg":
+                            // A nil "mesg" is MRI's way of saying "no message was ever set"; #message
+                            // then answers the class name.
+                            data.Message = pair.Value ?? RubyExceptionData.GetDefaultMessage(theClass);
+                            break;
+
+                        case "bt":
+                            data.Backtrace = pair.Value as RubyArray;
+                            break;
+
+                        case "cause":
+                            var cause = pair.Value as Exception;
+                            if (cause != null) {
+                                data.TrySetCause(cause);
+                            }
+                            break;
+
+                        case "bt_locations":
+                            // MRI writes the Locations of a raised exception as the "bt" strings again, and
+                            // the one it loads answers nil for #backtrace_locations. IronRuby's say so below.
+                            break;
+
+                        case "name":
+                            if (isNameError) {
+                                data.Name = pair.Value;
+                                break;
+                            }
+                            goto default;
+
+                        case "args":
+                            if (isNoMethodError) {
+                                data.Arguments = pair.Value;
+                                break;
+                            }
+                            goto default;
+
+                        case "private_call?":
+                            if (isNoMethodError) {
+                                data.PrivateCall = RubyOps.IsTrue(pair.Value);
+                                break;
+                            }
+                            goto default;
+
+                        default:
+                            Context.SetInstanceVariable(exception,
+                                Array.IndexOf(ExceptionInternalIVars, pair.Key) >= 0 ? HiddenIVarName(pair.Key) : pair.Key, pair.Value);
+                            break;
+                    }
+                }
+                return exception;
+            }
+
+            /// <summary>
+            /// The class of a 'u' record; null for MRI's NameError::message - the message of a NameError, which
+            /// MRI formats when it is first asked for - whose _load answers the string it was dumped as.
+            /// </summary>
+            private RubyClass ReadLoadableType() {
+                string name = ReadIdentifier();
+                return name == "NameError::message" ? null : (RubyClass)ReadClassOrModule('c', name);
             }
 
             private object/*!*/ ReadUsingLoad() {
-                RubyClass theClass = ReadType();
+                RubyClass theClass = ReadLoadableType();
+                if (theClass == null) {
+                    return ReadString();
+                }
+                if (!Context.ResolveMethod(theClass, "_load", VisibilityContext.AllVisible).Found) {
+                    throw RubyExceptions.CreateTypeError("class {0} needs to have method '_load'",
+                        theClass.GetDisplayName(Context, false).ToString());
+                }
                 return _sites.Load.Target(_sites.Load, theClass, ReadString());
             }
 
-            private object/*!*/ ReadUsingMarshalLoad() {
+            // MRI's TYPE_DATA: an object wrapping native data, rebuilt by #_load_data from the
+            // object #_dump_data gave. A class whose instances are plain objects has no such data.
+            private object/*!*/ ReadData(int objectRef) {
+                RubyClass theClass = ReadType();
+                if (IsDumpableAsObject(theClass)) {
+                    throw RubyExceptions.CreateArgumentError("dump format error");
+                }
+
+                object obj = RubyUtils.CreateObject(theClass);
+                if (objectRef >= 0) {
+                    _objects[objectRef] = obj;
+                }
+                if (!Context.ResolveMethod(obj, "_load_data", true).Found) {
+                    throw RubyExceptions.CreateTypeError("class {0} needs to have instance method '_load_data'",
+                        theClass.GetDisplayName(Context, false).ToString());
+                }
+                object data = ReadAnObject(false);
+                _sites.LoadData.Target(_sites.LoadData, obj, data);
+                return obj;
+            }
+
+            private object/*!*/ ReadUsingMarshalLoad(int objectRef) {
+                // taken before anything nested is read, which must not be extended with it
+                RubyModule extension = _pendingExtension;
+                _pendingExtension = null;
+
                 object obj = UnmarshalNewObject();
+                if (objectRef >= 0) {
+                    _objects[objectRef] = obj;
+                }
+                if (extension != null) {
+                    ModuleOps.ExtendObject(extension, obj);
+                }
+                if (!Context.ResolveMethod(obj, "marshal_load", VisibilityContext.AllVisible).Found) {
+                    throw RubyExceptions.CreateTypeError("instance of {0} needs to have method 'marshal_load'",
+                        Context.GetClassOf(obj).GetDisplayName(Context, false).ToString());
+                }
                 _sites.MarshalLoad.Target(_sites.MarshalLoad, obj, ReadAnObject(false));
                 return obj;
             }
 
             private object/*!*/ ReadClassOrModule(int typeFlag) {
-                string name = ReadString().ToString();
-                return ReadClassOrModule(typeFlag, name);
+                // The name is written as raw bytes, and a name that is not ASCII only arrives
+                // wrapped in an 'I' record whose encoding flag is only read once the class has
+                // been resolved - too late to decode by. MRI reads the bytes as the identifier
+                // encoding either way.
+                byte[] name = ReadString().ToByteArray();
+                return ReadClassOrModule(typeFlag, Context.GetIdentifierEncoding().Encoding.GetString(name, 0, name.Length));
             }
 
             private object/*!*/ ReadClassOrModule(int typeFlag, string/*!*/ name) {
@@ -720,31 +1738,39 @@ namespace IronRuby.Builtins {
 
                 bool isClass = result is RubyClass;
                 if (isClass && typeFlag == 'm') {
-                    throw RubyExceptions.CreateArgumentError("{0} does not refer module", name);
+                    throw RubyExceptions.CreateArgumentError("{0} does not refer to module", name);
                 }
                 if (!isClass && typeFlag == 'c') {
-                    throw RubyExceptions.CreateArgumentError("{0} does not refer class", name);
+                    throw RubyExceptions.CreateArgumentError("{0} does not refer to class", name);
                 }
                 return result;
             }
 
-            private RubyStruct/*!*/ ReadStruct() {
-                RubyStruct obj = (UnmarshalNewObject() as RubyStruct);
-                if (obj == null) {
-                    throw RubyExceptions.CreateArgumentError("non-initialized struct");
+            private object/*!*/ ReadStruct(int objectRef) {
+                object instance = UnmarshalNewObject();
+                if (objectRef >= 0) {
+                    _objects[objectRef] = instance;
                 }
+
+                // Data shares the Struct record, so which of the two this is can only be told from
+                // the class that was named in it.
+                if (!(instance is RubyStruct)) {
+                    return ReadData(instance);
+                }
+
+                RubyStruct obj = (RubyStruct)instance;
 
                 var names = obj.GetNames();
                 int count = ReadInt32();
                 if (count != names.Count) {
-                    throw RubyExceptions.CreateArgumentError("struct size differs");
+                    throw RubyExceptions.CreateTypeError("struct {0} not compatible (struct size differs)", Context.GetClassOf(obj).Name);
                 }
 
                 for (int i = 0; i < count; i++) {
                     string name = ReadIdentifier();
                     if (name != names[i]) {
                         RubyClass theClass = Context.GetClassOf(obj);
-                        throw RubyExceptions.CreateTypeError("struct {0} not compatible ({1} for {2})", theClass.Name, name, names[i]);
+                        throw RubyExceptions.CreateTypeError("struct {0} not compatible (:{1} for :{2})", theClass.Name, name, names[i]);
                     }
                     obj[i] = ReadAnObject(false);
                 }
@@ -752,29 +1778,141 @@ namespace IronRuby.Builtins {
                 return obj;
             }
 
-            private object/*!*/ ReadInstanced() {
-                object obj = ReadAnObject(true);
+            /// <summary>
+            /// The members of an 'S' record whose class is a Data go back into the hidden instance
+            /// variables named after them, and the result is frozen - every Data is.
+            /// </summary>
+            private object/*!*/ ReadData(object/*!*/ instance) {
+                RubyClass dataClass = Context.GetClassOf(instance);
+                RubyArray members = GetDataMembers(dataClass);
                 int count = ReadInt32();
+                if (members != null && count != members.Count) {
+                    throw RubyExceptions.CreateTypeError("struct {0} not compatible (struct size differs)", dataClass.Name);
+                }
                 for (int i = 0; i < count; i++) {
                     string name = ReadIdentifier();
-                    Context.SetInstanceVariable(obj, name, ReadAnObject(false));
+                    if (members != null && name != members[i].ToString()) {
+                        throw RubyExceptions.CreateTypeError("struct {0} not compatible (:{1} for :{2})", dataClass.Name, name, members[i]);
+                    }
+                    Context.SetInstanceVariable(instance, RubyUtils.GetHiddenInstanceVariableName(name), ReadAnObject(false));
+                }
+                Context.FreezeObject(instance);
+                return instance;
+            }
+
+            // The member list Data.define recorded on the class (or on the Data class a plain
+            // subclass derives from), in a hidden instance variable; null when there is none.
+            private RubyArray GetDataMembers(RubyClass/*!*/ dataClass) {
+                string ivar = RubyUtils.GetHiddenInstanceVariableName("data_members");
+                for (RubyClass cls = dataClass; cls != null; cls = cls.SuperClass) {
+                    object names;
+                    if (Context.TryGetInstanceVariable(cls, ivar, out names) && names is RubyArray) {
+                        return (RubyArray)names;
+                    }
+                }
+                return null;
+            }
+
+            private object/*!*/ ReadInstanced(int objectRef) {
+                int typeFlag = _reader.ReadByte();
+                if (typeFlag == ':') {
+                    return ReadEncodedSymbol(true).GetSymbol(Context);
+                }
+
+                if (typeFlag == 'u') {
+                    // The instance variables written with a _dump string belong to that string,
+                    // and _load is handed them along with it - that is how Time gets its zone and
+                    // its offset back.
+                    RubyClass theClass = ReadLoadableType();
+                    MutableString data = ReadString();
+
+                    // The object itself is entered in the link table only once those instance
+                    // variables have been read, so they take the earlier ids: in a dump of one
+                    // Time twice, the second is a link to id 2, not to id 1.
+                    if (objectRef >= 0 && _objects.Count == objectRef + 1) {
+                        _objects.Remove(objectRef);
+                    }
+
+                    ReadIVars(data);
+                    object loaded = theClass != null ? _sites.Load.Target(_sites.Load, theClass, data) : data;
+                    _objects[_objects.Count] = loaded;
+                    _selfLinked = true;
+                    return loaded;
+                }
+
+                // a Regexp, or a Regexp subclass's instance ('C')
+                // The wrapper belongs to the object right under it: a Regexp, or a Regexp subclass's instance ('C',
+                // where ReadUserClass hands it on once it has seen what the subclass wraps). Left set for every 'C',
+                // it reached a Regexp that was an element of an Array subclass, which then took the bytes after
+                // it for instance variables of its own.
+                _regexHasIVars = (typeFlag == '/');
+                // (a Regexp subclass's instance exists before its record is read, and can be linked to)
+                _regexRef = (typeFlag == '/') ? objectRef : -1;
+                _userClassHasIVars = (typeFlag == 'C');
+                _regexIVars = null;
+                object obj = ReadAnObject(typeFlag, objectRef);
+                _regexHasIVars = false;
+                _userClassHasIVars = false;
+                var read = _regexIVars;
+                _regexIVars = null;
+                if (read != null) {
+                    // ReadRegex has read them already
+                    foreach (var ivar in read) {
+                        SetIVar(obj, ivar.Key, ivar.Value);
+                    }
+                } else {
+                    ReadIVars(obj);
                 }
                 return obj;
             }
 
+            private void ReadIVars(object obj) {
+                int count = ReadInt32();
+                for (int i = 0; i < count; i++) {
+                    string name = ReadIdentifier();
+                    object value = ReadAnObject(false);
+                    SetIVar(obj, name, value);
+                }
+            }
 
-            private object/*!*/ ReadExtended() {
+            private void SetIVar(object obj, string/*!*/ name, object value) {
+                RubyEncoding encoding = ParseEncodingIVar(name, value);
+                if (encoding != null) {
+                    ForceMarshalEncoding(obj, encoding);
+                } else {
+                    Context.SetInstanceVariable(obj, name, value);
+                }
+            }
+
+            private object/*!*/ ReadExtended(int objectRef) {
                 string extensionName = ReadIdentifier();
                 RubyModule module = ReadClassOrModule('m', extensionName) as RubyModule;
-                object obj = ReadAnObject(true);
-                ModuleOps.ExtendObject(module, obj);
+                int typeFlag = _reader.ReadByte();
+
+                // MRI extends a user-marshaled object as soon as it is allocated, so that its
+                // #marshal_load already sees the module (see ReadUsingMarshalLoad).
+                if (typeFlag == 'U') {
+                    _pendingExtension = module;
+                }
+                object obj = ReadAnObject(typeFlag, objectRef);
+                if (typeFlag != 'U') {
+                    ModuleOps.ExtendObject(module, obj);
+                }
                 return obj;
             }
 
-            private object/*!*/ ReadUserClass() {
+            private RubyModule _pendingExtension;
+
+            private object/*!*/ ReadUserClass(int objectRef) {
                 object obj = UnmarshalNewObject();
+                if (objectRef >= 0) {
+                    _objects[objectRef] = obj;
+                }
                 bool loaded = false;
                 int typeFlag = _reader.ReadByte();
+                // see ReadInstanced
+                _regexHasIVars = _userClassHasIVars && typeFlag == '/';
+                _userClassHasIVars = false;
                 switch (typeFlag) {
                     case '"':
                         MutableString msc = (obj as MutableString);
@@ -796,7 +1934,7 @@ namespace IronRuby.Builtins {
                     case '[':
                         RubyArray asc = (obj as RubyArray);
                         if (asc != null) {
-                            asc.AddRange(ReadArray());
+                            ReadArray(asc);
                             loaded = true;
                         }
                         break;
@@ -805,15 +1943,31 @@ namespace IronRuby.Builtins {
                     case '}':
                         Hash hsc = (obj as Hash);
                         if (hsc != null) {
-                            Hash hash = ReadHash(typeFlag);
-                            hsc.DefaultProc = hash.DefaultProc;
-                            hsc.DefaultValue = hash.DefaultValue;
-                            foreach (var pair in hash) {
-                                hsc.Add(pair.Key, pair.Value);
+                            // A "C" record naming Hash itself says nothing about the class, so it
+                            // says the other thing MRI writes it for: the hash compares by identity.
+                            if (Context.GetClassOf(hsc) == Context.GetClass(typeof(Hash))) {
+                                hsc.CompareByIdentity();
+                            }
+                            ReadHash(typeFlag, hsc);
+                            loaded = true;
+                        }
+                        break;
+
+                    case 'C':
+                        // MRI writes "C" ":Hash" "{" for a compare_by_identity hash, and nests it inside
+                        // another "C" record when the hash is an instance of a Hash subclass.
+                        Hash inner = ReadUserClass(-1) as Hash;
+                        Hash outer = obj as Hash;
+                        if (inner != null && outer != null) {
+                            outer.CompareByIdentity();
+                            outer.DefaultValue = inner.DefaultValue;
+                            foreach (var pair in inner) {
+                                outer[pair.Key] = pair.Value;
                             }
                             loaded = true;
                         }
                         break;
+
                     default:
                         break;
                 }
@@ -823,10 +1977,33 @@ namespace IronRuby.Builtins {
                 return obj;
             }
 
+            // Object reference slots: NewRef asks for a fresh slot, NoRef suppresses caching, and any
+            // value >= 0 is a slot an enclosing record ("I", "e", "C") already reserved for this object.
+            private const int NewRef = -1;
+            private const int NoRef = -2;
+
+            // Set by a record that entered its object in the link table itself, at a later id than
+            // the slot reserved for it - see ReadInstanced's "u" case.
+            private bool _selfLinked;
+
+            // Link ids whose record has been read to its end, and those MRI never counts as read
+            // to their end at all: only the former run the proc when a later record refers to them.
+            private readonly HashSet<int>/*!*/ _finished = new HashSet<int>();
+            private readonly HashSet<int>/*!*/ _unfinished = new HashSet<int>();
+
             private object ReadAnObject(bool noCache) {
+                return ReadAnObject(_reader.ReadByte(), noCache ? NoRef : NewRef);
+            }
+
+            private object ReadAnObject(int typeFlag, int reservedRef) {
+                _started = true;
                 object obj = null;
-                bool runProc = (!noCache && _proc != null);
-                int typeFlag = _reader.ReadByte();
+                bool outermost = (reservedRef == NewRef);
+                bool runProc = (outermost && _proc != null);
+                bool freezable = false;
+
+                // the slot this record took in the link table, if it took one
+                int linkRef = -1;
                 switch (typeFlag) {
                     case '0':
                         obj = null;
@@ -854,23 +2031,45 @@ namespace IronRuby.Builtins {
                         break;
 
                     case '@':
-                        obj = _objects[ReadInt32()];
-                        runProc = false;
+                        int link = ReadInt32();
+                        if (!_objects.TryGetValue(link, out obj)) {
+                            throw RubyExceptions.CreateArgumentError("dump format error (unlinked)");
+                        }
+                        // A Regexp's instance variables are read before the Regexp exists (ReadRegex): one of them
+                        // that refers to it is MRI's "bad link" (r_object's link to an entry that is still Qundef).
+                        // Not any empty slot: a _load that answers nil fills its slot with nil.
+                        if (link == _regexBeingRead) {
+                            throw RubyExceptions.CreateArgumentError("dump format error (bad link)");
+                        }
+                        // MRI runs the proc over a back-reference too - the proc sees each place
+                        // an object appears in the dump, not each object - but only once the
+                        // object it points at is finished. A container that contains itself is
+                        // read through a reference to its own half-built self, and that one the
+                        // proc never sees.
+                        runProc = runProc && _finished.Contains(link);
                         break;
 
                     default:
                         // Reserve a reference
-                        int objectRef = _objects.Count;
-                        if (!noCache) {
+                        int objectRef = reservedRef;
+                        if (objectRef == NewRef) {
+                            objectRef = _objects.Count;
                             _objects[objectRef] = null;
                         }
 
+                        freezable = true;
                         switch (typeFlag) {
                             case 'f':
                                 obj = ReadFloat();
+                                freezable = false;
                                 break;
                             case 'l':
-                                obj = ReadBignum();
+                                // An Integer travels as a bignum record whenever it is too wide for
+                                // MRI's 31-bit fixnum record, which covers most of the values this
+                                // runtime carries as a long. Normalize so the loaded value has the
+                                // canonical representation for its magnitude.
+                                obj = Protocols.Normalize(ReadBignum());
+                                freezable = false;
                                 break;
                             case '"':
                                 obj = ReadString();
@@ -878,56 +2077,138 @@ namespace IronRuby.Builtins {
                             case '/':
                                 obj = ReadRegex();
                                 break;
-                            case '[':
-                                obj = ReadArray();
+                            case '[': {
+                                RubyArray array = new RubyArray();
+                                if (objectRef >= 0) {
+                                    _objects[objectRef] = array;
+                                }
+                                obj = ReadArray(array);
                                 break;
+                            }
                             case '{':
-                            case '}':
-                                obj = ReadHash(typeFlag);
+                            case '}': {
+                                Hash hash = new Hash(Context);
+                                if (objectRef >= 0) {
+                                    _objects[objectRef] = hash;
+                                }
+                                obj = ReadHash(typeFlag, hash);
                                 break;
+                            }
                             case 'o':
-                                obj = ReadObject();
+                                obj = ReadObject(objectRef);
                                 break;
                             case 'u':
                                 obj = ReadUsingLoad();
                                 break;
                             case 'U':
-                                obj = ReadUsingMarshalLoad();
+                                obj = ReadUsingMarshalLoad(objectRef);
+                                break;
+                            case 'd':
+                                obj = ReadData(objectRef);
                                 break;
                             case 'c':
                             case 'm':
                                 obj = ReadClassOrModule(typeFlag);
+                                freezable = false;
+                                break;
+                            case 'M':
+                                obj = ReadOldModule();
+                                freezable = false;
                                 break;
                             case 'S':
-                                obj = ReadStruct();
+                                obj = ReadStruct(objectRef);
                                 break;
                             case 'I':
-                                obj = ReadInstanced();
+                                obj = ReadInstanced(objectRef);
                                 break;
                             case 'e':
-                                obj = ReadExtended();
+                                obj = ReadExtended(objectRef);
                                 break;
                             case 'C':
-                                obj = ReadUserClass();
+                                obj = ReadUserClass(objectRef);
                                 break;
                             default:
-                                throw RubyExceptions.CreateArgumentError("dump format error({0})", (int)typeFlag);
+                                throw RubyExceptions.CreateArgumentError("dump format error({0})",
+                                    "0x" + ((int)typeFlag).ToString("x", CultureInfo.InvariantCulture));
                         }
-                        if (!noCache) {
+                        if (objectRef >= 0 && !_selfLinked) {
                             _objects[objectRef] = obj;
+                            linkRef = objectRef;
                         }
+                        if (objectRef >= 0) {
+                            // An object handed to #_load or #marshal_load stays among the
+                            // unfinished ones, so a later reference to it does not reach the
+                            // proc the way a reference to a finished object does - unless an 'I'
+                            // record wraps it, which finishes it as it adds the ivars.
+                            if (typeFlag == 'u' || typeFlag == 'U') {
+                                _unfinished.Add(objectRef);
+                            } else if (typeFlag == 'I') {
+                                _unfinished.Remove(objectRef);
+                            }
+
+                            if (!_unfinished.Contains(objectRef)) {
+                                _finished.Add(objectRef);
+                            }
+                        }
+                        _selfLinked = false;
                         break;
                 }
+                if (_freeze && freezable && outermost && obj != null) {
+                    KernelOps.Freeze(Context, obj);
+
+                    // MRI hands a frozen String to the fstring table, so two equal strings in one
+                    // dump come back as one object. The link table has to point at the survivor
+                    // too, or a back-reference to the second one would answer a different object
+                    // than the record itself did.
+                    var str = obj as MutableString;
+                    if (str != null) {
+                        obj = Deduplicate(str);
+                        if (linkRef >= 0 && !ReferenceEquals(obj, str)) {
+                            _objects[linkRef] = obj;
+                        }
+                    }
+                }
                 if (runProc) {
-                    _sites.ProcCall.Target(_sites.ProcCall, _proc, obj);
+                    obj = _sites.ProcCall.Target(_sites.ProcCall, _proc, obj);
                 }
                 return obj;
+            }
+
+            /// <summary>
+            /// The one frozen string with these bytes and this encoding, as MRI's fstring table
+            /// keeps it. Only strings with nothing else about them qualify: one carrying instance
+            /// variables or a singleton class is its own object.
+            /// </summary>
+            private MutableString/*!*/ Deduplicate(MutableString/*!*/ str) {
+                // only a plain String joins the table; an instance of a subclass keeps its class
+                if (Context.HasInstanceVariables(str) || str.GetType() != typeof(MutableString)) {
+                    return str;
+                }
+
+                return RubyOps.InternFrozenString(str);
+            }
+
+            private object/*!*/ ReadOldModule() {
+                // Marshal format 4.6 and earlier wrote classes and modules with a single "M" tag.
+                string name = ReadString().ToString();
+                RubyModule result;
+                if (!Context.TryGetModule(_globalScope, name, out result)) {
+                    throw RubyExceptions.CreateArgumentError("undefined class/module {0}", name);
+                }
+                return result;
             }
 
             internal object Load() {
                 try {
                     CheckPreamble();
                     return ReadAnObject(false);
+                } catch (EndOfStreamException e) {
+                    // A stream that ended before a single record began is at its end, which MRI
+                    // reports as such; a record that started and ran out is a short dump.
+                    if (FromStream && !_started) {
+                        throw new EOFError("end of file reached");
+                    }
+                    throw RubyExceptions.CreateArgumentError("marshal data too short", e);
                 } catch (IOException e) {
                     throw RubyExceptions.CreateArgumentError("marshal data too short", e);
                 }
@@ -939,6 +2220,18 @@ namespace IronRuby.Builtins {
         #region Public Instance Methods
 
         // TODO: Use DefaultValue attribute when it works with the binder
+        /// <summary>
+        /// A marshalled stream is bytes, so MRI puts the IO it was handed into binary mode first -
+        /// for anything that has a #binmode to put into it, which a StringIO does.
+        /// </summary>
+        private static void SetBinaryMode(CallSite<Func<CallSite, object, object>>/*!*/ binmode,
+            RespondToStorage/*!*/ respondToStorage, object io) {
+
+            if (io != null && Protocols.RespondTo(respondToStorage, io, "binmode")) {
+                binmode.Target(binmode, io);
+            }
+        }
+
         [RubyMethod("dump", RubyMethodAttributes.PublicSingleton)]
         public static MutableString Dump(WriterSites/*!*/ sites, RubyModule/*!*/ self, object obj) {
             return Dump(sites, self, obj, -1);
@@ -951,7 +2244,9 @@ namespace IronRuby.Builtins {
             BinaryWriter writer = new BinaryWriter(buffer);
             MarshalWriter dumper = new MarshalWriter(sites, writer, self.Context, limit);
             dumper.Dump(obj);
-            return MutableString.CreateBinary(buffer.ToArray());
+            // one copy, straight out of the stream's buffer, rather than ToArray's and then CreateBinary's
+            int length = (int)buffer.Length;
+            return MutableString.CreateBinary(length).Append(buffer.GetBuffer(), 0, length);
         }
 
         // TODO: Use DefaultValue attribute when it works with the binder
@@ -965,7 +2260,7 @@ namespace IronRuby.Builtins {
 
         // TODO: Use DefaultValue attribute when it works with the binder
         [RubyMethod("dump", RubyMethodAttributes.PublicSingleton)]
-        public static object Dump(WriterSites/*!*/ sites, RespondToStorage/*!*/ respondToStorage, 
+        public static object Dump(WriterSites/*!*/ sites, RespondToStorage/*!*/ respondToStorage,
             RubyModule/*!*/ self, object obj, object io, [Optional]int? limit) {
             Stream stream = null;
             if (io != null) {
@@ -975,42 +2270,98 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateTypeError("instance of IO needed");
             }
 
+            SetBinaryMode(sites.Binmode, respondToStorage, io);
+
             BinaryWriter writer = new BinaryWriter(stream);
             MarshalWriter dumper = new MarshalWriter(sites, writer, self.Context, limit);
             dumper.Dump(obj);
             return io;
         }
 
+        /// <summary>
+        /// Splits the optional trailing arguments of Marshal.load into the proc and the "freeze:" option.
+        /// </summary>
+        private static bool ParseLoadOptions(RubyContext/*!*/ context, object arg1, object arg2, out object proc) {
+            proc = null;
+            bool freeze = false;
+
+            for (int i = 0; i < 2; i++) {
+                object arg = (i == 0) ? arg1 : arg2;
+                if (arg == null || arg == System.Reflection.Missing.Value) {
+                    continue;
+                }
+
+                var options = arg as IDictionary<object, object>;
+                if (options != null) {
+                    foreach (var pair in options) {
+                        var key = pair.Key as RubySymbol;
+                        if (key != null && key.ToString() == "freeze") {
+                            freeze = RubyOps.IsTrue(pair.Value);
+                        } else {
+                            throw RubyExceptions.CreateArgumentError("unknown keyword: {0}", context.Inspect(pair.Key));
+                        }
+                    }
+                    continue;
+                }
+
+                // anything that answers #call will do; one that does not fails when it is called
+                proc = arg;
+            }
+
+            return freeze;
+        }
+
         [RubyMethod("load", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("restore", RubyMethodAttributes.PublicSingleton)]
-        public static object Load(ReaderSites/*!*/ sites, RubyScope/*!*/ scope, RubyModule/*!*/ self, [NotNull]MutableString/*!*/ source, [Optional]Proc proc) {
+        public static object Load(ReaderSites/*!*/ sites, RubyScope/*!*/ scope, RubyModule/*!*/ self, [NotNull]MutableString/*!*/ source,
+            [Optional]object proc, [Keywords, Optional]object options) {
+
+            object block;
+            bool freeze = ParseLoadOptions(self.Context, proc, options, out block);
             BinaryReader reader = new BinaryReader(new MemoryStream(source.ConvertToBytes()));
-            MarshalReader loader = new MarshalReader(sites, reader, scope.GlobalScope, proc);
+            MarshalReader loader = new MarshalReader(sites, reader, scope.GlobalScope, block, freeze);
             return loader.Load();
         }
 
         [RubyMethod("load", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("restore", RubyMethodAttributes.PublicSingleton)]
-        public static object Load(ReaderSites/*!*/ sites, RubyScope/*!*/ scope, RubyModule/*!*/ self, [NotNull]RubyIO/*!*/ source, [Optional]Proc proc) {
+        public static object Load(ReaderSites/*!*/ sites, RubyScope/*!*/ scope, RubyModule/*!*/ self, [NotNull]RubyIO/*!*/ source,
+            [Optional]object proc, [Keywords, Optional]object options) {
+
+            object block;
+            bool freeze = ParseLoadOptions(self.Context, proc, options, out block);
             BinaryReader reader = source.GetBinaryReader();
-            MarshalReader loader = new MarshalReader(sites, reader, scope.GlobalScope, proc);
+            MarshalReader loader = new MarshalReader(sites, reader, scope.GlobalScope, block, freeze) { FromStream = true };
             return loader.Load();
         }
 
         [RubyMethod("load", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("restore", RubyMethodAttributes.PublicSingleton)]
-        public static object Load(ReaderSites/*!*/ sites, RespondToStorage/*!*/ respondToStorage, 
-            RubyScope/*!*/ scope, RubyModule/*!*/ self, object source, [Optional]Proc proc) {
+        public static object Load(ReaderSites/*!*/ sites, RespondToStorage/*!*/ respondToStorage, ConversionStorage<MutableString>/*!*/ toStr,
+            RubyScope/*!*/ scope, RubyModule/*!*/ self, object source, [Optional]object proc, [Keywords, Optional]object options) {
+
+            // MRI: anything with #to_str is the dump itself; otherwise the source has to answer
+            // both #getbyte and #read to count as an IO.
+            MutableString dump = source != null ? Protocols.TryCastToString(toStr, source) : null;
+            if (dump != null) {
+                return Load(sites, scope, self, dump, proc, options);
+            }
+
+            object block;
+            bool freeze = ParseLoadOptions(self.Context, proc, options, out block);
 
             Stream stream = null;
-            if (source != null) {
+            if (source != null && Protocols.RespondTo(respondToStorage, source, "getbyte")) {
                 stream = RubyIOOps.CreateIOWrapper(respondToStorage, source, FileAccess.Read);
             }
             if (stream == null || !stream.CanRead) {
                 throw RubyExceptions.CreateTypeError("instance of IO needed");
             }
+
+            SetBinaryMode(sites.Binmode, respondToStorage, source);
+
             BinaryReader reader = new BinaryReader(stream);
-            MarshalReader loader = new MarshalReader(sites, reader, scope.GlobalScope, proc);
+            MarshalReader loader = new MarshalReader(sites, reader, scope.GlobalScope, block, freeze) { FromStream = true };
             return loader.Load();
         }
 

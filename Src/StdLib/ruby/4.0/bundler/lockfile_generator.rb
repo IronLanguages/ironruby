@@ -1,0 +1,158 @@
+# frozen_string_literal: true
+
+module Bundler
+  class LockfileGenerator
+    attr_reader :definition
+    attr_reader :out
+
+    # @private
+    def initialize(definition)
+      @definition = definition
+      @out = String.new
+    end
+
+    def self.generate(definition)
+      new(definition).generate!
+    end
+
+    def generate!
+      add_sources
+      add_platforms
+      add_dependencies
+      add_checksums
+      add_locked_ruby_version
+      add_bundled_with
+
+      out
+    end
+
+    private
+
+    def add_sources
+      definition.sources.lock_sources.each_with_index do |source, idx|
+        out << "\n" unless idx.zero?
+
+        # Add the source header
+        out << source.to_lock
+
+        # Find all specs for this source
+        specs = definition.resolve.select {|s| source.can_lock?(s) }
+        add_specs(specs)
+      end
+    end
+
+    def add_specs(specs)
+      # This needs to be sorted by full name so that
+      # gems with the same name, but different platform
+      # are ordered consistently
+      specs.sort_by(&:full_name).each do |spec|
+        next if spec.name == "bundler"
+        out << spec.to_lock
+      end
+    end
+
+    def add_platforms
+      add_section("PLATFORMS", definition.platforms)
+    end
+
+    def add_dependencies
+      out << "\nDEPENDENCIES\n"
+
+      handled = []
+      definition.dependencies.sort_by(&:to_s).each do |dep|
+        next if handled.include?(dep.name)
+        out << dep.to_lock << "\n"
+        handled << dep.name
+      end
+    end
+
+    def add_checksums
+      return unless definition.locked_checksums
+      checksums = definition.resolve.map do |spec|
+        spec.source.checksum_store.to_lock(spec)
+      end
+
+      add_section("CHECKSUMS", checksums + bundler_checksum)
+    end
+
+    def add_locked_ruby_version
+      return unless locked_ruby_version = definition.locked_ruby_version
+      add_section("RUBY VERSION", locked_ruby_version.to_s)
+    end
+
+    def add_bundled_with
+      add_section("BUNDLED WITH", definition.bundler_version_to_lock.to_s)
+    end
+
+    def add_section(name, value)
+      out << "\n#{name}\n"
+      case value
+      when Array
+        value.map(&:to_s).sort.each do |val|
+          out << "  #{val}\n"
+        end
+      when Hash
+        value.to_a.sort_by {|k, _| k.to_s }.each do |key, val|
+          out << "  #{key}: #{val}\n"
+        end
+      when String
+        out << "  #{value}\n"
+      else
+        raise ArgumentError, "#{value.inspect} can't be serialized in a lockfile"
+      end
+    end
+
+    def bundler_checksum
+      # In frozen mode the lockfile can't change, so reproduce whatever bundler
+      # entry is already locked instead of recording one for the running bundler
+      # version, which may legitimately differ from the locked one.
+      return locked_bundler_checksum if Bundler.frozen_bundle?
+
+      # `.dev` versions and `SKIP_BUNDLER_CHECKSUM` are deliberate opt-outs (used
+      # by Bundler/RubyGems' own development and release tasks): never record a
+      # checksum for Bundler itself in those cases.
+      return [] if Bundler.gem_version.to_s.end_with?(".dev") || ENV["SKIP_BUNDLER_CHECKSUM"]
+
+      bundler_spec = definition.sources.metadata_source.specs.search(["bundler", Bundler.gem_version]).last
+
+      # Record a fresh checksum from the locally cached gem when it's available.
+      # When it isn't (e.g. a fresh checkout/CI that never downloaded the bundler
+      # gem), fall back to whatever checksum is already locked rather than
+      # dropping it, so the entry stays consistent across environments.
+      if File.exist?(bundler_spec.cache_file)
+        require "rubygems/package"
+
+        package = Gem::Package.new(bundler_spec.cache_file)
+        definition.sources.metadata_source.checksum_store.register(bundler_spec, Checksum.from_gem_package(package))
+      elsif bundled_with_changing?
+        # We can't compute a fresh checksum (the bundler gem isn't cached) and the
+        # BUNDLED WITH version is changing. Keeping the previously locked checksum
+        # would leave a `bundler (<old version>) sha256=...` entry that no longer
+        # matches the new BUNDLED WITH version, so drop it instead.
+        return []
+      end
+
+      return [] if definition.sources.metadata_source.checksum_store.missing?(bundler_spec)
+
+      [definition.sources.metadata_source.checksum_store.to_lock(bundler_spec)]
+    end
+
+    def bundled_with_changing?
+      locked_gems = definition.locked_gems
+      return false unless locked_gems
+
+      locked_gems.bundler_version != definition.bundler_version_to_lock
+    end
+
+    def locked_bundler_checksum
+      locked_version = definition.locked_gems&.bundler_version
+      return [] unless locked_version
+
+      metadata_source = definition.sources.metadata_source
+      locked_spec = LazySpecification.new("bundler", locked_version, Gem::Platform::RUBY, metadata_source)
+      return [] if metadata_source.checksum_store.missing?(locked_spec)
+
+      [metadata_source.checksum_store.to_lock(locked_spec)]
+    end
+  end
+end

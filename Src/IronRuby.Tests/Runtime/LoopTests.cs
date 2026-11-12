@@ -43,7 +43,7 @@ puts x
 1
 2
 3
-nil
+
 ");
         }
 
@@ -66,7 +66,7 @@ puts x
             }, @"
 3
 2
-nil
+
 ");
         }
 
@@ -141,7 +141,7 @@ puts x
 2
 2
 1
-nil
+
 ");
         }
 
@@ -169,41 +169,7 @@ puts x
 2
 2
 1
-nil
-");
-        }
 
-        /// <summary>
-        /// Break, retry, redo and next in a method, out of loop/rescue.
-        /// </summary>
-        public void MethodBreakRetryRedoNext1() {
-            TestOutput(@"
-def _break; break rescue p $!; end
-def _redo; redo rescue puts 'not caught here'; end
-def _retry; retry rescue puts 'not caught here'; end
-def _next; next rescue puts 'not caught here'; end
-def e_break; eval('break') rescue p $!; end
-def e_redo; eval('redo') rescue puts 'not caught here'; end
-def e_retry; eval('retry') rescue puts 'not caught here'; end           # // TODO: bug
-def e_next; eval('next') rescue puts 'not caught here'; end             # // TODO: bug
-
-_break
-_retry rescue p $!
-_redo rescue p $!
-_next rescue p $!
-e_break
-e_retry rescue p $!
-e_redo rescue p $!
-e_next rescue p $!
-", @"
-#<LocalJumpError: unexpected break>
-#<LocalJumpError: retry used out of rescue>
-#<LocalJumpError: unexpected redo>
-#<LocalJumpError: unexpected next>
-#<LocalJumpError: unexpected break>
-#<LocalJumpError: retry used out of rescue>
-not caught here
-not caught here
 ");
         }
 
@@ -331,6 +297,113 @@ end
 c
 x
 c
+");
+        }
+
+        /// <summary>
+        /// A global variable read or assigned in a specialized method or an outlined loop (JitCompiler.EmitGlobalRead,
+        /// EmitGlobalWrite): the value it holds now, whatever it is, through an alias too; what an assignment stores
+        /// is what a read sees, and trace_var still sees every assignment. A special variable, an undefined one, or
+        /// one the loop both reads and assigns keeps the loop generic. The output is CRuby 4.0's.
+        /// </summary>
+        public void JitGlobals1() {
+            TestOutput(@"
+require 'ruby4'
+$g = 3
+def gm(n) = $g + n
+def gl(m)
+  i = 0; s = 0
+  while i < m
+    s = $g
+    i += 1
+  end
+  s
+end
+p 100.times.map { |i| gm(i) }.sum
+p gl(10_000)
+$g = 7
+p gm(1), gl(100)
+$g = 2**70
+p gm(1), gl(100)
+$g = ""str""
+p gl(100)
+alias $h $g
+$h = :via_alias
+p gl(100)
+p((gm(""x"") rescue $!.class))
+def gs(m)
+  i = 0; s = nil
+  while i < m
+    s = $stdout
+    i += 1
+  end
+  s.equal?(STDOUT)
+end
+p gs(10_000)
+def gu(m)
+  i = 0; s = 1
+  while i < m
+    s = $undefined_here
+    i += 1
+  end
+  s
+end
+$VERBOSE = nil
+p gu(10_000)
+$t = 0
+th = Thread.new { 1000.times { |k| $t = k } }
+th.join
+p gl(10), $t
+def gw(m)
+  i = 0
+  while i < m
+    $w = i * 1_000_000
+    i += 1
+  end
+  $w
+end
+p gw(10_000)
+$cnt = 0
+def grw(m)
+  i = 0
+  while i < m
+    $cnt = $cnt + 1
+    i += 1
+  end
+  $cnt
+end
+p grw(10_000), grw(10_000)
+traced = []
+trace_var(:$w) { |v| traced << v }
+p gw(20_000), traced.size, traced.last
+untrace_var(:$w)
+p gw(5), traced.size
+def mw(v) = ($w2 = v)
+p 100.times.map { |i| mw(i) }.sum, $w2
+", @"
+5250
+3
+8
+7
+1180591620717411303425
+1180591620717411303424
+""str""
+:via_alias
+NoMethodError
+true
+nil
+:via_alias
+999
+9999000000
+10000
+20000
+19999000000
+20000
+19999000000
+4000000
+20000
+4950
+99
 ");
         }
     }

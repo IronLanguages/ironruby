@@ -13,15 +13,12 @@
  *
  * ***************************************************************************/
 
+using System;
 using Microsoft.Scripting;
 
 namespace IronRuby.Compiler.Ast {
     using Microsoft.Scripting.Utils;
-    #if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
     
     // x = expression rescue jump_statement
@@ -52,7 +49,7 @@ using MSA = Microsoft.Scripting.Ast;
         private Body/*!*/ ToBody(AstGenerator/*!*/ gen) {
             return new Body(
                 new Statements(_guardedExpression),
-                CollectionUtils.MakeList(new RescueClause(Expression.EmptyArray, null, new Statements(_rescueClauseStatement), _rescueSpan)),
+                CollectionUtils.MakeList(new RescueClause(Array.Empty<Expression>(), null, new Statements(_rescueClauseStatement), _rescueSpan)),
             null, null, Location);
         }
 
@@ -60,7 +57,7 @@ using MSA = Microsoft.Scripting.Ast;
             return ToBody(gen).TransformResult(gen, ResultOperation.Ignore);
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator gen) {
             return ToBody(gen).TransformRead(gen);
         }
     }

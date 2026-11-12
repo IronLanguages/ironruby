@@ -14,8 +14,9 @@
  * ***************************************************************************/
 
 using System;
+using System.Collections.Generic;
 using System.IO;
-using System.Threading;
+using System.Runtime.InteropServices;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Utils;
 
@@ -25,8 +26,16 @@ namespace IronRuby.Builtins {
     /// </summary>
     public partial class RubyIO : IDisposable {
         private RubyContext/*!*/ _context;
-        private RubyEncoding/*!*/ _externalEncoding;
-        private RubyEncoding _internalEncoding;
+        // CRuby's fptr->encs.enc / fptr->encs.enc2. Either may be null, which means
+        // "no encoding was pinned onto this stream, follow Encoding.default_external
+        // whenever it is asked for". _enc2 is non-null only when a transcoding is in
+        // effect, and then _enc2 is the external side and _enc the internal one.
+        private RubyEncoding _enc;
+        private RubyEncoding _enc2;
+
+        // the :invalid, :undef, :replace and decorator options the stream was opened with,
+        // which the transcoding on the way in and on the way out has to honour
+        private IDictionary<object, object> _conversionOptions;
 
         // -1 if uninitialized or closed:
         private int _fileDescriptor;
@@ -36,6 +45,19 @@ namespace IronRuby.Builtins {
 
         private bool _autoFlush;
         private IOMode _mode;
+
+        // IO#timeout (3.2): the value as given, and what waits for the stream to be ready for a
+        // read (true) or a write (false) until then, answering false if it is not.
+        private object _timeout;
+        private Func<bool, bool> _waitForStream;
+        private int _timeoutMilliseconds = System.Threading.Timeout.Infinite;
+
+        // Another IO reads and writes the same buffered stream (CreateSharedView: a Ractor's $stdin).
+        private bool _sharesStream;
+
+        // #read_nonblock and #write_nonblock fail at once rather than wait out the timeout.
+        [ThreadStatic]
+        private static bool _inNonBlockingOperation;
         public int LineNumber { get; set; }
 
         #region Constants
@@ -43,15 +65,6 @@ namespace IronRuby.Builtins {
         public const int SEEK_SET = 0;
         public const int SEEK_CUR = 1;
         public const int SEEK_END = 2;
-
-        public static SeekOrigin ToSeekOrigin(int rubySeekOrigin) {
-            switch (rubySeekOrigin) {
-                case SEEK_SET: return SeekOrigin.Begin;
-                case SEEK_END: return SeekOrigin.End;
-                case SEEK_CUR: return SeekOrigin.Current;
-                default: throw RubyExceptions.CreateArgumentError("Invalid argument");
-            }
-        }
 
         public static long GetSeekPosition(long length, long position, long seekOffset, SeekOrigin origin) {
             switch (origin) {
@@ -72,8 +85,6 @@ namespace IronRuby.Builtins {
             _context = context;
             _fileDescriptor = -1;
             _stream = null;
-            _externalEncoding = context.DefaultExternalEncoding;
-            _internalEncoding = context.DefaultInternalEncoding;
         }
 
         public RubyIO(RubyContext/*!*/ context, Stream/*!*/ stream, IOMode mode) 
@@ -93,6 +104,25 @@ namespace IronRuby.Builtins {
             _fileDescriptor = descriptor;
         }
 
+        /// <summary>
+        /// Another IO object over this one's stream, buffer and descriptor: a non-main Ractor's
+        /// $stdin, $stdout and $stderr, which CRuby makes anew for the same descriptors.
+        /// </summary>
+        public RubyIO/*!*/ CreateSharedView() {
+            var result = new RubyIO(_context);
+            // IO#timeout stays each IO's own: the stream binds to the timeout of whichever of the two
+            // uses it (GetStream).
+            _sharesStream = result._sharesStream = true;
+            result._stream = _stream;
+            result._fileDescriptor = _fileDescriptor;
+            result._mode = _mode;
+            result._enc = _enc;
+            result._enc2 = _enc2;
+            result._conversionOptions = _conversionOptions;
+            result._autoFlush = _autoFlush;
+            return result;
+        }
+
         public void Reset(Stream/*!*/ stream, IOMode mode) {
             _mode = mode;
             SetStream(stream);
@@ -107,14 +137,77 @@ namespace IronRuby.Builtins {
             get { return _context; }
         }
 
-        public RubyEncoding ExternalEncoding {
-            get { return _externalEncoding; }
-            set { _externalEncoding = value; }
+        /// <summary>
+        /// CRuby's fptr->encs.enc: the encoding reads produce. Null when nothing was pinned.
+        /// </summary>
+        public RubyEncoding Enc {
+            get { return _enc; }
         }
 
+        /// <summary>
+        /// CRuby's fptr->encs.enc2: the external encoding when a transcoding is in effect,
+        /// null otherwise.
+        /// </summary>
+        public RubyEncoding Enc2 {
+            get { return _enc2; }
+        }
+
+        /// <summary>
+        /// The external encoding actually in force, for the code that has to turn characters
+        /// into bytes. Never null: an unpinned stream follows Encoding.default_external.
+        /// </summary>
+        public RubyEncoding/*!*/ ExternalEncoding {
+            get { return _enc2 ?? _enc ?? _context.DefaultExternalEncoding; }
+        }
+
+        /// <summary>
+        /// The internal encoding actually in force, i.e. what reads transcode *to*. Null when
+        /// there is no transcoding, which is CRuby's answer for #internal_encoding too.
+        /// </summary>
         public RubyEncoding InternalEncoding {
-            get { return _internalEncoding; }
-            set { _internalEncoding = value; }
+            get { return _enc2 != null ? _enc : null; }
+        }
+
+        /// <summary>
+        /// CRuby's rb_io_ext_int_to_encs (io.c). A null external means "the default"; the
+        /// distinction matters, because a stream that merely inherited the default external
+        /// encoding keeps following it when Encoding.default_external is reassigned, while
+        /// one that was given an encoding explicitly does not.
+        /// </summary>
+        public void SetEncodings(RubyEncoding external, RubyEncoding @internal) {
+            bool defaultExternal = false;
+            if (external == null) {
+                external = _context.DefaultExternalEncoding;
+                defaultExternal = true;
+            }
+
+            if (external == RubyEncoding.Binary) {
+                // Binary on the outside means the bytes come through untouched.
+                @internal = null;
+            } else if (@internal == null) {
+                @internal = _context.DefaultInternalEncoding;
+            }
+
+            if (@internal == null || @internal == external) {
+                _enc = (defaultExternal && @internal != external) ? null : external;
+                _enc2 = null;
+            } else {
+                _enc = @internal;
+                _enc2 = external;
+            }
+        }
+
+        /// <summary>
+        /// Copies the encoding state verbatim, for #dup and #clone.
+        /// </summary>
+        public void CopyEncodingsFrom(RubyIO/*!*/ other) {
+            _enc = other._enc;
+            _enc2 = other._enc2;
+        }
+
+        public IDictionary<object, object> ConversionOptions {
+            get { return _conversionOptions; }
+            set { _conversionOptions = value; }
         }
 
         public int GetFileDescriptor() {
@@ -133,8 +226,20 @@ namespace IronRuby.Builtins {
         /// </summary>
         public ConsoleStreamType? ConsoleStreamType {
             get {
-                var stream = GetStream();
-                var console = stream.BaseStream as ConsoleStream;
+                // a closed stream is no longer any console's; asking it would raise, and
+                // #inspect asks about a closed IO
+                if (Closed) {
+                    return null;
+                }
+                // A copy that could not dup(2) the descriptor - #dup of a console stream on
+                // Windows - wraps the original's buffered stream in one of its own, so the
+                // console may be more than one buffer down.
+                Stream stream = GetStream().BaseStream;
+                RubyBufferedStream buffered;
+                while ((buffered = stream as RubyBufferedStream) != null) {
+                    stream = buffered.BaseStream;
+                }
+                var console = stream as ConsoleStream;
                 return console != null ? console.StreamType : (ConsoleStreamType?)null;
             } 
         }
@@ -155,9 +260,20 @@ namespace IronRuby.Builtins {
             get { return Closed || _stream != null; }
         }
 
+        // On Unix MRI performs no end-of-line translation, in text mode or otherwise:
+        private static readonly bool _IsWindowsPlatform = System.IO.Path.DirectorySeparatorChar == '\\';
+
+        /// <summary>
+        /// True when the stream was opened with the "b" flag.  Distinct from
+        /// PreserveEndOfLines, which is vacuously true off Windows.
+        /// </summary>
+        public bool IsBinmode {
+            get { return (_mode & IOMode.PreserveEndOfLines) != 0; }
+        }
+
         public bool PreserveEndOfLines {
             get { 
-                return (_mode & IOMode.PreserveEndOfLines) != 0; 
+                return !_IsWindowsPlatform || (_mode & IOMode.PreserveEndOfLines) != 0; 
             }
             set {
                 if (value) {
@@ -183,12 +299,92 @@ namespace IronRuby.Builtins {
             }
 
             RequireInitialized();
+            if (_sharesStream && _stream.TimeoutOwner != (_waitForStream != null ? this : null)) {
+                // the other IO over this stream used it last, with its own timeout (or none)
+                ApplyTimeout(_stream);
+            }
             return _stream;
         }
 
         public void SetStream(Stream/*!*/ stream) {
             ContractUtils.RequiresNotNull(stream, "stream");
-            _stream = new RubyBufferedStream(stream, _context.RubyOptions.Compatibility >= RubyCompatibility.Ruby19);
+            _stream = new RubyBufferedStream(stream, true);
+            if (_waitForStream != null) {
+                ApplyTimeout(_stream);
+            }
+        }
+
+        /// <summary>IO#timeout: the value it was set to, nil if none.</summary>
+        public object Timeout {
+            get { return _timeout; }
+        }
+
+        /// <summary>IO#timeout in milliseconds, Timeout.Infinite if none.</summary>
+        public int TimeoutMilliseconds {
+            get { return _timeoutMilliseconds; }
+        }
+
+        /// <summary>
+        /// Sets IO#timeout. <paramref name="waitForStream"/> waits up to the timeout for the stream
+        /// to be ready for a read (true) or a write (false) and tells whether it came ready; null
+        /// together with a nil <paramref name="timeout"/> removes it.
+        /// </summary>
+        public void SetTimeout(object timeout, int milliseconds, Func<bool, bool> waitForStream) {
+            _timeout = timeout;
+            _timeoutMilliseconds = (waitForStream != null) ? milliseconds : System.Threading.Timeout.Infinite;
+            _waitForStream = waitForStream;
+            if (_stream != null) {
+                ApplyTimeout(_stream);
+            }
+        }
+
+        private void ApplyTimeout(RubyBufferedStream/*!*/ stream) {
+            stream.TimeoutOwner = (_waitForStream != null) ? this : null;
+            // A stream that bounds its own waits (IO.pipe) also bounds the rest of a write too big
+            // to go in at once, which the readiness check before it cannot.
+            Stream baseStream = stream.BaseStream;
+            if (baseStream.CanTimeout) {
+                baseStream.ReadTimeout = _timeoutMilliseconds;
+                baseStream.WriteTimeout = _timeoutMilliseconds;
+            }
+        }
+
+        /// <summary>
+        /// Waits for the stream to be ready for a read or a write that would block, for at most
+        /// IO#timeout; IO::TimeoutError when it is not ready by then. Returns at once without a timeout.
+        /// </summary>
+        public void WaitForStream(bool isRead) {
+            var wait = _waitForStream;
+            if (wait != null && !_inNonBlockingOperation && !wait(isRead)) {
+                throw CreateTimeoutError();
+            }
+        }
+
+        /// <summary>IO::TimeoutError, which the prelude defines.</summary>
+        internal Exception/*!*/ CreateTimeoutError() {
+            const string message = "Blocking operation timed out!";
+            object ioClass;
+            if (_context.ObjectClass.TryGetConstant(null, "IO", out ioClass) && ioClass is RubyModule) {
+                var error = _context.CreateLibraryException((RubyModule)ioClass, "TimeoutError", message);
+                if (error != null) {
+                    return error;
+                }
+            }
+            return new TimeoutException(message);
+        }
+
+        /// <summary>
+        /// Runs a #read_nonblock or #write_nonblock: it reports a stream that is not ready as EAGAIN
+        /// and never waits for IO#timeout.
+        /// </summary>
+        public void RunNonBlocking(Action/*!*/ operation, bool isRead) {
+            bool saved = _inNonBlockingOperation;
+            _inNonBlockingOperation = true;
+            try {
+                NonBlockingOperation(operation, isRead);
+            } finally {
+                _inNonBlockingOperation = saved;
+            }
         }
 
         public void RequireInitialized() {
@@ -234,6 +430,10 @@ namespace IronRuby.Builtins {
         public long Position {
             get {
                 var stream = GetStream();
+                long position;
+                if (TrySeekDescriptor(stream, 0, SeekOrigin.Current, out position)) {
+                    return position;
+                }
                 try {
                     return stream.Position;
                 } catch (ObjectDisposedException) {
@@ -242,6 +442,10 @@ namespace IronRuby.Builtins {
             }
             set {
                 var stream = GetStream();
+                long position;
+                if (TrySeekDescriptor(stream, value, SeekOrigin.Begin, out position)) {
+                    return;
+                }
                 try {
                     stream.Position = value;
                 } catch (ObjectDisposedException) {
@@ -252,13 +456,77 @@ namespace IronRuby.Builtins {
 
         public void Seek(long offset, SeekOrigin origin) {
             var stream = GetStream();
+            long position;
+            if (TrySeekDescriptor(stream, offset, origin, out position)) {
+                return;
+            }
             try {
                 stream.Seek(offset, origin);
             } catch (IOException) {
-                throw RubyExceptions.CreateEINVAL();
+                throw CreateSeekError();
             } catch (ObjectDisposedException) {
                 throw RubyExceptions.CreateEBADF();
             }
+        }
+
+        // The whence of a seek, or MRI's EINVAL (naming the file) for anything else.
+        public SeekOrigin CheckSeekOrigin(int whence) {
+            switch (whence) {
+                case SEEK_SET: return SeekOrigin.Begin;
+                case SEEK_END: return SeekOrigin.End;
+                case SEEK_CUR: return SeekOrigin.Current;
+                default: throw CreateSeekError();
+            }
+        }
+
+        // MRI names the file in a failed seek ("Invalid argument @ rb_io_seek - path");
+        // a stream without a path (a pipe, a socket) gets the bare message.
+        private Exception/*!*/ CreateSeekError() {
+            var file = this as RubyFile;
+            if (file != null && file.Path != null) {
+                return RubyExceptions.CreateEINVAL("Invalid argument - {0}", file.Path);
+            }
+            return RubyExceptions.CreateEINVAL();
+        }
+
+        [DllImport("libc", EntryPoint = "lseek", SetLastError = true)]
+        private static extern long sys_lseek(int fd, long offset, int whence);
+
+        /// <summary>
+        /// lseek(2) for a stream that cannot seek itself but sits on a descriptor that can - the
+        /// standard streams after #reopen, above all. `$stdout.reopen(tempfile)` points descriptor
+        /// 1 at the file with dup2, but Ruby still writes through the console stream it had, and
+        /// that stream answers every Seek with NotSupportedException. minitest's
+        /// capture_subprocess_io reopens $stdout onto a Tempfile and then rewinds it, so it failed
+        /// with a raw System::NotSupportedException. A descriptor that really cannot seek (a pipe,
+        /// a terminal) gets MRI's Errno::ESPIPE.
+        /// </summary>
+        private bool TrySeekDescriptor(RubyBufferedStream/*!*/ stream, long offset, SeekOrigin origin, out long position) {
+            position = 0;
+            if (!_hasFileControl || stream.CanSeek) {
+                return false;
+            }
+            int descriptor = KernelDescriptor;
+            if (descriptor < 0) {
+                return false;
+            }
+
+            stream.Flush();
+            position = sys_lseek(descriptor, offset, (int)origin);
+            if (position < 0) {
+                const int ESPIPE = 29;
+                if (Marshal.GetLastWin32Error() == ESPIPE) {
+                    object errno;
+                    if (_context.ObjectClass.TryGetConstant(null, "Errno", out errno) && errno is RubyModule) {
+                        var error = _context.CreateLibraryException((RubyModule)errno, "ESPIPE", null);
+                        if (error != null) {
+                            throw error;
+                        }
+                    }
+                }
+                throw CreateSeekError();
+            }
+            return true;
         }
 
         public void Flush() {
@@ -336,9 +604,41 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// Closes this object and leaves the descriptor open, which is IO#close with #autoclose
+        /// false. What was written is flushed, as MRI does.
+        /// </summary>
+        public void CloseKeepingDescriptor() {
+            if (_stream != null) {
+                try {
+                    _stream.Flush();
+                } catch (ObjectDisposedException) {
+                }
+            }
+            _mode = _mode.Close();
+            _fileDescriptor = -1;
+            _stream = null;
+        }
+
+        /// <summary>
+        /// Transfers this IO's stream to a composite owner without closing or flushing it.
+        /// The descriptor table entry is removed by the caller before this is used.
+        /// </summary>
+        public void DetachStream() {
+            _mode = _mode.Close();
+            _fileDescriptor = -1;
+            _stream = null;
+        }
+
         public void CloseWriter() {
             var duplex = GetStream().BaseStream as DuplexStream;
-            if (duplex == null && _mode.CanRead() || duplex != null && !_mode.CanWrite()) {
+
+            // closing the side of a duplex stream that is already closed closes the rest (as MRI does)
+            if (duplex != null && !_mode.CanWrite()) {
+                Close();
+                return;
+            }
+            if (duplex == null && _mode.CanRead()) {
                 throw RubyExceptions.CreateIOError("closing non-duplex IO for writing");
             }
             
@@ -354,7 +654,11 @@ namespace IronRuby.Builtins {
 
         public void CloseReader() {
             var duplex = GetStream().BaseStream as DuplexStream;
-            if (duplex == null && _mode.CanWrite() || duplex != null && !_mode.CanRead()) {
+            if (duplex != null && !_mode.CanRead()) {
+                Close();
+                return;
+            }
+            if (duplex == null && _mode.CanWrite()) {
                 throw RubyExceptions.CreateIOError("closing non-duplex IO for reading");
             } 
             
@@ -377,21 +681,6 @@ namespace IronRuby.Builtins {
 
         #region Operations
 
-        public virtual WaitHandle/*!*/ CreateReadWaitHandle() {
-            // TODO:
-            throw new NotSupportedException();
-        }
-
-        public virtual WaitHandle/*!*/ CreateWriteWaitHandle() {
-            // TODO:
-            throw new NotSupportedException();
-        }
-
-        public virtual WaitHandle/*!*/ CreateErrorWaitHandle() {
-            // TODO:
-            throw new NotSupportedException();
-        }
-
         public virtual int SetReadTimeout(int timeout) {
             if (timeout > 0) {
                 throw RubyExceptions.CreateEBADF();
@@ -399,16 +688,372 @@ namespace IronRuby.Builtins {
             return 0;
         }
 
+        /// <summary>
+        /// Runs a read or a write in the non-blocking mode #read_nonblock / #write_nonblock ask
+        /// for. The default is to just run it: a regular file never blocks, which is also why
+        /// O_NONBLOCK has no effect on one in MRI. A pipe or a socket overrides this, or the
+        /// caller reaches for the single-shot syscall on the descriptor directly.
+        /// </summary>
         public virtual void NonBlockingOperation(Action operation, bool isRead) {
-            throw RubyExceptions.CreateEBADF();
+            RequireOpen();
+            operation();
         }
 
+        /// <summary>
+        /// The operating system's descriptor for this stream, or -1 when there is not one.
+        /// IronRuby's "file descriptor" is an index into a per-context table, so anything that
+        /// calls a syscall has to dig the real handle out of the underlying FileStream - passing
+        /// #fileno to fcntl or poll asks about an unrelated descriptor.
+        /// </summary>
+        public int NativeDescriptor {
+            get {
+                if (!_hasFileControl) {
+                    return -1;
+                }
+                var buffered = _stream;
+                if (buffered == null) {
+                    return -1;
+                }
+                return DescriptorOf(buffered.BaseStream);
+            }
+        }
+
+        /// <summary>
+        /// The descriptor the kernel knows this IO by. The standard streams are the three it
+        /// reserves whatever IronRuby's table says, because the table index and the descriptor
+        /// agree there by construction and the stream behind them is a console stream rather
+        /// than a FileStream.
+        /// </summary>
+        public int KernelDescriptor {
+            get {
+                int descriptor = _fileDescriptor;
+                if (_hasFileControl && descriptor >= 0 && descriptor <= 2) {
+                    return descriptor;
+                }
+                return NativeDescriptor;
+            }
+        }
+
+        [DllImport("libc", EntryPoint = "dup", SetLastError = true)]
+        private static extern int sys_dup(int fd);
+
+        [DllImport("libc", EntryPoint = "dup2", SetLastError = true)]
+        private static extern int sys_dup2(int fd, int newFd);
+
+        /// <summary>
+        /// dup2(2) of another IO's descriptor onto this one's, which is what Ruby's #reopen
+        /// is. Returns false when either side has no descriptor the kernel knows about, and
+        /// the caller then falls back to swapping streams in IronRuby's table.
+        /// </summary>
+        public static bool TryRedirectDescriptor(RubyIO/*!*/ io, RubyIO/*!*/ source, out System.IO.Stream rebuilt) {
+            rebuilt = null;
+
+            // No dup2 to call off Unix; the caller swaps streams in IronRuby's own table
+            // instead, which is what it does for any IO without a kernel descriptor.
+            if (!_hasFileControl) {
+                return false;
+            }
+
+            int target = io.KernelDescriptor;
+            int from = source.KernelDescriptor;
+            if (target < 0 || from < 0) {
+                return false;
+            }
+            io.Flush();
+            source.Flush();
+
+            // dup2 makes the two descriptors share one file offset, and the source may have read
+            // further than Ruby has seen - a buffered read pulls in a block at a time. Put the
+            // descriptor back where the reading actually got to before handing it over.
+            DiscardReadAhead(source);
+
+            // Asking a FileStream for its handle seeks the descriptor to where that stream
+            // thinks it is, so it has to happen before the descriptor starts naming the other
+            // file - afterwards it would undo the offset the two are meant to share.
+            var replaced = (target > 2) ? io.GetStream().BaseStream as System.IO.FileStream : null;
+            var replacedHandle = (replaced != null) ? replaced.SafeFileHandle : null;
+
+            if (target != from && sys_dup2(from, target) < 0) {
+                return false;
+            }
+
+            // The descriptor now names the other IO's file. The stream that was reading the old
+            // one has to go with it: it was opened for a different access mode, and it buffers
+            // bytes of a file this IO no longer has. The descriptor is taken away from it first,
+            // so that finalizing it does not close the descriptor out from under the new stream.
+            if (replacedHandle != null) {
+                rebuilt = TryAdoptDescriptor(target, true);
+                if (rebuilt != null) {
+                    replacedHandle.SetHandleAsInvalid();
+                }
+            }
+
+            return true;
+        }
+
+        private static void DiscardReadAhead(RubyIO/*!*/ io) {
+            try {
+                var stream = io.GetStream();
+                if (!stream.CanSeek) {
+                    return;
+                }
+                stream.Seek(stream.Position, System.IO.SeekOrigin.Begin);
+
+                // A FileStream buffers too, and seeking inside its own buffer leaves the
+                // descriptor where the last block read left it. Asking for the handle is what
+                // makes it put the descriptor where the stream says it is.
+                var file = stream.BaseStream as System.IO.FileStream;
+                if (file != null) {
+                    var handle = file.SafeFileHandle;
+                    GC.KeepAlive(handle);
+                }
+            } catch (System.Exception) {
+                // a stream that cannot say where it is has nothing to put back
+            }
+        }
+
+        /// <summary>dup(2), so that a copy of an IO survives its original being reopened.</summary>
+        public static int TryDuplicateDescriptor(RubyIO/*!*/ io) {
+            int descriptor = io.KernelDescriptor;
+            return (descriptor < 0 || !_hasFileControl) ? -1 : sys_dup(descriptor);
+        }
+
+        /// <summary>The operating system descriptor a stream reads and writes, or -1.</summary>
+        public static int DescriptorOf(System.IO.Stream stream) {
+            var known = stream as IDescriptorStream;
+            if (known != null) {
+                return known.Descriptor;
+            }
+            var file = stream as System.IO.FileStream;
+            return (file != null) ? (int)file.SafeFileHandle.DangerousGetHandle() : -1;
+        }
+
+        /// <summary>
+        /// The descriptor MRI's IO would hold for a stream. IO.popen(cmd, "r+") reads and writes
+        /// two pipes, and MRI's IO is the reading one (the writing one is a second IO tied to it).
+        /// </summary>
+        public static int PrimaryDescriptorOf(System.IO.Stream stream) {
+            var duplex = stream as DuplexStream;
+            if (duplex != null) {
+                stream = (duplex.Reader != null) ? duplex.Reader.BaseStream : duplex.Writer.BaseStream;
+            }
+            return DescriptorOf(stream);
+        }
+
+        /// <summary>
+        /// Whether the descriptor is open, and how. The low two bits of IOMode are O_ACCMODE
+        /// by construction. Ruby's default mode of "r" is an answer about a path; a descriptor
+        /// already knows what it was opened for, which is what MRI reports for one handed to
+        /// IO.new without a mode.
+        /// </summary>
+        public static bool TryGetDescriptorMode(int descriptor, out IOMode mode) {
+            mode = IOMode.ReadOnly;
+            if (!_hasFileControl || descriptor < 0) {
+                return false;
+            }
+            int flags = LibcVariadic.Fcntl(descriptor, F_GETFL, 0);
+            if (flags < 0) {
+                return false;
+            }
+            mode = (IOMode)(flags & (int)IOMode.ReadWriteMask);
+            return true;
+        }
+
+        /// <summary>
+        /// A stream over a descriptor this process was handed rather than opened - the way a
+        /// child of Process.spawn receives one through a redirection. IronRuby's descriptor
+        /// table knows nothing about it, so IO.new(fd) could only ever answer EBADF for it.
+        /// </summary>
+        public static System.IO.Stream TryAdoptDescriptor(int descriptor) {
+            return TryAdoptDescriptor(descriptor, false);
+        }
+
+        public static System.IO.Stream TryAdoptDescriptor(int descriptor, bool ownsDescriptor) {
+            IOMode mode;
+            if (!TryGetDescriptorMode(descriptor, out mode)) {
+                return null;
+            }
+            System.IO.FileAccess access;
+            switch (mode) {
+                case IOMode.WriteOnly: access = System.IO.FileAccess.Write; break;
+                case IOMode.ReadWrite: access = System.IO.FileAccess.ReadWrite; break;
+                default: access = System.IO.FileAccess.Read; break;
+            }
+            try {
+                // ownsDescriptor is normally false - the descriptor belongs to whoever passed
+                // it in, and a finalizer closing, say, the inherited standard output would be a
+                // disaster. Only #reopen, which has just taken a descriptor away from the stream
+                // that owned it, asks for the new stream to own it instead.
+                return new System.IO.FileStream(
+                    new Microsoft.Win32.SafeHandles.SafeFileHandle((IntPtr)descriptor, ownsDescriptor), access, 1, false
+                );
+            } catch (Exception) {
+                return null;
+            }
+        }
+
+        /// <summary>The native descriptor of an IO, for Ruby code that needs one.</summary>
+        public static int GetNativeDescriptor(RubyIO/*!*/ io) {
+            return io.NativeDescriptor;
+        }
+
+        #region poll
+
+        // struct pollfd { int fd; short events; short revents; }
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PollFd {
+            public int fd;
+            public short events;
+            public short revents;
+        }
+
+        public const short POLLIN = 0x001;
+        public const short POLLOUT = 0x004;
+        public const short POLLERR = 0x008;
+        public const short POLLHUP = 0x010;
+        public const short POLLNVAL = 0x020;
+
+        [DllImport("libc", EntryPoint = "poll", SetLastError = true)]
+        private static extern int sys_poll([In, Out] PollFd[] fds, uint nfds, int timeout);
+
+        /// <summary>
+        /// poll(2) over the first <paramref name="count"/> descriptors, filling in their revents.
+        /// Answers what poll answers - the number of descriptors with events, 0 on timeout - or -1
+        /// when it failed or the platform has none (check HasPoll). EINTR reads as a timeout.
+        /// </summary>
+        public static int Poll(int[]/*!*/ descriptors, short[]/*!*/ events, short[]/*!*/ revents, int count, int timeoutMilliseconds) {
+            if (!_hasFileControl) {
+                return -1;
+            }
+
+            var fds = new PollFd[count];
+            for (int i = 0; i < count; i++) {
+                fds[i].fd = descriptors[i];
+                fds[i].events = events[i];
+            }
+
+            int result = sys_poll(fds, (uint)count, timeoutMilliseconds);
+            if (result < 0) {
+                return Marshal.GetLastWin32Error() == 4 ? 0 : -1;
+            }
+            for (int i = 0; i < count; i++) {
+                revents[i] = fds[i].revents;
+            }
+            return result;
+        }
+
+        /// <summary>Whether this platform has poll(2) - every Unix, and not Windows.</summary>
+        public static bool HasPoll {
+            get { return _hasFileControl; }
+        }
+
+        /// <summary>
+        /// Blocks in one poll(2) over the given descriptors until one of them has an event, or
+        /// the timeout passes. Answers false when the platform has no poll. The revents are not
+        /// reported: the callers (IO.select and friends) ask each IO again afterwards, which is
+        /// what decides readiness; this is only how they sleep.
+        /// </summary>
+        public static bool PollWait(System.Collections.Generic.IList<int>/*!*/ descriptors,
+            System.Collections.Generic.IList<short>/*!*/ events, int timeoutMilliseconds) {
+            if (!_hasFileControl) {
+                return false;
+            }
+
+            var fds = new PollFd[descriptors.Count];
+            for (int i = 0; i < fds.Length; i++) {
+                fds[i].fd = descriptors[i];
+                fds[i].events = events[i];
+            }
+
+            // An EINTR just ends the wait early, which the callers are ready for.
+            return sys_poll(fds, (uint)fds.Length, timeoutMilliseconds) >= 0 || Marshal.GetLastWin32Error() == 4;
+        }
+
+        /// <summary>
+        /// poll(2) over the given descriptors. Answers a parallel array of revents, or null when
+        /// the platform has no poll. timeoutMilliseconds of -1 waits indefinitely, 0 returns at
+        /// once. This is what makes IO.select a real answer rather than a guess: asking the
+        /// kernel is the only way to know whether a descriptor has something waiting on it.
+        /// </summary>
+        // Takes plain lists so Ruby can call it with Ruby Arrays.
+        public static short[] Poll(System.Collections.IList/*!*/ descriptors, System.Collections.IList/*!*/ events, int timeoutMilliseconds) {
+            if (!_hasFileControl || descriptors.Count == 0) {
+                return null;
+            }
+
+            var fds = new PollFd[descriptors.Count];
+            for (int i = 0; i < descriptors.Count; i++) {
+                fds[i].fd = Convert.ToInt32(descriptors[i]);
+                fds[i].events = Convert.ToInt16(events[i]);
+            }
+
+            int result;
+            do {
+                result = sys_poll(fds, (uint)fds.Length, timeoutMilliseconds);
+            } while (result < 0 && Marshal.GetLastWin32Error() == 4); // EINTR
+
+            if (result < 0) {
+                return null;
+            }
+
+            var revents = new short[descriptors.Count];
+            for (int i = 0; i < fds.Length; i++) {
+                revents[i] = fds[i].revents;
+            }
+            return revents;
+        }
+
+        #endregion
+
+        #region fcntl
+
+        // The same on every Unix. fcntl is variadic; for F_GETFL and F_SETFL the third argument is an int.
+        public const int F_GETFL = 3;
+        public const int F_SETFL = 4;
+
+        private static readonly bool _hasFileControl = System.IO.Path.DirectorySeparatorChar == '/';
+
+        /// <summary>
+        /// fcntl(2) on the underlying descriptor. Only the descriptor flags can be asked for or
+        /// set this way, which is what io/nonblock needs; a platform without fcntl still gets
+        /// the NotSupportedException this used to throw unconditionally.
+        /// </summary>
         public virtual int FileControl(int commandId, int arg) {
             GetStream();
 
-            // TODO:
-            throw new NotSupportedException();
+            if (!_hasFileControl) {
+                throw new NotSupportedException();
+            }
+
+            int fd = NativeDescriptor;
+            if (fd < 0) {
+                throw new NotSupportedException();
+            }
+            int result = NativeFileControl(fd, commandId, arg);
+            // The descriptor's own O_APPEND is the answer wherever the kernel has one, but a
+            // stream IronRuby opened in append mode without telling the kernel (the CLR
+            // positions an appending FileStream itself) still reports the flag it holds.
+            if (commandId == F_GETFL && (_mode & IOMode.WriteAppends) != 0) {
+                result |= IOModeNative.Append;
+            }
+            return result;
         }
+
+        /// <summary>
+        /// fcntl(2) on a raw descriptor, for streams (sockets) whose descriptor is not a file's.
+        /// </summary>
+        protected static int NativeFileControl(int fd, int commandId, int arg) {
+            if (!_hasFileControl || fd < 0) {
+                throw new NotSupportedException();
+            }
+            int result = LibcVariadic.Fcntl(fd, commandId, arg);
+            if (result < 0) {
+                throw RubyExceptions.CreateEBADF();
+            }
+            return result;
+        }
+
+        #endregion
 
         public virtual int FileControl(int commandId, byte[] arg) {
             GetStream();
@@ -431,13 +1076,13 @@ namespace IronRuby.Builtins {
 
         // returns the number of bytes written to the stream:
         public int WriteBytes(char[]/*!*/ buffer, int index, int count) {
-            byte[] bytes = _externalEncoding.StrictEncoding.GetBytes(buffer, index, count);
+            byte[] bytes = ExternalEncoding.StrictEncoding.GetBytes(buffer, index, count);
             return WriteBytes(bytes, 0, bytes.Length);
         }
 
         // returns the number of bytes written to the stream:
         public int WriteBytes(string/*!*/ value) {
-            byte[] bytes = _externalEncoding.StrictEncoding.GetBytes(value);
+            byte[] bytes = ExternalEncoding.StrictEncoding.GetBytes(value);
             return WriteBytes(bytes, 0, bytes.Length);
         }
 
@@ -450,10 +1095,28 @@ namespace IronRuby.Builtins {
             }
         }
 
-        public MutableString ReadLineOrParagraph(MutableString separator, int limit) {
+        /// <summary>
+        /// One IO#readpartial worth of bytes: what is buffered, or a single read when nothing is.
+        /// </summary>
+        public int AppendAvailableBytes(MutableString/*!*/ buffer, int count) {
             var stream = GetReadableStream();
             try {
-                return stream.ReadLineOrParagraph(separator, _externalEncoding, PreserveEndOfLines, limit >= 0 ? limit : Int32.MaxValue);
+                return stream.AppendAvailableBytes(buffer, count);
+            } catch (ObjectDisposedException) {
+                throw RubyExceptions.CreateEBADF();
+            }
+        }
+
+        public MutableString ReadLineOrParagraph(MutableString separator, int limit) {
+            if (limit == 0) {
+                // A limit of no bytes reads no bytes: #gets answers the empty string, at the end
+                // of the stream as anywhere else. It is the readers that loop - #each_line and
+                // #readlines - that refuse the limit, since they would never come back.
+                return MutableString.CreateEmpty(ExternalEncoding);
+            }
+            var stream = GetReadableStream();
+            try {
+                return stream.ReadLineOrParagraph(separator, ExternalEncoding, PreserveEndOfLines, limit >= 0 ? limit : Int32.MaxValue);
             } catch (ObjectDisposedException) {
                 throw RubyExceptions.CreateEBADF();
             }

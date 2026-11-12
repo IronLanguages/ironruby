@@ -1,0 +1,595 @@
+diff --git a/src/core/Microsoft.Dynamic/Actions/NamespaceTracker.cs b/src/core/Microsoft.Dynamic/Actions/NamespaceTracker.cs
+index df05e1e..56f94c2 100644
+--- a/src/core/Microsoft.Dynamic/Actions/NamespaceTracker.cs
++++ b/src/core/Microsoft.Dynamic/Actions/NamespaceTracker.cs
+@@ -91,7 +91,14 @@ namespace Microsoft.Scripting.Actions {
+ 
+         private static Type LoadType(Assembly assem, string fullTypeName) {
+             Assert.NotNull(assem, fullTypeName);
+-            Type type = assem.GetType(fullTypeName);
++            Type type;
++            try {
++                type = assem.GetType(fullTypeName);
++            } catch (Exception e) when (e is TypeLoadException || e is System.IO.FileNotFoundException || e is System.IO.FileLoadException || e is BadImageFormatException) {
++                // The type names are read from metadata (AssemblyTypeNames.GetTypeNames), so a listed type can
++                // fail to load - a base type in a missing assembly. GetExportedTypes used to skip such types.
++                return null;
++            }
+             // We should ignore nested types. They will be loaded when the containing type is loaded
+             Debug.Assert(type is null || !type.IsNested());
+             return type;
+@@ -315,7 +322,12 @@ namespace Microsoft.Scripting.Actions {
+ 
+         public IEnumerator<KeyValuePair<string, object>> GetEnumerator() {
+             foreach (var key in Keys) {
+-                yield return new KeyValuePair<string, object>(key, this[key]);
++                // Keys lists type names read from metadata (AssemblyTypeNames), and a listed type can fail to load
++                // (a forwarder to an assembly that is not there): it is not a member, as GetExportedTypes and
++                // GetForwardedTypes, which skipped it, had it.
++                if (TryGetValue(key, out object value)) {
++                    yield return new KeyValuePair<string, object>(key, value);
++                }
+             }
+         }
+ 
+@@ -323,7 +335,9 @@ namespace Microsoft.Scripting.Actions {
+ 
+         IEnumerator IEnumerable.GetEnumerator() {
+             foreach (var key in Keys) {
+-                yield return new KeyValuePair<string, object>(key, this[key]);
++                if (TryGetValue(key, out object value)) {
++                    yield return new KeyValuePair<string, object>(key, value);
++                }
+             }
+         }
+ 
+diff --git a/src/core/Microsoft.Dynamic/Actions/TopNamespaceTracker.cs b/src/core/Microsoft.Dynamic/Actions/TopNamespaceTracker.cs
+index e3f1d76..327fda6 100644
+--- a/src/core/Microsoft.Dynamic/Actions/TopNamespaceTracker.cs
++++ b/src/core/Microsoft.Dynamic/Actions/TopNamespaceTracker.cs
+@@ -79,7 +79,8 @@ namespace Microsoft.Scripting.Actions {
+ 
+                 _packageAssemblies.Add(assem);
+                 UpdateSubtreeIds();
+-                PublishComTypes(assem);
++                // Not PublishComTypes(assem): nothing reads the COM type cache it fills, and scanning every type
++                // of every loaded assembly (GetExportedTypes) was ~2% of a Ruby process's startup.
+             }
+ 
+             return true;
+diff --git a/src/core/Microsoft.Dynamic/Generation/CompilerHelpers.cs b/src/core/Microsoft.Dynamic/Generation/CompilerHelpers.cs
+index 2d6935f..90ca8f1 100644
+--- a/src/core/Microsoft.Dynamic/Generation/CompilerHelpers.cs
++++ b/src/core/Microsoft.Dynamic/Generation/CompilerHelpers.cs
+@@ -388,11 +388,47 @@ namespace Microsoft.Scripting.Generation {
+         #region Type Conversions
+ 
+         public static MethodInfo GetImplicitConverter(Type fromType, Type toType) {
+-            return GetConverter(fromType, fromType, toType, "op_Implicit") ?? GetConverter(toType, fromType, toType, "op_Implicit");
++            return GetCachedConverter(fromType, toType, false);
+         }
+ 
+         public static MethodInfo GetExplicitConverter(Type fromType, Type toType) {
+-            return GetConverter(fromType, fromType, toType, "op_Explicit") ?? GetConverter(toType, fromType, toType, "op_Explicit");
++            return GetCachedConverter(fromType, toType, true);
++        }
++
++        // (from, to, explicit) -> the user-defined conversion operator, or null for none (almost every pair).
++        // The overload resolver asks about each argument/parameter type pair it cannot assign, again for every
++        // call site it binds, and each answer walks both types' hierarchies for op_Implicit/op_Explicit through
++        // four reflection queries per ancestor (methods, properties, events, fields).
++        // (Keyed by reference types only: a value-type key would be one more generic instantiation to JIT.)
++        private static readonly Dictionary<Type, Dictionary<Type, MethodInfo>> _implicitConverters = new(), _explicitConverters = new();
++
++        private static MethodInfo GetCachedConverter(Type fromType, Type toType, bool isExplicit) {
++            if (fromType.IsCollectible || toType.IsCollectible) {
++                return FindConverter(fromType, toType, isExplicit);
++            }
++
++            var cache = isExplicit ? _explicitConverters : _implicitConverters;
++            Dictionary<Type, MethodInfo> byTarget;
++            MethodInfo result;
++            lock (cache) {
++                if (cache.TryGetValue(fromType, out byTarget) && byTarget.TryGetValue(toType, out result)) {
++                    return result;
++                }
++            }
++
++            result = FindConverter(fromType, toType, isExplicit);
++            lock (cache) {
++                if (!cache.TryGetValue(fromType, out byTarget)) {
++                    cache[fromType] = byTarget = new Dictionary<Type, MethodInfo>();
++                }
++                byTarget[toType] = result;
++            }
++            return result;
++        }
++
++        private static MethodInfo FindConverter(Type fromType, Type toType, bool isExplicit) {
++            string name = isExplicit ? "op_Explicit" : "op_Implicit";
++            return GetConverter(fromType, fromType, toType, name) ?? GetConverter(toType, fromType, toType, name);
+         }
+ 
+         private static MethodInfo GetConverter(Type type, Type fromType, Type toType, string opMethodName) {
+diff --git a/src/core/Microsoft.Dynamic/Hosting/Shell/ConsoleHostOptionsParser.cs b/src/core/Microsoft.Dynamic/Hosting/Shell/ConsoleHostOptionsParser.cs
+index d6f82e2..294b018 100644
+--- a/src/core/Microsoft.Dynamic/Hosting/Shell/ConsoleHostOptionsParser.cs
++++ b/src/core/Microsoft.Dynamic/Hosting/Shell/ConsoleHostOptionsParser.cs
+@@ -117,7 +117,9 @@ namespace Microsoft.Scripting.Hosting.Shell {
+                 name = null;
+             }
+ 
+-            name = name?.ToLower(CultureInfo.InvariantCulture);
++            // ToLowerInvariant, not ToLower(CultureInfo.InvariantCulture): the latter's TextInfo asks ICU for a collator
++            // (~15 ms at startup) just to learn that ASCII casing is the invariant one.
++            name = name?.ToLowerInvariant();
+         }
+ 
+         protected void OptionValueRequired(string optionName, string value) {
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/BackgroundCompilation.cs b/src/core/Microsoft.Dynamic/Interpreter/BackgroundCompilation.cs
+new file mode 100644
+index 0000000..2dcaa39
+--- /dev/null
++++ b/src/core/Microsoft.Dynamic/Interpreter/BackgroundCompilation.cs
+@@ -0,0 +1,42 @@
++// Licensed to the .NET Foundation under one or more agreements.
++// The .NET Foundation licenses this file to you under the Apache 2.0 License.
++// See the LICENSE file in the project root for more information.
++
++using System;
++using System.Threading;
++
++namespace Microsoft.Scripting.Interpreter {
++    /// <summary>
++    /// Lets a host hold back the compilations the interpreter starts on another thread once an interpreted lambda
++    /// or rule has run often enough (LightLambda, CachedBindingInfo). While held back, a lambda or rule that reaches
++    /// its threshold is not compiled but given its threshold again: it keeps being interpreted and is compiled if it
++    /// stays hot after the hold ends. Meant for work a host knows to be one-off - a language loading its prelude: the
++    /// code that runs hot there is mostly not what the program runs hot, the compilations compete with the work for
++    /// the CPU, and a short program is over before they finish. Synchronous compilation (a threshold of 0 or 1) and
++    /// loop compilation are not affected.
++    /// </summary>
++    public static class BackgroundCompilation {
++        private static int _holdDepth;
++
++        /// <summary>
++        /// Holds back background compilations until the returned object is disposed. Holds nest and may be taken by
++        /// different threads; compilations resume when the last one is released.
++        /// </summary>
++        public static IDisposable HoldBack() {
++            Interlocked.Increment(ref _holdDepth);
++            return new Hold();
++        }
++
++        internal static bool IsHeldBack => Volatile.Read(ref _holdDepth) > 0;
++
++        private sealed class Hold : IDisposable {
++            private int _released;
++
++            public void Dispose() {
++                if (Interlocked.Exchange(ref _released, 1) == 0) {
++                    Interlocked.Decrement(ref _holdDepth);
++                }
++            }
++        }
++    }
++}
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/Instructions/CallInstruction.ReadyToRun.cs b/src/core/Microsoft.Dynamic/Interpreter/Instructions/CallInstruction.ReadyToRun.cs
+new file mode 100644
+index 0000000..1b6af5e
+--- /dev/null
++++ b/src/core/Microsoft.Dynamic/Interpreter/Instructions/CallInstruction.ReadyToRun.cs
+@@ -0,0 +1,153 @@
++// Licensed to the .NET Foundation under one or more agreements.
++// The .NET Foundation licenses this file to you under the Apache 2.0 License.
++// See the LICENSE file in the project root for more information.
++
++using System.Reflection;
++using System.Runtime.CompilerServices;
++
++namespace Microsoft.Scripting.Interpreter {
++    public partial class CallInstruction {
++        /// <summary>
++        /// Never called. ReadyToRun compiles a generic instantiation only when it sees it built with exact type
++        /// arguments, and SlowCreate builds a call instruction with MakeGenericType: every instruction whose signature
++        /// mixes reference types with bool or int then JIT-compiled its shape's shared code at run time - 30-odd
++        /// shapes and ~140 methods while IronRuby's prelude loads, each a quarter millisecond of tier-0 JIT. Each shape
++        /// below, built with object for its reference types, has crossgen2 compile the code every reference-type
++        /// instantiation of that shape shares. FastCreate already covers the shapes of only object and primitives.
++        /// The list is the shapes a Ruby process uses at startup, plus every mix of object, bool and int up to three
++        /// type arguments.
++        /// </summary>
++        [MethodImpl(MethodImplOptions.NoInlining)]
++        private static void RootReadyToRunInstantiations() {
++            Root(new ActionCallInstruction<bool, object>(default(MethodInfo)));
++            Root(new ActionCallInstruction<int, object>(default(MethodInfo)));
++            Root(new ActionCallInstruction<object, bool>(default(MethodInfo)));
++            Root(new ActionCallInstruction<object, int>(default(MethodInfo)));
++            Root(new ActionCallInstruction<bool, bool, object>(default(MethodInfo)));
++            Root(new ActionCallInstruction<bool, int, object>(default(MethodInfo)));
++            Root(new ActionCallInstruction<bool, object, bool>(default(MethodInfo)));
++            Root(new ActionCallInstruction<bool, object, int>(default(MethodInfo)));
++            Root(new ActionCallInstruction<bool, object, object>(default(MethodInfo)));
++            Root(new ActionCallInstruction<int, bool, object>(default(MethodInfo)));
++            Root(new ActionCallInstruction<int, int, object>(default(MethodInfo)));
++            Root(new ActionCallInstruction<int, object, bool>(default(MethodInfo)));
++            Root(new ActionCallInstruction<int, object, int>(default(MethodInfo)));
++            Root(new ActionCallInstruction<int, object, object>(default(MethodInfo)));
++            Root(new ActionCallInstruction<object, bool, bool>(default(MethodInfo)));
++            Root(new ActionCallInstruction<object, bool, int>(default(MethodInfo)));
++            Root(new ActionCallInstruction<object, bool, object>(default(MethodInfo)));
++            Root(new ActionCallInstruction<object, int, bool>(default(MethodInfo)));
++            Root(new ActionCallInstruction<object, int, int>(default(MethodInfo)));
++            Root(new ActionCallInstruction<object, int, object>(default(MethodInfo)));
++            Root(new ActionCallInstruction<object, object, bool>(default(MethodInfo)));
++            Root(new ActionCallInstruction<object, object, int>(default(MethodInfo)));
++            Root(new FuncCallInstruction<bool, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<int, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, bool>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, int>(default(MethodInfo)));
++            Root(new FuncCallInstruction<bool, bool, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<bool, int, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<bool, object, bool>(default(MethodInfo)));
++            Root(new FuncCallInstruction<bool, object, int>(default(MethodInfo)));
++            Root(new FuncCallInstruction<bool, object, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<int, bool, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<int, int, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<int, object, bool>(default(MethodInfo)));
++            Root(new FuncCallInstruction<int, object, int>(default(MethodInfo)));
++            Root(new FuncCallInstruction<int, object, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, bool, bool>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, bool, int>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, bool, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, int, bool>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, int, int>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, int, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, bool>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, int>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, int, bool>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, int, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, object, bool>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, object, int>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, object, int?>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, object, bool, bool>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, object, bool, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, object, int, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, object, object, bool>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, object, object, bool, bool>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, object, object, bool, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, object, object, int, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, object, object, object, bool>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, object, object, int, object, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, object, object, object, bool, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, object, object, object, int, object>(default(MethodInfo)));
++            Root(new FuncCallInstruction<object, object, int, object, object, object, object, object, object, object>(default(MethodInfo)));
++        }
++
++        /// <summary>
++        /// Never called either. A language caches the instructions of its runtime helpers with CacheFunc/CacheAction
++        /// (IronRuby's ReflectionCache does, for some 240 helpers): generic methods of this assembly that the language's
++        /// own ReadyToRun image cannot hold the code of, so each canonical shape the calls use was JIT-compiled. These
++        /// are the shapes IronRuby uses, with object for the reference types.
++        /// </summary>
++        [MethodImpl(MethodImplOptions.NoInlining)]
++        private static void RootCacheInstantiations() {
++            CacheAction<object>(null);
++            CacheAction<int, long>(null);
++            CacheAction<object, object>(null);
++            CacheAction<object, int, int>(null);
++            CacheAction<object, object, int>(null);
++            CacheAction<object, object, object>(null);
++            CacheAction<object, object, object, int>(null);
++            CacheAction<object, object, object, object>(null);
++            CacheAction<object, object, object, object, object>(null);
++            CacheFunc<object>(null);
++            CacheFunc<double, int>(null);
++            CacheFunc<int, object>(null);
++            CacheFunc<long, int>(null);
++            CacheFunc<object, bool>(null);
++            CacheFunc<object, double>(null);
++            CacheFunc<object, int>(null);
++            CacheFunc<object, object>(null);
++            CacheFunc<int, int, object>(null);
++            CacheFunc<int, object, object>(null);
++            CacheFunc<object, bool, bool>(null);
++            CacheFunc<object, int, object>(null);
++            CacheFunc<object, object, bool>(null);
++            CacheFunc<object, object, byte>(null);
++            CacheFunc<object, object, double>(null);
++            CacheFunc<object, object, int>(null);
++            CacheFunc<object, object, long>(null);
++            CacheFunc<object, object, object>(null);
++            CacheFunc<object, object, short>(null);
++            CacheFunc<object, object, uint>(null);
++            CacheFunc<object, int, int, object>(null);
++            CacheFunc<object, int, object, object>(null);
++            CacheFunc<object, object, int, bool>(null);
++            CacheFunc<object, object, int, object>(null);
++            CacheFunc<object, object, object, bool>(null);
++            CacheFunc<object, object, object, object>(null);
++            CacheFunc<object, object, int, bool, bool>(null);
++            CacheFunc<object, object, int, int, object>(null);
++            CacheFunc<object, object, object, bool, bool>(null);
++            CacheFunc<object, object, object, bool, object>(null);
++            CacheFunc<object, object, object, int, bool>(null);
++            CacheFunc<object, object, object, int, object>(null);
++            CacheFunc<object, object, object, object, bool>(null);
++            CacheFunc<object, object, object, object, object>(null);
++            CacheFunc<object, object, object, object, bool, object>(null);
++            CacheFunc<object, object, object, object, int, object>(null);
++            CacheFunc<object, object, object, object, object, object>(null);
++            CacheFunc<object, object, object, object, int, object, object>(null);
++            CacheFunc<object, object, object, object, object, int, object>(null);
++            CacheFunc<object, object, object, object, object, object, object>(null);
++            CacheFunc<object, object, object, object, object, int, object, object>(null);
++            CacheFunc<object, object, object, object, object, object, object, object>(null);
++            CacheFunc<object, object, object, object, object, object, object, object, object>(null);
++            CacheFunc<object, object, int, object, object, object, object, object, object, object>(null);
++        }
++
++        [MethodImpl(MethodImplOptions.NoInlining)]
++        private static void Root(CallInstruction instruction) {
++            System.GC.KeepAlive(instruction);
++        }
++    }
++}
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/LightLambda.cs b/src/core/Microsoft.Dynamic/Interpreter/LightLambda.cs
+index d239963..55f5787 100644
+--- a/src/core/Microsoft.Dynamic/Interpreter/LightLambda.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/LightLambda.cs
+@@ -180,6 +180,12 @@ namespace Microsoft.Scripting.Interpreter {
+                     _delegateCreator.Compile(null);
+                     return TryGetCompiled();
+                 } 
++
++                if (BackgroundCompilation.IsHeldBack) {
++                    // count again: compiled if it is still hot once the hold is released
++                    _compilationThreshold = _interpreter._compilationThreshold;
++                    return false;
++                }
+                 
+                 // Kick off the compile on another thread so this one can keep going
+                 new Task(_delegateCreator.Compile, null).Start();
+diff --git a/src/core/Microsoft.Dynamic/Runtime/AssemblyTypeNames.cs b/src/core/Microsoft.Dynamic/Runtime/AssemblyTypeNames.cs
+index dfb0ee4..9e35f27 100644
+--- a/src/core/Microsoft.Dynamic/Runtime/AssemblyTypeNames.cs
++++ b/src/core/Microsoft.Dynamic/Runtime/AssemblyTypeNames.cs
+@@ -51,11 +51,70 @@ namespace Microsoft.Scripting.Runtime {
+ 
+     internal static class AssemblyTypeNames {
+         public static IEnumerable<TypeName> GetTypeNames(Assembly assem, bool includePrivateTypes) {
++#if NET
++            // The names come from the assembly's metadata. GetExportedTypes/GetForwardedTypes answer the
++            // same names, but load every public type to do it - thousands for System.Private.CoreLib, ~20 ms
++            // of a process that only asks the namespace tree whether some name is a namespace.
++            if (!includePrivateTypes) {
++                var names = TryGetPublicTypeNamesFromMetadata(assem);
++                if (names is not null) {
++                    return names;
++                }
++            }
++#endif
+             return from t in ReflectionUtils.GetAllTypesFromAssembly(assem, includePrivateTypes)
+                    where !t.IsNested
+                    select new TypeName(t);
+         }
+ 
++#if NET
++        /// <summary>
++        /// The top-level public types the assembly defines and the top-level types it forwards, as
++        /// GetExportedTypes and GetForwardedTypes list them, read from the metadata tables without
++        /// loading any type. Null when the assembly has no raw metadata to read (a dynamic assembly).
++        /// </summary>
++        private static unsafe IEnumerable<TypeName> TryGetPublicTypeNamesFromMetadata(Assembly assem) {
++            if (assem.IsDynamic) {
++                return null;
++            }
++
++            System.Reflection.Metadata.MetadataReader reader;
++            try {
++                if (!System.Reflection.Metadata.AssemblyExtensions.TryGetRawMetadata(assem, out byte* blob, out int length)) {
++                    return null;
++                }
++                reader = new System.Reflection.Metadata.MetadataReader(blob, length);
++            } catch (Exception) {
++                return null;
++            }
++
++            // An iterator of this assembly rather than a List<TypeName>: TypeName is a struct, and List's code for it
++            // would be JIT-compiled (ReadyToRun cannot precompile System.Private.CoreLib generics over our types).
++            return EnumeratePublicTypeNames(reader);
++        }
++
++        private static IEnumerable<TypeName> EnumeratePublicTypeNames(System.Reflection.Metadata.MetadataReader reader) {
++            foreach (var handle in reader.TypeDefinitions) {
++                var type = reader.GetTypeDefinition(handle);
++                // public and not nested (a nested type's visibility is one of the Nested* values)
++                if ((type.Attributes & TypeAttributes.VisibilityMask) == TypeAttributes.Public) {
++                    yield return new TypeName(NamespaceOrNull(reader.GetString(type.Namespace)), reader.GetString(type.Name));
++                }
++            }
++
++            foreach (var handle in reader.ExportedTypes) {
++                var exported = reader.GetExportedType(handle);
++                // a nested forwarder's implementation is the forwarder of the type it is nested in
++                if (exported.IsForwarder && exported.Implementation.Kind == System.Reflection.Metadata.HandleKind.AssemblyReference) {
++                    yield return new TypeName(NamespaceOrNull(reader.GetString(exported.Namespace)), reader.GetString(exported.Name));
++                }
++            }
++        }
++
++        // Type.Namespace is null for a type in the global namespace; the metadata has an empty string.
++        private static string NamespaceOrNull(string ns) => ns.Length == 0 ? null : ns;
++#endif
++
+         private static IEnumerable<TypeName> GetTypeNames(string[] namespaces, string[][] types) {
+             Debug.Assert(namespaces.Length == types.Length);
+ 
+diff --git a/src/core/Microsoft.Dynamic/Utils/DeclaredMemberNames.cs b/src/core/Microsoft.Dynamic/Utils/DeclaredMemberNames.cs
+new file mode 100644
+index 0000000..b53c31d
+--- /dev/null
++++ b/src/core/Microsoft.Dynamic/Utils/DeclaredMemberNames.cs
+@@ -0,0 +1,79 @@
++// Licensed to the .NET Foundation under one or more agreements.
++// The .NET Foundation licenses this file to you under the Apache 2.0 License.
++// See the LICENSE file in the project root for more information.
++
++using System;
++using System.Collections.Generic;
++using System.Reflection;
++using System.Runtime.CompilerServices;
++
++namespace Microsoft.Scripting.Utils {
++    /// <summary>
++    /// Answers whether a type declares a method of a given name from the assembly's metadata tables, without
++    /// reflecting over the type: a language that looks names up as CLR members of each class in a hierarchy mostly
++    /// asks about names nothing declares, and reflecting a type's methods to find that out creates a MethodInfo for
++    /// every one of them (hundreds for Int32 and its generic-math interfaces).
++    /// </summary>
++    public static class DeclaredMemberNames {
++#if NET
++        private sealed class Names {
++            internal readonly HashSet<string> Methods; // null: unknown
++            internal Names(HashSet<string> methods) { Methods = methods; }
++        }
++
++        private sealed class Reader {
++            internal readonly System.Reflection.Metadata.MetadataReader Value; // null: no metadata to read
++            internal Reader(System.Reflection.Metadata.MetadataReader value) { Value = value; }
++        }
++
++        private static readonly ConditionalWeakTable<Type, Names> _names = new ConditionalWeakTable<Type, Names>();
++        private static readonly ConditionalWeakTable<Assembly, Reader> _readers = new ConditionalWeakTable<Assembly, Reader>();
++#endif
++
++        /// <summary>
++        /// False if <paramref name="type"/> itself (not a base type) declares no method named <paramref name="name"/>,
++        /// of any visibility, static or instance; true if it does or if that cannot be told without reflection.
++        /// </summary>
++        public static bool MayDeclareMethod(Type type, string name) {
++#if NET
++            var methods = _names.GetValue(type, static t => new Names(ReadMethodNames(t))).Methods;
++            return methods is null || methods.Contains(name);
++#else
++            return true;
++#endif
++        }
++
++#if NET
++        private static HashSet<string> ReadMethodNames(Type type) {
++            try {
++                if (type.HasElementType || type.IsGenericParameter || type.Module != type.Assembly.ManifestModule) {
++                    return null;
++                }
++                int token = type.MetadataToken;
++                if ((token >> 24) != 0x02) { // not a TypeDef
++                    return null;
++                }
++                var reader = _readers.GetValue(type.Assembly, static a => new Reader(CreateReader(a))).Value;
++                if (reader is null) {
++                    return null;
++                }
++                var definition = reader.GetTypeDefinition(System.Reflection.Metadata.Ecma335.MetadataTokens.TypeDefinitionHandle(token & 0xFFFFFF));
++                var names = new HashSet<string>(StringComparer.Ordinal);
++                foreach (var handle in definition.GetMethods()) {
++                    names.Add(reader.GetString(reader.GetMethodDefinition(handle).Name));
++                }
++                return names;
++            } catch (Exception) {
++                return null;
++            }
++        }
++
++        private static unsafe System.Reflection.Metadata.MetadataReader CreateReader(Assembly assembly) {
++            if (assembly.IsDynamic || !System.Reflection.Metadata.AssemblyExtensions.TryGetRawMetadata(assembly, out byte* blob, out int length)) {
++                return null;
++            }
++            return new System.Reflection.Metadata.MetadataReader(blob, length);
++        }
++#endif
++    }
++}
+diff --git a/src/core/Microsoft.Dynamic/Utils/DynamicUtils.cs b/src/core/Microsoft.Dynamic/Utils/DynamicUtils.cs
+index bc61e9b..ed0f201 100644
+--- a/src/core/Microsoft.Dynamic/Utils/DynamicUtils.cs
++++ b/src/core/Microsoft.Dynamic/Utils/DynamicUtils.cs
+@@ -232,9 +232,11 @@ namespace Microsoft.Scripting.Utils {
+         public readonly DynamicMetaObjectBinder/*!*/ Binder;
+         public int CompilationThreshold;
+ 
++        public readonly int InitialCompilationThreshold;
++
+         public CachedBindingInfo(DynamicMetaObjectBinder binder, int compilationThreshold) {
+             Binder = binder;
+-            CompilationThreshold = compilationThreshold;
++            CompilationThreshold = InitialCompilationThreshold = compilationThreshold;
+         }
+ 
+         public abstract bool CheckCompiled();
+@@ -252,6 +254,12 @@ namespace Microsoft.Scripting.Utils {
+         }
+ 
+         public override bool CheckCompiled() {
++            if (Target is not null && Microsoft.Scripting.Interpreter.BackgroundCompilation.IsHeldBack) {
++                // count again: compiled if it is still hot once the hold is released (see BackgroundCompilation)
++                CompilationThreshold = InitialCompilationThreshold;
++                return true;
++            }
++
+             if (Target is not null) {
+                 // start compiling the target if no one else has
+                 var lambda = Interlocked.Exchange(ref Target, null);
+diff --git a/src/core/Microsoft.Scripting/PlatformAdaptationLayer.cs b/src/core/Microsoft.Scripting/PlatformAdaptationLayer.cs
+index 91c46fa..e47fe19 100644
+--- a/src/core/Microsoft.Scripting/PlatformAdaptationLayer.cs
++++ b/src/core/Microsoft.Scripting/PlatformAdaptationLayer.cs
+@@ -112,7 +112,7 @@ namespace Microsoft.Scripting {
+         // TODO: better APIs
+         public virtual Stream OpenFileStream(string path, FileMode mode = FileMode.OpenOrCreate, FileAccess access = FileAccess.ReadWrite, FileShare share = FileShare.Read, int bufferSize = 8192) {
+ #if FEATURE_FILESYSTEM
+-            if (string.Equals("nul", path, StringComparison.InvariantCultureIgnoreCase)) {
++            if (string.Equals("nul", path, StringComparison.OrdinalIgnoreCase)) { // ordinal: a culture compare loads an ICU collator
+                 return Stream.Null;
+             }
+             return new FileStream(path, mode, access, share, bufferSize);
+diff --git a/src/core/Microsoft.Scripting/Utils/AssemblyQualifiedTypeName.cs b/src/core/Microsoft.Scripting/Utils/AssemblyQualifiedTypeName.cs
+index 134f888..d22ef19 100644
+--- a/src/core/Microsoft.Scripting/Utils/AssemblyQualifiedTypeName.cs
++++ b/src/core/Microsoft.Scripting/Utils/AssemblyQualifiedTypeName.cs
+@@ -6,8 +6,11 @@ using System;
+ using System.Reflection;
+ 
+ namespace Microsoft.Scripting.Utils {
++    // A class, not a struct: it keys DlrConfiguration's language table, and a Dictionary keyed by a struct of this
++    // assembly is System.Private.CoreLib code that ReadyToRun cannot precompile - a dozen methods JIT-compiled in
++    // every process that creates a ScriptRuntime.
+     [Serializable]
+-    internal readonly struct AssemblyQualifiedTypeName : IEquatable<AssemblyQualifiedTypeName> {
++    internal sealed class AssemblyQualifiedTypeName : IEquatable<AssemblyQualifiedTypeName> {
+         public readonly string TypeName;
+         public readonly AssemblyName AssemblyName;
+ 
+@@ -56,8 +59,8 @@ namespace Microsoft.Scripting.Utils {
+             }
+         }
+ 
+-        public bool Equals(AssemblyQualifiedTypeName other) =>
+-            TypeName == other.TypeName && AssemblyName.FullName == other.AssemblyName.FullName;
++        public bool Equals(AssemblyQualifiedTypeName? other) =>
++            other is not null && TypeName == other.TypeName && AssemblyName.FullName == other.AssemblyName.FullName;
+ 
+         public override bool Equals(object? obj) =>
+             obj is AssemblyQualifiedTypeName name && Equals(name);
+@@ -70,8 +73,9 @@ namespace Microsoft.Scripting.Utils {
+             return TypeName + ", " + AssemblyName.FullName;
+         }
+ 
+-        public static bool operator ==(in AssemblyQualifiedTypeName name, in AssemblyQualifiedTypeName other) => name.Equals(other);
++        public static bool operator ==(AssemblyQualifiedTypeName? name, AssemblyQualifiedTypeName? other) =>
++            name is null ? other is null : name.Equals(other);
+ 
+-        public static bool operator !=(in AssemblyQualifiedTypeName name, in AssemblyQualifiedTypeName other) => !name.Equals(other);
++        public static bool operator !=(AssemblyQualifiedTypeName? name, AssemblyQualifiedTypeName? other) => !(name == other);
+     }
+ }

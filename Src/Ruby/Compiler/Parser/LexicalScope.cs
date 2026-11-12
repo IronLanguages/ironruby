@@ -12,21 +12,12 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_CORE_DLR
-using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
     
-using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Dynamic;
 using Microsoft.Scripting;
-using Microsoft.Scripting.Actions;
-using Microsoft.Scripting.Utils;
+using IronRuby.Builtins;
 using IronRuby.Compiler.Ast;
-using IronRuby.Runtime;
 
 namespace IronRuby.Compiler {
     /// <summary>
@@ -126,6 +117,10 @@ namespace IronRuby.Compiler {
             while (true) {
                 LocalVariable result;
                 if (scope.TryGetValue(name, out result)) {
+                    var runtimeScope = scope as RuntimeLexicalScope;
+                    if (runtimeScope != null) {
+                        runtimeScope.RequireAccessible(name);
+                    }
                     return result;
                 }
 
@@ -151,9 +146,13 @@ namespace IronRuby.Compiler {
         #region Transformation
 
         internal int AllocateClosureSlotsForLocals(int closureIndex) {
+            // Slots below closureIndex belong to parameters, already assigned. A local with a slot at
+            // or above it was allocated here by an earlier compilation of the same body, and counts.
+            int start = closureIndex;
             int localCount = 0;
             foreach (var local in this) {
-                if (local.Value.ClosureIndex == -1) {
+                int existing = local.Value.ClosureIndex;
+                if (existing == -1 || existing >= start) {
                     local.Value.SetClosureIndex(closureIndex++);
                     localCount++;
                 }
@@ -253,11 +252,26 @@ namespace IronRuby.Compiler {
     // Scope contains variables defined outside of the current compilation unit. Used for assertion checks only.
     // (e.g. created for variables in the runtime scope of eval).
     internal sealed class RuntimeLexicalScope : LexicalScope {
+        // the names an isolated proc's eval may not use; null if any will do
+        private readonly ICollection<string> _isolatedNames;
+
         public RuntimeLexicalScope(List<string>/*!*/ names)
+            : this(names, null) {
+        }
+
+        public RuntimeLexicalScope(List<string>/*!*/ names, ICollection<string> isolatedNames)
             : base(null, -1) {
 
             for (int i = 0; i < names.Count; i++) {
                 AddVariable(names[i], SourceSpan.None);
+            }
+            _isolatedNames = isolatedNames;
+        }
+
+        /// <summary>CRuby's compile error for a use of an outer local in code an isolated proc evals.</summary>
+        internal void RequireAccessible(string/*!*/ name) {
+            if (_isolatedNames != null && _isolatedNames.Contains(name)) {
+                throw new SyntaxError("can not access variable '" + name + "' from isolated Proc");
             }
         }
 
@@ -285,10 +299,6 @@ namespace IronRuby.Compiler {
         private Dictionary<string, TValue> _dict;
         private KeyValuePair<string, TValue>[] _list;
         private int _listSize;
-
-        public int Count {
-            get { return _listSize + (_dict != null ? _dict.Count : 0); }
-        }
 
         public bool TryGetValue(string key, out TValue value) {
             for (int i = 0; i < _listSize; i++) {

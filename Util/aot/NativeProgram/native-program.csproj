@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Prototype (part C of ../README.md): a Ruby program compiled to IL by IronRuby.Aot, then
+       compiled with IronRuby's runtime by NativeAOT into one native executable.
+         Util/aot/NativeProgram/build.sh samples/demo.rb      (see there)
+       RubyProgramDll: the assembly that IronRuby.Aot compile wrote (not a ReadyToRun one). -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IronRubyTargetFrameworks>net10.0</IronRubyTargetFrameworks>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>$(RubyProgramName)-native</AssemblyName>
+    <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
+    <PublishAot>true</PublishAot>
+    <Nullable>disable</Nullable>
+    <ValidateExecutableReferencesMatchSelfContained>false</ValidateExecutableReferencesMatchSelfContained>
+    <TrimMode>partial</TrimMode>
+    <IlcGenerateStackTraceData>true</IlcGenerateStackTraceData>
+    <EnableUnsafeUTF7Encoding>true</EnableUnsafeUTF7Encoding>
+    <NoWarn>$(NoWarn);CS1591;CS0618</NoWarn>
+    <!-- for the AssemblyMetadata item below (Directory.Build.props turns generation off) -->
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+  </PropertyGroup>
+  <ItemGroup>
+    <RuntimeHostConfigurationOption Include="System.IO.DisableFileLocking" Value="true" Trim="true" />
+    <AssemblyMetadata Include="RubyProgram" Value="$(RubyProgramName)" />
+    <RuntimeHostConfigurationOption Include="System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported" Value="false" Condition="'$(PublishAot)' != 'true'" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="$(RubyProgramDll)" />
+    <Reference Include="$(RubyProgramDelegatesDll)" Condition="'$(RubyProgramDelegatesDll)' != '' and Exists('$(RubyProgramDelegatesDll)')" />
+    <ProjectReference Include="../IronRuby.Aot/IronRuby.Aot.csproj" AdditionalProperties="IronRubyAotHostTfm=net10.0" />
+    <ProjectReference Include="../../../Src/Ruby/Ruby.csproj" />
+    <ProjectReference Include="../../../Src/Libraries/IronRuby.Libraries.csproj" />
+    <ProjectReference Include="$(DlrSourceDir)/Microsoft.Scripting/Microsoft.Scripting.csproj" />
+    <ProjectReference Include="$(DlrSourceDir)/Microsoft.Dynamic/Microsoft.Dynamic.csproj" />
+    <TrimmerRootAssembly Include="$(RubyProgramName)" />
+    <TrimmerRootAssembly Include="IronRuby" />
+    <TrimmerRootAssembly Include="IronRuby.Libraries" />
+    <TrimmerRootAssembly Include="IronRuby.Aot" />
+    <TrimmerRootAssembly Include="Microsoft.Scripting" />
+    <TrimmerRootAssembly Include="Microsoft.Dynamic" />
+    <TrimmerRootDescriptor Include="../NativeAot/roots.xml" />
+  </ItemGroup>
+</Project>

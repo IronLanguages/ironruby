@@ -1,0 +1,13 @@
+#!/usr/bin/env ruby
+# The irb executable.  MRI's is a RubyGems binstub; IronRuby ships irb as part
+# of its standard library, so this is the two lines the binstub ends up at.
+#
+# ir.sh puts this directory on RUBYPATH, which is where -S looks first, so
+# `ir -S irb` runs this rather than whatever irb happens to be on PATH.
+#
+# irb shows its startup banner only when the path it is started with ends in
+# exe/irb - the gem's own executable, which the binstub loads on MRI - so this
+# names that path rather than its own.  irb takes nothing else from it but the
+# basename, "irb".
+require "irb"
+IRB.start(File.join(__dir__, "exe", "irb"))

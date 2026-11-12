@@ -13,30 +13,15 @@
  *
  * ***************************************************************************/
 
-#if !FEATURE_CORE_DLR
-using dynamic = System.Object;
-#endif
 
-#if FEATURE_REMOTING
-using System.Runtime.Remoting;
-#endif
 
 using System;
-using System.Collections;
-using System.Collections.Generic;
 using System.ComponentModel;
-using IronRuby.Builtins;
 using IronRuby.Hosting;
 using IronRuby.Runtime;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Hosting;
-using Microsoft.Scripting.Hosting.Providers;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 
-#if SILVERLIGHT
-[assembly: DynamicLanguageProvider(typeof(RubyContext), RubyContext.IronRubyDisplayName, RubyContext.IronRubyNames, RubyContext.IronRubyFileExtensions)]
-#endif
 
 namespace IronRuby {
     /// <summary>

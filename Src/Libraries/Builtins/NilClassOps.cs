@@ -44,31 +44,29 @@ namespace IronRuby.Builtins {
 
         #region Public Instance Methods
 
+        // MRI defines #=== on nil, true and false themselves; it is Kernel#=== (rb_equal) all the same.
+        [RubyMethodAttribute("===")]
+        public static bool CaseEquals(BinaryOpStorage/*!*/ equals, object self, object other) {
+            return Protocols.IsEqual(equals, self, other);
+        }
+
         [RubyMethodAttribute("&")]
         public static bool And(object self, object obj) {
             Debug.Assert(self == null);
             return false;
         }
 
-        [RubyMethodAttribute("^")]
-        public static bool Xor(object self, object obj) {
-            Debug.Assert(self == null);
-            return obj != null;
-        }
-
-        [RubyMethodAttribute("^")]
-        public static bool Xor(object self, bool obj) {
-            Debug.Assert(self == null);
-            return obj;
-        }
-
+        // nil ^ x and nil | x are the one method in MRI - both answer whether x is true -
+        // and two names for one method is what the specs compare.
         [RubyMethodAttribute("|")]
+        [RubyMethodAttribute("^")]
         public static bool Or(object self, object obj) {
             Debug.Assert(self == null);
             return obj != null;
         }
 
         [RubyMethodAttribute("|")]
+        [RubyMethodAttribute("^")]
         public static bool Or(object self, bool obj) {
             Debug.Assert(self == null);
             return obj;
@@ -103,10 +101,17 @@ namespace IronRuby.Builtins {
             return MutableString.CreateAscii("nil");
         }
 
+        /// <summary>
+        /// One frozen string, answered again every time: MRI's nil.to_s is a single object, and
+        /// a spec checks that two calls hand back the very same one.
+        /// </summary>
+        // US-ASCII, as MRI's nil.to_s is
+        private static readonly MutableString/*!*/ _EmptyString = MutableString.Create(String.Empty, RubyEncoding.Ascii).Freeze();
+
         [RubyMethodAttribute("to_s")]
         public static MutableString/*!*/ ToString(object self) {
             Debug.Assert(self == null);
-            return MutableString.CreateEmpty();
+            return _EmptyString;
         }
 
         [SpecialName]

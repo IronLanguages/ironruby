@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -14,10 +14,16 @@
  * ***************************************************************************/
 
 using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Reflection;
+using System.Text;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Generation;
+using IronRuby.Runtime.Calls;
 
 namespace IronRuby.Builtins {
     /// <summary>
@@ -25,48 +31,6 @@ namespace IronRuby.Builtins {
     /// </summary>
     [RubyModule("Float", DefineIn = typeof(IronRubyOps.Clr))]
     public static class ClrFloat {
-
-        #region induced_from
-
-        /// <summary>
-        /// Convert value to Float, where value is Float.
-        /// </summary>
-        /// <returns>Float</returns>
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static double InducedFrom(RubyModule/*!*/ self, double value) {
-            return value;
-        }
-
-        /// <summary>
-        /// Convert value to Float, where value is Fixnum.
-        /// </summary>
-        /// <returns>Float</returns>
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static object InducedFrom(UnaryOpStorage/*!*/ tofStorage, RubyModule/*!*/ self, int value) {
-            var site = tofStorage.GetCallSite("to_f");
-            return site.Target(site, ScriptingRuntimeHelpers.Int32ToObject(value));
-        }
-
-        /// <summary>
-        /// Convert value to Float, where value is Bignum.
-        /// </summary>
-        /// <returns>Float</returns>
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static object InducedFrom(UnaryOpStorage/*!*/ tofStorage, RubyModule/*!*/ self, [NotNull]BigInteger/*!*/ value) {
-            var site = tofStorage.GetCallSite("to_f");
-            return site.Target(site, value);
-        }
-
-        /// <summary>
-        /// Convert value to Float, where value is not Float, Fixnum or Bignum.
-        /// </summary>
-        /// <returns>Float</returns>
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static double InducedFrom(RubyModule/*!*/ self, object value) {
-            throw RubyExceptions.CreateTypeError("failed to convert {0} into Float", self.Context.GetClassDisplayName(value));
-        }
-
-        #endregion
 
         #region Arithmetic Operators
 
@@ -263,18 +227,11 @@ namespace IronRuby.Builtins {
         /// Return the modulo after division of <code>self</code> by <code>other</code>, where <code>other</code> is not Fixnum, Bignum or Float.
         /// </summary>
         /// <returns></returns>
-        [RubyMethod("%")]
+        // #modulo is #% under another name in MRI, so both coerce and then ask for "%":
+        // two entries that forwarded to different names were not the same method.
+        [RubyMethod("%"), RubyMethod("modulo")]
         public static object ModuloOp(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, double self, object other) {
             return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "%", self, other);
-        }
-
-        /// <summary>
-        /// Return the modulo after division of <code>self</code> by <code>other</code>, where <code>other</code> is not Fixnum, Bignum or Float.
-        /// </summary>
-        /// <returns></returns>
-        [RubyMethod("modulo")]
-        public static object Modulo(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, double self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "modulo", self, other);
         }
 
         #endregion
@@ -298,19 +255,27 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// Raises <code>self</code> the <code>other</code> power, where other is Float.
+        /// Raises <code>self</code> the <code>other</code> power, where other is Float. A negative
+        /// base to a power that is not whole leaves the real line (rb_float_pow): that Complex is
+        /// __ir_pow_complex__ in rational.rb.
         /// </summary>
         [RubyMethod("**")]
-        public static double Power(double self, double other) {
+        public static object Power(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ complexPower, double self, double other) {
+            if (self < 0 && (double.IsNaN(other) || (!double.IsInfinity(other) && other != Math.Round(other)))) {
+                var site = complexPower.GetCallSite("__ir_pow_complex__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
+                return site.Target(site, self, other);
+            }
             return Math.Pow(self, other);
         }
 
         /// <summary>
-        /// Raises <code>self</code> the <code>other</code> power, where other is not Fixnum, Bignum or Float.
+        /// Raises <code>self</code> the <code>other</code> power, where other is not Fixnum, Bignum or
+        /// Float: __ir_pow_coerce__ in rational.rb.
         /// </summary>
         [RubyMethod("**")]
-        public static object Power(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, double self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "**", self, other);
+        public static object Power(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ coercePower, double self, object other) {
+            var site = coercePower.GetCallSite("__ir_pow_coerce__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
+            return site.Target(site, self, other);
         }
 
         #endregion
@@ -366,10 +331,11 @@ namespace IronRuby.Builtins {
         [RubyMethod("divmod")]
         public static RubyArray DivMod(double self, double other) {
             RubyArray result = InternalDivMod(self, other);
-            // Unlike modulo, divmod blows up if the quotient or modulus are not finite, so we can't put this inside InternalDivMod
-            // We only need to test if the quotient is double since it should have been converted to Integer (Fixnum or Bignum) if it was OK.
-            if (result[0] is double || Double.IsNaN((double)result[1])) {
-                throw CreateFloatDomainError("NaN");
+            // Unlike modulo, divmod needs the quotient as an Integer (flo_divmod's dbl2ival), so a
+            // quotient that is not finite - left as a double by InternalDivMod - is an error named
+            // after that quotient: Float::INFINITY.divmod(1.0) is "Infinity", not "NaN".
+            if (result[0] is double quotient) {
+                throw new FloatDomainError(Double.IsNaN(quotient) ? "NaN" : quotient > 0 ? "Infinity" : "-Infinity");
             }
             return result;
         }
@@ -403,6 +369,7 @@ namespace IronRuby.Builtins {
         ///  -34.56.abs     #=> 34.56
         /// </example>
         [RubyMethod("abs")]
+        [RubyMethod("magnitude")]
         public static double Abs(double self) {
             return Math.Abs(self);
         }
@@ -430,6 +397,15 @@ namespace IronRuby.Builtins {
             return CastToInteger(ceil);
         }
 
+        /// <summary>
+        /// Returns self rounded up to a multiple of 10**(-ndigits), or a Float with
+        /// ndigits digits after the decimal point when ndigits is positive.
+        /// </summary>
+        [RubyMethod("ceil")]
+        public static object Ceil(ConversionStorage<IntegerValue>/*!*/ integerCast, double self, object ndigits) {
+            return Scale(integerCast, self, ndigits, RoundDirection.Ceiling);
+        }
+
         #endregion
 
         #region floor
@@ -449,6 +425,15 @@ namespace IronRuby.Builtins {
             return CastToInteger(floor);
         }
 
+        /// <summary>
+        /// Returns self rounded down to a multiple of 10**(-ndigits), or a Float with
+        /// ndigits digits after the decimal point when ndigits is positive.
+        /// </summary>
+        [RubyMethod("floor")]
+        public static object Floor(ConversionStorage<IntegerValue>/*!*/ integerCast, double self, object ndigits) {
+            return Scale(integerCast, self, ndigits, RoundDirection.Flooring);
+        }
+
         #endregion
 
         #region to_i, to_int, truncate
@@ -463,6 +448,15 @@ namespace IronRuby.Builtins {
             } else {
                 return Ceil(self);
             }
+        }
+
+        /// <summary>
+        /// Returns self truncated towards zero to a multiple of 10**(-ndigits), or a Float with
+        /// ndigits digits after the decimal point when ndigits is positive.
+        /// </summary>
+        [RubyMethod("truncate")]
+        public static object Truncate(ConversionStorage<IntegerValue>/*!*/ integerCast, double self, object ndigits) {
+            return Scale(integerCast, self, ndigits, RoundDirection.Truncating);
         }
 
         #endregion
@@ -516,9 +510,178 @@ namespace IronRuby.Builtins {
         /// </example>
         [RubyMethod("round")]
         public static object Round(double self) {
-            if (self > 0) { return Floor(self + 0.5); }
-            if (self < 0) { return Ceil(self - 0.5); }
-            return 0;
+            return RoundToPrecision(self, 0, NumericRounding.Half.Up);
+        }
+
+        /// <summary>
+        /// Rounds self to an optionally given precision, honouring the <c>half:</c> option.
+        /// A positive precision yields a Float, zero or negative yields an Integer.
+        /// </summary>
+        [RubyMethod("round")]
+        public static object Round(ConversionStorage<IntegerValue>/*!*/ integerCast, double self,
+            object ndigits, [Keywords, Optional]object options) {
+
+            var opts = options as IDictionary<object, object>;
+            // round(ndigits, half: mode): the options only ever come as keywords
+            if (options != Missing.Value && opts == null) {
+                throw RubyOps.MakeWrongNumberOfArgumentsErrorN(2, "0..1");
+            }
+            if (opts == null && options == Missing.Value) {
+                // round(half: :up) - the only argument is the options hash
+                opts = ndigits as IDictionary<object, object>;
+                if (opts != null) {
+                    ndigits = Missing.Value;
+                }
+            }
+
+            NumericRounding.Half half = NumericRounding.GetHalfOption(integerCast.Context, opts);
+            int nd = (ndigits == Missing.Value) ? 0 : NumericRounding.GetNDigits(integerCast, ndigits);
+            return RoundToPrecision(self, nd, half);
+        }
+
+        private static object RoundToPrecision(double self, int ndigits, NumericRounding.Half half) {
+            if (self == 0.0) {
+                // preserves -0.0 for a positive precision, like MRI
+                return ndigits > 0 ? (object)self : ScriptingRuntimeHelpers.Int32ToObject(0);
+            }
+
+            if (ndigits > 0) {
+                if (Double.IsNaN(self) || Double.IsInfinity(self)) {
+                    return self;
+                }
+                if (NumericRounding.RoundOverflows(self, ndigits)) {
+                    return self;
+                }
+                if (NumericRounding.RoundUnderflows(self, ndigits)) {
+                    return 0.0;
+                }
+                if (ndigits > 14) {
+                    // pow(10, ndigits) is not exact from here on; MRI rounds the exact value instead
+                    return NumericRounding.RoundByRational(self, ndigits, half);
+                }
+
+                double f = System.Math.Pow(10, ndigits);
+                if (Double.IsInfinity(f)) {
+                    return self;
+                }
+
+                double x = NumericRounding.RoundHalf(self, f, half);
+                if (Double.IsNaN(x) || Double.IsInfinity(x)) {
+                    return self;
+                }
+                return x / f;
+            }
+
+            if (ndigits == 0) {
+                return CastToInteger(NumericRounding.RoundHalf(self, 1.0, half));
+            }
+
+            // A negative precision always produces an Integer, so the exceptional values raise.
+            if (Double.IsNaN(self)) {
+                throw new FloatDomainError("NaN");
+            }
+            if (Double.IsPositiveInfinity(self)) {
+                throw new FloatDomainError("Infinity");
+            }
+            if (Double.IsNegativeInfinity(self)) {
+                throw new FloatDomainError("-Infinity");
+            }
+
+            return NumericRounding.RoundInteger(ToBigInteger(System.Math.Truncate(self)), ndigits, half);
+        }
+
+        private enum RoundDirection {
+            Flooring,
+            Ceiling,
+            Truncating
+        }
+
+        private static object Scale(ConversionStorage<IntegerValue>/*!*/ integerCast, double self, object ndigits, RoundDirection direction) {
+            int nd = NumericRounding.GetNDigits(integerCast, ndigits);
+
+            if (self == 0.0) {
+                return nd > 0 ? (object)self : ScriptingRuntimeHelpers.Int32ToObject(0);
+            }
+
+            if (nd > 0) {
+                if (Double.IsNaN(self) || Double.IsInfinity(self)) {
+                    return self;
+                }
+                if (NumericRounding.RoundOverflows(self, nd)) {
+                    return self;
+                }
+
+                // truncating is flooring a positive number and ceiling a negative one (MRI's flo_truncate)
+                bool flooring = (direction == RoundDirection.Flooring) || (direction == RoundDirection.Truncating && self > 0.0);
+
+                // MRI: a value that rounds away entirely towards zero is a positive 0.0, however
+                // small and negative it was; -1e-10.ceil(1) is 0.0, not -0.0.
+                if (NumericRounding.RoundUnderflows(self, nd) && (flooring ? self > 0.0 : self < 0.0)) {
+                    return 0.0;
+                }
+
+                double f = System.Math.Pow(10, nd);
+                if (Double.IsInfinity(f)) {
+                    return self;
+                }
+
+                double x = self * f;
+                if (Double.IsInfinity(x)) {
+                    return self;
+                }
+
+                // MRI's rb_float_floor/ceil check the neighbouring result against the original,
+                // which repairs the cases where self * f landed on the wrong side of an integer.
+                double result;
+                if (flooring) {
+                    double mul = System.Math.Floor(x);
+                    result = (mul + 1) / f;
+                    if (result > self) {
+                        result = mul / f;
+                    }
+                } else {
+                    double mul = System.Math.Ceiling(x);
+                    result = (mul - 1) / f;
+                    if (result < self) {
+                        result = mul / f;
+                    }
+                }
+                return result;
+            }
+
+            double integral;
+            switch (direction) {
+                case RoundDirection.Flooring: integral = System.Math.Floor(self); break;
+                case RoundDirection.Ceiling: integral = System.Math.Ceiling(self); break;
+                default: integral = System.Math.Truncate(self); break;
+            }
+
+            // raises FloatDomainError for NaN / +-Infinity:
+            object value = CastToInteger(integral);
+            if (nd == 0) {
+                return value;
+            }
+
+            BigInteger big = ToBigInteger(value);
+            switch (direction) {
+                case RoundDirection.Flooring: return NumericRounding.FloorInteger(big, nd);
+                case RoundDirection.Ceiling: return NumericRounding.CeilInteger(big, nd);
+                default: return NumericRounding.TruncateInteger(big, nd);
+            }
+        }
+
+        private static BigInteger ToBigInteger(double integralValue) {
+            return ToBigInteger(CastToInteger(integralValue));
+        }
+
+        private static BigInteger ToBigInteger(object/*!*/ integer) {
+            if (integer is int i) {
+                return new BigInteger(i);
+            }
+            if (integer is long l) {
+                return new BigInteger(l);
+            }
+            return (BigInteger)integer;
         }
 
         #endregion
@@ -533,10 +696,92 @@ namespace IronRuby.Builtins {
         /// "<code>NaN</code>", "<code>Infinity</code>", and "<code>-Infinity</code>".
         /// </remarks>
         [RubyMethod("to_s")]
+        [RubyMethod("inspect")]
         public static MutableString ToS(RubyContext/*!*/ context, double self) {
-            StringFormatter sf = new StringFormatter(context, "%.15g", RubyEncoding.Binary, new object[] { self });
-            sf.TrailingZeroAfterWholeFloat = true;
-            return sf.Format();
+            return MutableString.CreateAscii(ToShortestString(self));
+        }
+
+        /// <summary>
+        /// Ruby's Float#to_s: the shortest decimal that reads back as the same double, with a
+        /// decimal point always present. Fixed notation is used while the decimal point falls in
+        /// (0, DBL_DIG] or in (-4, 0]; outside that range the result is exponential with at least
+        /// one fraction digit and a two-digit exponent, so 1e15 is "1.0e+15" and 1e14 is
+        /// "100000000000000.0".
+        /// </summary>
+        internal static string/*!*/ ToShortestString(double value) {
+            if (Double.IsNaN(value)) {
+                return "NaN";
+            }
+            if (Double.IsPositiveInfinity(value)) {
+                return "Infinity";
+            }
+            if (Double.IsNegativeInfinity(value)) {
+                return "-Infinity";
+            }
+
+            bool negative = (value < 0.0) || (value == 0.0 && Double.IsNegative(value));
+
+            // "R" round-trips through the shortest digit string on .NET Core 3.0 and later,
+            // which is the same set of digits Ruby's dtoa produces in shortest mode.
+            string repr = Math.Abs(value).ToString("R", CultureInfo.InvariantCulture);
+
+            int exponent = 0;
+            int e = repr.IndexOf('E');
+            if (e >= 0) {
+                exponent = Int32.Parse(repr.Substring(e + 1), CultureInfo.InvariantCulture);
+                repr = repr.Substring(0, e);
+            }
+
+            int dot = repr.IndexOf('.');
+            string digits = (dot < 0) ? repr : repr.Substring(0, dot) + repr.Substring(dot + 1);
+            // Number of digits that belong to the left of the decimal point.
+            int pointPosition = ((dot < 0) ? repr.Length : dot) + exponent;
+
+            int leading = 0;
+            while (leading < digits.Length && digits[leading] == '0') {
+                leading++;
+                pointPosition--;
+            }
+            digits = digits.Substring(leading).TrimEnd('0');
+            if (digits.Length == 0) {
+                digits = "0";
+                pointPosition = 1;
+            }
+
+            StringBuilder result = new StringBuilder();
+            if (negative) {
+                result.Append('-');
+            }
+
+            // Fixed notation runs from just past 0.0001 up to DBL_DIG integral digits, plus one
+            // extra decade when the digits reach into the fraction so that no padding zeros are
+            // invented: 1536234243126633.5 stays fixed while 1.5e+15 and 1234567890123456.0 do
+            // not. Derived by differential testing against CRuby over 200k random doubles.
+            const int DblDig = 15;
+            bool fixedForm = pointPosition > -4 &&
+                (pointPosition <= DblDig || (pointPosition == DblDig + 1 && digits.Length > pointPosition));
+
+            if (fixedForm && pointPosition > 0) {
+                if (digits.Length <= pointPosition) {
+                    result.Append(digits).Append('0', pointPosition - digits.Length).Append(".0");
+                } else {
+                    result.Append(digits, 0, pointPosition).Append('.').Append(digits, pointPosition, digits.Length - pointPosition);
+                }
+            } else if (fixedForm) {
+                result.Append("0.").Append('0', -pointPosition).Append(digits);
+            } else {
+                result.Append(digits[0]).Append('.');
+                if (digits.Length > 1) {
+                    result.Append(digits, 1, digits.Length - 1);
+                } else {
+                    result.Append('0');
+                }
+                int power = pointPosition - 1;
+                result.Append('e').Append(power < 0 ? '-' : '+');
+                result.Append(Math.Abs(power).ToString(CultureInfo.InvariantCulture).PadLeft(2, '0'));
+            }
+
+            return result.ToString();
         }
 
         #endregion
@@ -548,7 +793,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("hash")]
         public static int Hash(double self) {
-            return self.GetHashCode();
+            return RubyUtils.GetFloatHashCode(self);
         }
 
         #endregion
@@ -567,8 +812,34 @@ namespace IronRuby.Builtins {
         /// Contrast this with <code>Float#eql?</code>, which requires <i>other</i> to be a <code>Float</code>.
         /// </remarks>
         [RubyMethod("==")]
+        [RubyMethod("===")]
         public static bool Equal(double self, double other) {
             return self == other;
+        }
+
+        /// <summary>
+        /// Returns <code>true</code> only if <i>other</i> has the same value as <i>self</i>, where other is Fixnum.
+        /// </summary>
+        [RubyMethod("==")]
+        [RubyMethod("===")]
+        public static bool Equal(double self, int other) {
+            return self == (double)other;
+        }
+
+        /// <summary>
+        /// Returns <code>true</code> only if <i>other</i>, an Integer carried as an Int64, has exactly the value of
+        /// <i>self</i> (rb_integer_float_eq). Without this overload the binder converted the long to a double,
+        /// which past 2**53 rounds: <code>2.0**53 == 2**53 + 1</code> was true, though <code>2**53 + 1 == 2.0**53</code>
+        /// is false.
+        /// </summary>
+        [RubyMethod("==")]
+        [RubyMethod("===")]
+        public static bool Equal(double self, long other) {
+            if (other >= -(1L << 53) && other <= (1L << 53)) {
+                return self == (double)other;
+            }
+            int? c = ClrInteger.CompareToFloat(other, self);
+            return c.HasValue && c.Value == 0;
         }
 
         /// <summary>
@@ -580,6 +851,7 @@ namespace IronRuby.Builtins {
         /// Dynamically invokes other == self (i.e. swaps operands around).
         /// </remarks>
         [RubyMethod("==")]
+        [RubyMethod("===")]
         public static bool Equal(BinaryOpStorage/*!*/ equals, double self, object other) {
             // Call == on the right operand like Float#== does
             return Protocols.IsEqual(equals, other, self);
@@ -643,10 +915,10 @@ namespace IronRuby.Builtins {
         /// </remarks>
         [RubyMethod("<=>")]
         public static object Compare(RubyContext/*!*/ context, double self, [NotNull]BigInteger/*!*/ other) {
-            if (Double.IsNaN(self)) {
-                return null;
-            }
-            return self.CompareTo(Protocols.ConvertToDouble(context, other));
+            // Exactly, rather than by rounding other to a double: a Bignum past Float::MAX rounds
+            // to Infinity, which would make Infinity equal to it.
+            object result = ClrInteger.Compare(context, other, self);
+            return result is int ? -(int)result : result;
         }
 
         /// <summary>
@@ -662,7 +934,36 @@ namespace IronRuby.Builtins {
         /// This is the basis for the tests in <code>Comparable</code>.
         /// </remarks>
         [RubyMethod("<=>")]
-        public static object Compare(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ comparisonStorage, double self, object other) {
+        public static object Compare(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ comparisonStorage,
+            RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ infiniteStorage,
+            ConversionStorage<int>/*!*/ fixnumCast, double self, object other) {
+
+            if (Double.IsNaN(self)) {
+                return null;
+            }
+
+            // MRI's flo_cmp takes this branch before coercing: when self is infinite and
+            // the operand can report its own infinitude, the two are compared as infinities
+            // rather than through #coerce. Date::Infinity relies on it -- Date::JULIAN is
+            // -Float::INFINITY, and without this `Date::JULIAN <=> Date::Infinity.new(-1)`
+            // coerces and answers -1 where MRI answers 0.
+            if (Double.IsInfinity(self) && Protocols.RespondTo(respondToStorage, other, "infinite?")) {
+                var site = infiniteStorage.GetCallSite("infinite?", 0);
+                object infinite = site.Target(site, other);
+
+                if (Protocols.IsTrue(infinite)) {
+                    // other is infinite too; its #infinite? gives the sign.
+                    int otherSign = Protocols.CastToFixnum(fixnumCast, infinite);
+                    if (self > 0.0) {
+                        return ScriptingRuntimeHelpers.Int32ToObject(otherSign > 0 ? 0 : +1);
+                    }
+                    return ScriptingRuntimeHelpers.Int32ToObject(otherSign < 0 ? 0 : -1);
+                }
+
+                // other is finite, so an infinite self is strictly greater or smaller.
+                return ScriptingRuntimeHelpers.Int32ToObject(self > 0.0 ? +1 : -1);
+            }
+
             return Protocols.CoerceAndCompare(coercionStorage, comparisonStorage, self, other);
         }
 
@@ -694,7 +995,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("<")]
         public static bool LessThan(RubyContext/*!*/ context, double self, [NotNull]BigInteger/*!*/ other) {
-            return LessThan(self, Protocols.ConvertToDouble(context, other));
+            int? c = ClrInteger.CompareToFloat(other, self);
+            return c.HasValue && -c.Value < 0;
         }
 
         /// <summary>
@@ -733,7 +1035,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("<=")]
         public static bool LessThanOrEqual(RubyContext/*!*/ context, double self, [NotNull]BigInteger/*!*/ other) {
-            return LessThanOrEqual(self, Protocols.ConvertToDouble(context, other));
+            int? c = ClrInteger.CompareToFloat(other, self);
+            return c.HasValue && -c.Value <= 0;
         }
 
         /// <summary>
@@ -772,7 +1075,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod(">")]
         public static bool GreaterThan(RubyContext/*!*/ context, double self, [NotNull]BigInteger/*!*/ other) {
-            return GreaterThan(self, Protocols.ConvertToDouble(context, other));
+            int? c = ClrInteger.CompareToFloat(other, self);
+            return c.HasValue && -c.Value > 0;
         }
 
         /// <summary>
@@ -811,7 +1115,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod(">=")]
         public static bool GreaterThanOrEqual(RubyContext/*!*/ context, double self, [NotNull]BigInteger/*!*/ other) {
-            return GreaterThanOrEqual(self, Protocols.ConvertToDouble(context, other));
+            int? c = ClrInteger.CompareToFloat(other, self);
+            return c.HasValue && -c.Value >= 0;
         }
 
         /// <summary>
@@ -832,7 +1137,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("finite?")]
         public static bool IsFinite(double self) {
-            return !double.IsInfinity(self);
+            // NaN is not a finite number either, whatever its exponent looks like.
+            return double.IsFinite(self);
         }
 
         #endregion
@@ -892,12 +1198,34 @@ namespace IronRuby.Builtins {
 
         #region Helpers
 
+        // MRI's flodivmod. Computing the modulus as self - floor(self/other)*other loses three
+        // cases that the specs check: a zero divisor is a ZeroDivisionError rather than NaN, an
+        // infinite divisor leaves a finite dividend alone (0 * Infinity is NaN, not 0), and a
+        // dividend of zero keeps its own sign, so -0.0 % 42 is -0.0 and not 0.0.
         private static RubyArray InternalDivMod(double self, double other) {
-            double div = System.Math.Floor(self / other);
-            double mod = self - (div * other);
-            if (other * mod < 0) {
-                mod += other;
-                div -= 1.0;
+            double div, mod;
+            if (Double.IsNaN(other)) {
+                div = mod = other;
+            } else if (other == 0.0) {
+                throw new DivideByZeroException("divided by 0");
+            } else {
+                if (self == 0.0 || (Double.IsInfinity(other) && !Double.IsInfinity(self))) {
+                    mod = self;
+                } else {
+                    // C#'s % on doubles is C's fmod: the remainder takes the dividend's sign.
+                    mod = self % other;
+                }
+
+                if (Double.IsInfinity(self) && !Double.IsInfinity(other)) {
+                    div = self / other;
+                } else {
+                    div = Math.Round((self - mod) / other, MidpointRounding.AwayFromZero);
+                }
+
+                if (other * mod < 0) {
+                    mod += other;
+                    div -= 1.0;
+                }
             }
             object intDiv = div;
             if (!Double.IsInfinity(div) && !Double.IsNaN(div)) {
@@ -909,30 +1237,30 @@ namespace IronRuby.Builtins {
         // I did think about whether to put this into Protocols but really it is only checking the FloatDomainErrors
         // Also, it is only used in FloatOps.Floor and FloatOps.Ceil.
         // These get invoked from Protocols.ConvertToInteger anyway so it would all get a bit circular.
+        // value is integral (the result of Floor, Ceiling, Truncate or rounding), or NaN/Infinity.
+        // The range checks replace Convert.ToInt32 and its OverflowException, which made every
+        // conversion of a Float outside the Int32 range cost a thrown exception. The result is
+        // normalized like any other Integer: a value in the Int64 range is a long, not a BigInteger.
         private static object CastToInteger(double value) {
-            try {
-                if (Double.IsPositiveInfinity(value)) {
-                    throw new FloatDomainError("Infinity");
-                }
-                if (Double.IsNegativeInfinity(value)) {
-                    throw new FloatDomainError("-Infinity");
-                }
-                if (Double.IsNaN(value)) {
-                    throw new FloatDomainError("NaN");
-                }
-                return System.Convert.ToInt32(value);
-            } catch (OverflowException) {
-                return BigInteger.Create(value);
+            if (value >= Int32.MinValue && value <= Int32.MaxValue) {
+                return ScriptingRuntimeHelpers.Int32ToObject((int)value);
             }
+            if (Double.IsPositiveInfinity(value)) {
+                throw new FloatDomainError("Infinity");
+            }
+            if (Double.IsNegativeInfinity(value)) {
+                throw new FloatDomainError("-Infinity");
+            }
+            if (Double.IsNaN(value)) {
+                throw new FloatDomainError("NaN");
+            }
+            // -2**63 is a double exactly; 2**63 is the first double above Int64.MaxValue.
+            if (value >= -9223372036854775808.0 && value < 9223372036854775808.0) {
+                return (long)value;
+            }
+            return new BigInteger(value);
         }
 
-        public static Exception CreateFloatDomainError(string message) {
-            return new FloatDomainError("NaN");
-        }
-
-        public static Exception CreateFloatDomainError(string message, Exception inner) {
-            return new FloatDomainError("NaN", inner);
-        }
 
         #endregion
     }

@@ -22,12 +22,11 @@ using Microsoft.Scripting.Utils;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Runtime.Calls {
-    using AstFactory = IronRuby.Compiler.Ast.AstFactory;
 
     public abstract class RubyAttributeAccessorInfo : RubyMemberInfo {
         private readonly string/*!*/ _instanceVariableName;
 
-        protected string/*!*/ InstanceVariableName { get { return _instanceVariableName; } }
+        protected internal string/*!*/ InstanceVariableName { get { return _instanceVariableName; } }
 
         protected RubyAttributeAccessorInfo(RubyMemberFlags flags, RubyModule/*!*/ declaringModule, string/*!*/ variableName)
             : base(flags, declaringModule) {
@@ -40,8 +39,31 @@ namespace IronRuby.Runtime.Calls {
             get { return true; }
         }
 
+        /// <summary>
+        /// `alias` copies the info, so an aliased attribute accessor is a different object
+        /// reading or writing the same instance variable - and Method#== has to see the two
+        /// as the one method, which is what `Complex.instance_method(:imag) ==
+        /// Complex.instance_method(:imaginary)` asks. Accessors of two different modules stay
+        /// apart, as they do in MRI.
+        /// </summary>
+        public override bool IsEquivalentTo(RubyMemberInfo/*!*/ other) {
+            if (ReferenceEquals(this, other)) {
+                return true;
+            }
+
+            var accessor = other as RubyAttributeAccessorInfo;
+            return accessor != null
+                && accessor.GetType() == GetType()
+                && accessor._instanceVariableName == _instanceVariableName
+                && ReferenceEquals(accessor.DeclaringModule, DeclaringModule);
+        }
+
+        public override int GetEquivalenceHashCode() {
+            return _instanceVariableName.GetHashCode() ^ GetType().GetHashCode();
+        }
+
         public override MemberInfo/*!*/[]/*!*/ GetMembers() {
-            return Utils.EmptyMemberInfos;
+            return Array.Empty<MemberInfo>();
         }
     }
 
@@ -70,7 +92,7 @@ namespace IronRuby.Runtime.Calls {
                 metaBuilder.Result = Methods.GetInstanceVariable.OpCall(
                     AstUtils.Convert(args.MetaScope.Expression, typeof(RubyScope)),
                     AstUtils.Box(args.TargetExpression),
-                    AstUtils.Constant(InstanceVariableName)
+                    AstUtils.Constant(new InstanceVariableSite(InstanceVariableName))
                 );
             }
         }
@@ -104,17 +126,23 @@ namespace IronRuby.Runtime.Calls {
         internal override void BuildCallNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ name) {
             var actualArgs = RubyOverloadResolver.NormalizeArguments(metaBuilder, args, 1, 1);
             if (!metaBuilder.Error) {
-                metaBuilder.Result = Methods.SetInstanceVariable.OpCall(
+                // the value is a positional argument, even a Hash passed as keywords (a.send(:x=, k: 1)): kept, it stops saying so
+                metaBuilder.Result = Methods.SetAttribute.OpCall(
                     AstUtils.Box(args.TargetExpression),
                     AstUtils.Box(actualArgs[0].Expression),
                     AstUtils.Convert(args.MetaScope.Expression, typeof(RubyScope)),
-                    AstUtils.Constant(InstanceVariableName)
+                    AstUtils.Constant(new InstanceVariableSite(InstanceVariableName))
                 );
             }
         }
 
         protected internal override RubyMemberInfo/*!*/ Copy(RubyMemberFlags flags, RubyModule/*!*/ module) {
             return new RubyAttributeWriterInfo(flags, module, InstanceVariableName);
+        }
+
+        // the value to assign: Method#arity 1, #parameters [[:req]]
+        public override int GetArity() {
+            return 1;
         }
 
         public override RubyMemberInfo TrySelectOverload(Type/*!*/[]/*!*/ parameterTypes) {

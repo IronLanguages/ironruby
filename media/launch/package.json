@@ -1,0 +1,12 @@
+{
+  "name": "ironruby-launch-video",
+  "private": true,
+  "description": "The IronRuby 4.0 launch video, a HyperFrames composition",
+  "scripts": {
+    "preview": "npx --yes hyperframes@0.8.23 preview",
+    "lint": "npx --yes hyperframes@0.8.23 lint",
+    "check": "npx --yes hyperframes@0.8.23 check",
+    "snapshot": "npx --yes hyperframes@0.8.23 snapshot --frames 12",
+    "render": "npx --yes hyperframes@0.8.23 render --fps 60 --quality high --output renders/ironruby-4-launch.mp4"
+  }
+}

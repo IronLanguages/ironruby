@@ -13,18 +13,12 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using Microsoft.Scripting;
 using Microsoft.Scripting.Ast;
-using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Compiler.Ast {
-    using Ast = Expression;
     using AstUtils = Microsoft.Scripting.Ast.Utils;
 
     public abstract class JumpStatement : Expression {
@@ -43,7 +37,15 @@ namespace IronRuby.Compiler.Ast {
             return (_arguments != null) ? _arguments.TransformToReturnValue(gen) : AstUtils.Constant(null);
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal abstract MSA.Expression/*!*/ TransformJump(AstGenerator/*!*/ gen);
+
+        // Marks the sequence point like any other statement does, so that caller/backtraces taken
+        // while evaluating `return caller` report the line of the return.
+        internal sealed override MSA.Expression/*!*/ Transform(AstGenerator/*!*/ gen) {
+            return gen.AddDebugInfo(TransformJump(gen), Location);
+        }
+
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             return Utils.Convert(Transform(gen), typeof(object));
         }
 

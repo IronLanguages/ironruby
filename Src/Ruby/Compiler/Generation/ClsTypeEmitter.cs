@@ -1,4 +1,4 @@
-﻿/* ****************************************************************************
+/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -12,12 +12,7 @@
  *
  *
  * ***************************************************************************/
-#if FEATURE_REFEMIT
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -25,21 +20,15 @@ using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
-using System.Dynamic;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Generation;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Runtime.CompilerServices;
-using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
 
 namespace IronRuby.Compiler.Generation {
 
     public abstract class ClsTypeEmitter {
-        public const string VtableNamesField = "#VTableNames#";
         public const string BaseMethodPrefix = "#base#";
-        public const string FieldGetterPrefix = "#field_get#", FieldSetterPrefix = "#field_set#";
 
         private ILGen _cctor;
         private readonly TypeBuilder _tb;
@@ -54,15 +43,9 @@ namespace IronRuby.Compiler.Generation {
         }
 
         private static bool CanOverrideMethod(MethodInfo/*!*/ mi) {
-#if !SILVERLIGHT
             return true;
-#else
-            // can only override the method if it is not SecurityCritical
-            return mi.GetCustomAttributes(typeof(System.Security.SecurityCriticalAttribute), false).Length == 0;
-#endif
         }
 
-        protected abstract MethodInfo EventHelper();
         protected abstract MethodInfo MissingInvokeMethodException();
 
         protected abstract void EmitImplicitContext(ILGen il);
@@ -73,6 +56,14 @@ namespace IronRuby.Compiler.Generation {
         
         protected abstract Type/*!*/[]/*!*/ MakeSiteSignature(int nargs);
         protected abstract Type/*!*/ ContextType { get; }
+
+        /// <summary>
+        /// Emits the conversion of the dynamic call's result (in <paramref name="result"/>) to the return type of <paramref name="mi"/>
+        /// if the method's result needs one other than the language's conversion to that type.
+        /// </summary>
+        protected virtual bool TryEmitResultConversion(ILGen/*!*/ il, MethodInfo/*!*/ mi, LocalBuilder/*!*/ result) {
+            return false;
+        }
         
         protected ILGen GetCCtor() {
             if (_cctor == null) {
@@ -92,7 +83,7 @@ namespace IronRuby.Compiler.Generation {
         /// </summary>
         internal void OverrideMethods(Type type) {
             // if we have conflicting virtual's due to new slots only override the methods on the most derived class.
-            var added = new Dictionary<Key<string, MethodSignatureInfo>, MethodInfo>();
+            var added = new Dictionary<(string, MethodSignatureInfo), MethodInfo>();
 
             string defaultGetter, defaultSetter;
             DefaultMemberAttribute defaultMember = type.GetTypeInfo().GetCustomAttributes<DefaultMemberAttribute>(false).SingleOrDefault();
@@ -108,7 +99,7 @@ namespace IronRuby.Compiler.Generation {
             var methods = type.GetInheritedMethods(flattenHierarchy: true);
 
             foreach (MethodInfo mi in methods) {
-                var key = Key.Create(mi.Name, new MethodSignatureInfo(mi));
+                var key = (mi.Name, new MethodSignatureInfo(mi));
 
                 if (!added.TryGetValue(key, out overridden)) {
                     added[key] = mi;
@@ -160,7 +151,13 @@ namespace IronRuby.Compiler.Generation {
         /// has the same signature and then returns the result
         /// </summary>
         private void EmitBaseMethodDispatch(MethodInfo mi, ILGen il) {
-            if (!mi.IsAbstract) {
+            if (_baseType == typeof(object) && mi.DeclaringType == typeof(object) && mi.Name == "ToString") {
+                // A Ruby class implementing CLR interfaces: Object#ToString answers what RubyObject#ToString does (Kernel#to_s),
+                // not the name of the generated CLR type.
+                il.EmitLoadArg(0);
+                il.EmitCall(Methods.ObjectToString);
+                il.Emit(OpCodes.Ret);
+            } else if (!mi.IsAbstract) {
                 int offset = 0;
                 if (!mi.IsStatic) {
                     il.EmitLoadArg(0);
@@ -261,7 +258,7 @@ namespace IronRuby.Compiler.Generation {
             il.Emit(OpCodes.Ceq);
             il.Emit(OpCodes.Brtrue, baseCallLabel);
 
-            if (mi.ReturnType != typeof(void)) {
+            if (mi.ReturnType != typeof(void) && !TryEmitResultConversion(il, mi, resultVar)) {
                 il.Emit(OpCodes.Ldloc, resultVar);
                 EmitConvertFromObject(il, mi.ReturnType);
             }
@@ -294,19 +291,14 @@ namespace IronRuby.Compiler.Generation {
             }
 
             if (_cctor != null) {
-                if (_dynamicSiteFactories.Count > 0) { 
-                    MethodBuilder createSitesImpl = _tb.DefineMethod(
-                        "<create_dynamic_sites>", MethodAttributes.Private | MethodAttributes.Static, typeof(void), ReflectionUtils.EmptyTypes
-                    );
-
+                if (_dynamicSiteFactories.Count > 0) {
                     _dynamicSiteFactories.Add(Expression.Empty());
                     var lambda = Expression.Lambda(Expression.Block(_dynamicSiteFactories));
-#if WIN8
-                    ((dynamic)lambda).CompileToMethod(createSitesImpl);
-#else
-                    lambda.CompileToMethod(createSitesImpl);
-#endif
-                    _cctor.EmitCall(createSitesImpl);
+                    // CompileToMethod is unavailable on .NET Core; compile lazily from the cctor
+                    // once the runtime type exists (see DynamicSiteFactories).
+                    _cctor.EmitInt(DynamicSiteFactories.Register(lambda));
+                    _cctor.Emit(OpCodes.Ldtoken, _tb);
+                    _cctor.EmitCall(typeof(DynamicSiteFactories).GetMethod(nameof(DynamicSiteFactories.RunFactory)));
 
                     _dynamicSiteFactories.Clear();
                 }
@@ -321,12 +313,6 @@ namespace IronRuby.Compiler.Generation {
             // TODO: Debugging support
             return new ILGen(il);
         }
-
-#if WIN8 // TODO: what is ReservedMask?
-        protected const MethodAttributes MethodAttributesToEraseInOveride = MethodAttributes.Abstract | (MethodAttributes)0xD000;
-#else
-        protected const MethodAttributes MethodAttributesToEraseInOveride = MethodAttributes.Abstract | MethodAttributes.ReservedMask;
-#endif
 
         protected ILGen DefineMethodOverride(MethodAttributes extra, MethodInfo decl, out MethodBuilder impl) {
             impl = ReflectionUtils.DefineMethodOverride(_tb, extra, decl);
@@ -436,7 +422,7 @@ namespace IronRuby.Compiler.Generation {
         private readonly int _index;
 
         private ReturnFixer(LocalBuilder/*!*/ reference, ParameterInfo/*!*/ parameter, int index) {
-            Debug.Assert(reference.LocalType.IsGenericType() && reference.LocalType.GetGenericTypeDefinition() == typeof(StrongBox<>));
+            Debug.Assert(reference.LocalType.IsGenericType && reference.LocalType.GetGenericTypeDefinition() == typeof(StrongBox<>));
             Debug.Assert(parameter.ParameterType.IsByRef);
 
             _parameter = parameter;
@@ -469,4 +455,3 @@ namespace IronRuby.Compiler.Generation {
         }
     }
 }
-#endif

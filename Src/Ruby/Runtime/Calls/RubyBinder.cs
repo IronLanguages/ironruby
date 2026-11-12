@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Dynamic;
@@ -29,7 +25,6 @@ using System.Diagnostics;
 using IronRuby.Runtime.Conversions;
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using System.Collections.Generic;
 
 namespace IronRuby.Runtime.Calls {
     public sealed class RubyBinder : DefaultBinder {
@@ -72,15 +67,8 @@ namespace IronRuby.Runtime.Calls {
         #region MetaObjects
 
         // negative start reserves as many slots at the beginning of the new array:
-        internal static object/*!*/[]/*!*/ ToValues(DynamicMetaObject/*!*/[]/*!*/ args, int start) {
-            var result = new object[args.Length - start];
-            for (int i = Math.Max(0, -start); i < result.Length; i++) {
-                result[i] = args[start + i].Value;
-            }
-            return result;
-        }
 
-#if DEBUG && !CLR2 && !SILVERLIGHT && !WIN8 && !ANDROID && !WP75
+#if DEBUG
         // ExpressionWriter might call ToString on a live object that might dynamically invoke a method.
         // We need to prevent recursion in such case.
         [ThreadStatic]
@@ -93,7 +81,7 @@ namespace IronRuby.Runtime.Calls {
 
         [Conditional("DEBUG")]
         internal static void DumpPrecompiledRule(CallSiteBinder/*!*/ binder, MemberDispatcher/*!*/ dispatcher) {
-#if DEBUG && FEATURE_FULL_CONSOLE
+#if DEBUG
             if (RubyOptions.ShowRules) {
                 var oldColor = Console.ForegroundColor;
                 Console.ForegroundColor = ConsoleColor.Cyan;
@@ -107,7 +95,7 @@ namespace IronRuby.Runtime.Calls {
 
         [Conditional("DEBUG")]
         internal static void DumpRule(CallSiteBinder/*!*/ binder, BindingRestrictions/*!*/ restrictions, Expression/*!*/ expr) {
-#if DEBUG && FEATURE_FULL_CONSOLE && !CLR2
+#if DEBUG
             if (RubyOptions.ShowRules) {
                 var oldColor = Console.ForegroundColor;
                 try {

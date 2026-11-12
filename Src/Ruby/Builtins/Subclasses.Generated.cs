@@ -21,6 +21,7 @@ using System.Diagnostics;
 namespace IronRuby.Builtins {
 #if GENERATOR
     Stateless = ['Range', 'RubyRegex', 'RubyIO']
+    ImplementObjectStateThemselves = ['Range', 'RubyRegex']
 
     def generate
       Stateless.each do |cls| 
@@ -31,6 +32,10 @@ namespace IronRuby.Builtins {
 
     def Class *a
       @class
+    end
+
+    def New
+      ImplementObjectStateThemselves.include?(@class) ? 'new ' : ''
     end
 #else
     public partial class /*$Class{*/Proc/*}*/ {
@@ -60,21 +65,11 @@ namespace IronRuby.Builtins {
                 return _instanceData;
             }
 
-            public bool IsFrozen {
+            public /*$New*/bool IsFrozen {
                 get { return _instanceData != null && _instanceData.IsFrozen; }
             }
 
-            public bool IsTainted {
-                get { return _instanceData != null && _instanceData.IsTainted; }
-                set { GetInstanceData().IsTainted = value; }
-            }
-
-            public bool IsUntrusted {
-                get { return _instanceData != null && _instanceData.IsUntrusted; }
-                set { GetInstanceData().IsUntrusted = value; }
-            }
-
-            public void Freeze() {
+            public /*$New*/void Freeze() {
                 GetInstanceData().Freeze();
             }
 
@@ -121,21 +116,11 @@ namespace IronRuby.Builtins {
                 return _instanceData;
             }
 
-            public bool IsFrozen {
+            public new bool IsFrozen {
                 get { return _instanceData != null && _instanceData.IsFrozen; }
             }
 
-            public bool IsTainted {
-                get { return _instanceData != null && _instanceData.IsTainted; }
-                set { GetInstanceData().IsTainted = value; }
-            }
-
-            public bool IsUntrusted {
-                get { return _instanceData != null && _instanceData.IsUntrusted; }
-                set { GetInstanceData().IsUntrusted = value; }
-            }
-
-            public void Freeze() {
+            public new void Freeze() {
                 GetInstanceData().Freeze();
             }
 
@@ -179,21 +164,11 @@ namespace IronRuby.Builtins {
                 return _instanceData;
             }
 
-            public bool IsFrozen {
+            public new bool IsFrozen {
                 get { return _instanceData != null && _instanceData.IsFrozen; }
             }
 
-            public bool IsTainted {
-                get { return _instanceData != null && _instanceData.IsTainted; }
-                set { GetInstanceData().IsTainted = value; }
-            }
-
-            public bool IsUntrusted {
-                get { return _instanceData != null && _instanceData.IsUntrusted; }
-                set { GetInstanceData().IsUntrusted = value; }
-            }
-
-            public void Freeze() {
+            public new void Freeze() {
                 GetInstanceData().Freeze();
             }
 
@@ -239,16 +214,6 @@ namespace IronRuby.Builtins {
 
             public bool IsFrozen {
                 get { return _instanceData != null && _instanceData.IsFrozen; }
-            }
-
-            public bool IsTainted {
-                get { return _instanceData != null && _instanceData.IsTainted; }
-                set { GetInstanceData().IsTainted = value; }
-            }
-
-            public bool IsUntrusted {
-                get { return _instanceData != null && _instanceData.IsUntrusted; }
-                set { GetInstanceData().IsUntrusted = value; }
             }
 
             public void Freeze() {

@@ -13,17 +13,16 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_SYNC_SOCKETS
 
+using System;
 using System.Net.Sockets;
-using Microsoft.Scripting.Runtime;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using System.Runtime.InteropServices;
 using System.Net;
 
 namespace IronRuby.StandardLibrary.Sockets {
-    [RubyClass("TCPSocket", BuildConfig = "FEATURE_SYNC_SOCKETS")]
+    [RubyClass("TCPSocket")]
     public class TCPSocket : IPSocket {
         /// <summary>
         /// Creates an uninitialized socket.
@@ -55,17 +54,21 @@ namespace IronRuby.StandardLibrary.Sockets {
             [DefaultProtocol]MutableString remoteHost, object remotePort,
             [DefaultProtocol]MutableString localHost, object localPort) {
 
-            return BindLocalEndPoint(
-                CreateTCPSocket(stringCast, fixnumCast, self, remoteHost, remotePort, 0),
-                localHost,
-                ConvertToPortNum(stringCast, fixnumCast, localPort)
-            );
+            // The local endpoint has to be bound *before* connecting: bind(2) on a connected
+            // socket is EINVAL, which is what doing this the other way round produced.
+            return new TCPSocket(self.Context, CreateSocket(
+                remoteHost, ConvertToPortNum(stringCast, fixnumCast, remotePort),
+                localHost, ConvertToPortNum(stringCast, fixnumCast, localPort)
+            ));
         }
 
-        // Reinitialization. Not called when a factory/non-default ctor is called.
+        // Reinitialization. Not called when a factory/non-default ctor is called - but it is what
+        // a Ruby subclass's .new runs (allocate, then #initialize). These took a TCPServer, so
+        // `class MySocket < TCPSocket; end; MySocket.new(host, port)` bound to nothing but
+        // IO#initialize and failed with "no implicit conversion of MySocket into TCPServer".
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-        public static TCPServer/*!*/ Reinitialize(ConversionStorage<MutableString>/*!*/ stringCast, ConversionStorage<int>/*!*/ fixnumCast,
-            TCPServer/*!*/ self, [DefaultProtocol]MutableString remoteHost, object remotePort, [Optional]int localPort) {
+        public static TCPSocket/*!*/ Reinitialize(ConversionStorage<MutableString>/*!*/ stringCast, ConversionStorage<int>/*!*/ fixnumCast,
+            TCPSocket/*!*/ self, [DefaultProtocol]MutableString remoteHost, object remotePort, [Optional]int localPort) {
 
             // Not sure what the semantics should be in this case but we make sure not to blow up.
             // Real-world code (Server.connect_to in memcache.rb in the memcache-client gem) does do "TCPSocket.new(host, port, 0)"
@@ -79,40 +82,57 @@ namespace IronRuby.StandardLibrary.Sockets {
 
         // Reinitialization. Not called when a factory/non-default ctor is called.
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-        public static TCPServer/*!*/ Reinitialize(ConversionStorage<MutableString>/*!*/ stringCast, ConversionStorage<int>/*!*/ fixnumCast,
-            TCPServer/*!*/ self,
+        public static TCPSocket/*!*/ Reinitialize(ConversionStorage<MutableString>/*!*/ stringCast, ConversionStorage<int>/*!*/ fixnumCast,
+            TCPSocket/*!*/ self,
             [DefaultProtocol]MutableString remoteHost, object remotePort,
             [DefaultProtocol]MutableString localHost, object localPort) {
 
-            self.Socket = CreateSocket(remoteHost, ConvertToPortNum(stringCast, fixnumCast, remotePort));
-            BindLocalEndPoint(self, localHost, ConvertToPortNum(stringCast, fixnumCast, localPort));
+            self.Socket = CreateSocket(
+                remoteHost, ConvertToPortNum(stringCast, fixnumCast, remotePort),
+                localHost, ConvertToPortNum(stringCast, fixnumCast, localPort));
             return self;
         }
 
         private static Socket/*!*/ CreateSocket(MutableString remoteHost, int port) {
-            Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-            try {
-                if (remoteHost != null) {
-                    socket.Connect(remoteHost.ConvertToString(), port);
-                } else {
-                    socket.Connect(IPAddress.Loopback, port);
-                }
-            } catch (SocketException e) {
-                switch (e.SocketErrorCode) {
-                    case SocketError.ConnectionRefused:
-                        throw new Errno.ConnectionRefusedError();
-                    default:
-                        throw;
-                }
-            }
-            return socket;
+            return CreateSocket(remoteHost, port, null, 0);
         }
 
-        private static TCPSocket/*!*/ BindLocalEndPoint(TCPSocket/*!*/ socket, MutableString localHost, int localPort) {
-            IPAddress localIPAddress = localHost != null ? GetHostAddress(localHost.ConvertToString()) : IPAddress.Loopback;
-            IPEndPoint localEndPoint = new IPEndPoint(localIPAddress, localPort);
-            socket.Socket.Bind(localEndPoint);
-            return socket;
+        private static Socket/*!*/ CreateSocket(MutableString remoteHost, int port, MutableString localHost, int localPort) {
+            // Resolve first: the address family has to follow the address, not be pinned to
+            // InterNetwork, or TCPSocket.new("::1", port) can never work and every IPv6-guarded
+            // spec in the tree silently skips.  A host can resolve to several addresses -- and a
+            // nil host means the loopback of *either* family -- so connect(2) is tried against
+            // each in turn, the way CRuby walks the getaddrinfo list, rather than giving up on
+            // the first one.
+            IPAddress[] addresses = GetHostAddresses(remoteHost != null ? remoteHost.ConvertToString() : null);
+
+            Exception failure = null;
+            foreach (IPAddress address in addresses) {
+                Socket socket = null;
+                // CRuby says which call failed, for the host and port as they were given.
+                string call = "socket(2)";
+                try {
+                    // A host without IPv6 refuses even to create the socket (EAFNOSUPPORT); that is one
+                    // more address that did not work, and the next one is tried.
+                    socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+                    if (localHost != null || localPort != 0) {
+                        IPAddress localAddress = localHost != null
+                            ? GetHostAddress(localHost.ConvertToString(), address.AddressFamily)
+                            : (address.AddressFamily == AddressFamily.InterNetworkV6 ? IPAddress.IPv6Any : IPAddress.Any);
+                        call = "bind(2)";
+                        socket.Bind(new IPEndPoint(localAddress, localPort));
+                    }
+                    call = "connect(2)";
+                    socket.Connect(address, port);
+                    return socket;
+                } catch (SocketException e) {
+                    socket?.Close();
+                    failure = call == "bind(2)"
+                        ? SocketErrorOps.ToRubyException(e, DescribeEndPoint(call, localHost, localPort))
+                        : SocketErrorOps.ToRubyException(e, DescribeEndPoint(call, remoteHost, port));
+                }
+            }
+            throw failure;
         }
 
         [RubyMethod("gethostbyname", RubyMethodAttributes.PublicSingleton)]
@@ -121,4 +141,3 @@ namespace IronRuby.StandardLibrary.Sockets {
         }
     }
 }
-#endif

@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using Microsoft.Scripting;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
@@ -30,8 +26,25 @@ namespace IronRuby.Compiler.Ast {
             : base(arguments, location) {
         }
 
-        // see Ruby Language.doc/Runtime/Control Flow Implementation/Break
-        internal override MSA.Expression/*!*/ Transform(AstGenerator/*!*/ gen) {
+        // break, by where it stands: in eval, in a while/until loop, in a block (it ends the call the block
+        // was given to) or in a method body; the runtime halves are in RubyOps.FlowControl.cs
+        // a class body inside the loop has to be left first
+        private static MSA.Expression/*!*/ LoopBreak(AstGenerator/*!*/ gen, MSA.Expression/*!*/ value) {
+            var module = gen.GetModuleBodyToEscape(true);
+            if (module != null) {
+                return module.Escape(value, LoopBreak);
+            }
+            return Ast.Block(
+                Ast.Assign(
+                    gen.CurrentLoop.ResultVariable,
+                    Ast.Convert(value, gen.CurrentLoop.ResultVariable.Type)
+                ),
+                Ast.Break(gen.CurrentLoop.BreakLabel),
+                AstUtils.Empty()
+            );
+        }
+
+        internal override MSA.Expression/*!*/ TransformJump(AstGenerator/*!*/ gen) {
 
             MSA.Expression transformedReturnValue = TransformReturnValue(gen);
 
@@ -42,14 +55,7 @@ namespace IronRuby.Compiler.Ast {
 
             // loop:
             if (gen.CurrentLoop != null) {
-                return Ast.Block(
-                    Ast.Assign(
-                        gen.CurrentLoop.ResultVariable,
-                        Ast.Convert(transformedReturnValue, gen.CurrentLoop.ResultVariable.Type)
-                    ),
-                    Ast.Break(gen.CurrentLoop.BreakLabel),
-                    AstUtils.Empty()
-                );
+                return LoopBreak(gen, transformedReturnValue);
             }
 
             // block:

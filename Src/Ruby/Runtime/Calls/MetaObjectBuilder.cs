@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections;
@@ -45,6 +41,7 @@ namespace IronRuby.Runtime.Calls {
         private AstExpressions _initializations;
         private List<ParameterExpression> _temps;
         private bool _error;
+        private bool _arityError;
         private bool _treatRestrictionsAsConditions;
 
         internal MetaObjectBuilder(RubyMetaBinder/*!*/ binder, DynamicMetaObject/*!*/[]/*!*/ arguments)
@@ -75,6 +72,7 @@ namespace IronRuby.Runtime.Calls {
             _result = null;
             _initializations = null;
             _error = false;
+            _arityError = false;
             _treatRestrictionsAsConditions = false;
         }
 
@@ -91,6 +89,12 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public ParameterExpression BfcVariable { get; set; }
+
+        /// <summary>
+        /// Set if the rule being built is to be shared by receivers of several classes (see <see cref="RuleVersionSet"/>).
+        /// Taken by the first target type test of a method call.
+        /// </summary>
+        internal RuleVersionSet TargetVersionSet { get; set; }
 
         /// <summary>
         /// A rule builder sets this up if the resulting rule is required to be wrapped in a non-local control flow handler.
@@ -170,8 +174,49 @@ namespace IronRuby.Runtime.Calls {
             _error = true;
         }
 
+        /// <summary>
+        /// An ArgumentError for the wrong number of arguments, which MRI raises in the frame of the
+        /// method that was called (see <see cref="AddCalleeFrame"/>).
+        /// </summary>
+        public void SetArityError(Expression/*!*/ expression) {
+            SetError(expression);
+            _arityError = true;
+        }
+
         public void SetWrongNumberOfArgumentsError(int actual, int expected) {
-            SetError(Methods.MakeWrongNumberOfArgumentsError.OpCall(AstUtils.Constant(actual), AstUtils.Constant(expected)));
+            SetArityError(Methods.MakeWrongNumberOfArgumentsError.OpCall(AstUtils.Constant(actual), AstUtils.Constant(expected)));
+        }
+
+        /// <summary>
+        /// MRI raises an ArgumentError for the wrong number of arguments from the method that was
+        /// called: its backtrace starts with that method's frame, at its `def' for a Ruby method,
+        /// at the call for a library one (as for any C method); error_highlight then shows both the
+        /// caller and the callee. Here the arity is checked by the call site, so the frame is put
+        /// on the error.
+        /// </summary>
+        internal void AddCalleeFrame(RubyMemberInfo/*!*/ method, string/*!*/ name) {
+            if (!_error || !_arityError) {
+                return;
+            }
+            _arityError = false;
+
+            string file = null;
+            int line = 0;
+            string label;
+            if (method is RubyMethodInfo rubyMethod) {
+                label = IronRuby.Compiler.Ast.MethodDefinition.QualifyFrameLabel(rubyMethod.DefinitionName, rubyMethod.BodyModule);
+                if (rubyMethod.Document != null && !RubyStackTraceBuilder.IsInternalFile(rubyMethod.Document.FileName)) {
+                    file = rubyMethod.Document.FileName;
+                    line = rubyMethod.SourceSpan.Start.Line;
+                }
+            } else if (method is RubyMethodGroupBase || method is RubyLibraryMethodInfo) {
+                label = IronRuby.Compiler.Ast.MethodDefinition.QualifyFrameLabel(name, method.DeclaringModule);
+            } else {
+                return;
+            }
+            _result = Methods.SetCalleeFrame.OpCall(
+                AstUtils.Convert(_result, typeof(Exception)), AstUtils.Constant(file, typeof(string)), AstUtils.Constant(line), AstUtils.Constant(label)
+            );
         }
 
         public void SetMetaResult(DynamicMetaObject/*!*/ metaResult, CallArguments/*!*/ args) {
@@ -205,7 +250,7 @@ namespace IronRuby.Runtime.Calls {
         public void AddTypeRestriction(Type/*!*/ type, Expression/*!*/ expression) {
             if (_treatRestrictionsAsConditions) {
                 AddCondition(Ast.TypeEqual(expression, type));
-            } else if (expression.Type != type || !type.IsSealed()) {
+            } else if (expression.Type != type || !type.IsSealed) {
                 Add(BindingRestrictions.GetTypeRestriction(expression, type));
             }
         }
@@ -246,6 +291,35 @@ namespace IronRuby.Runtime.Calls {
 
         public void AddTargetTypeTest(object target, RubyClass/*!*/ targetClass, Expression/*!*/ targetParameter, DynamicMetaObject/*!*/ metaContext,
             IEnumerable<string>/*!*/ resolvedNames) {
+            AddTargetTypeTest(target, targetClass, targetParameter, metaContext, resolvedNames, null);
+        }
+
+        // The public ImmediateClass getter a rule can call on a Ruby object of the type directly, or null if
+        // the type is not visible or has none. Both a property of the type alone, but a reflection lookup and
+        // Type.IsVisible (which walks generic arguments and declaring types) at every binding of a call
+        // site on a Ruby object - every new class misses its call sites' rules. A weak table, so that a
+        // collectible type goes with its assembly.
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Type, StrongBox<MethodInfo>>/*!*/ _directClassGetters =
+            new System.Runtime.CompilerServices.ConditionalWeakTable<Type, StrongBox<MethodInfo>>();
+
+        private static MethodInfo GetDirectClassGetter(Type/*!*/ type) {
+            StrongBox<MethodInfo> entry;
+            if (!_directClassGetters.TryGetValue(type, out entry)) {
+                MethodInfo getter = type.GetMethod(Methods.IRubyObject_get_ImmediateClass.Name, BindingFlags.Public | BindingFlags.Instance);
+                entry = new StrongBox<MethodInfo>(
+                    (type.IsVisible && getter != null && getter.ReturnType == typeof(RubyClass)) ? getter : null
+                );
+                _directClassGetters.AddOrUpdate(type, entry);
+            }
+            return entry.Value;
+        }
+
+        /// <summary>
+        /// If <paramref name="versionSet"/> is given and the target is a Ruby object the rule tests the class version against the set
+        /// (and the current version is added to it) instead of against a constant: see <see cref="RuleVersionSet"/>.
+        /// </summary>
+        internal void AddTargetTypeTest(object target, RubyClass/*!*/ targetClass, Expression/*!*/ targetParameter, DynamicMetaObject/*!*/ metaContext,
+            IEnumerable<string>/*!*/ resolvedNames, RuleVersionSet versionSet) {
 
             // no changes to the module's class hierarchy while building the test:
             targetClass.Context.RequiresClassHierarchyLock();
@@ -260,8 +334,17 @@ namespace IronRuby.Runtime.Calls {
                 AddTypeRestriction(type, targetParameter);
             
                 // Ruby objects (get the method directly to prevent interface dispatch):
-                MethodInfo classGetter = type.GetMethod(Methods.IRubyObject_get_ImmediateClass.Name, BindingFlags.Public | BindingFlags.Instance);
-                if (type.IsVisible() && classGetter != null && classGetter.ReturnType == typeof(RubyClass)) {
+                MethodInfo classGetter = GetDirectClassGetter(type);
+                if (classGetter != null) {
+                    if (versionSet != null && versionSet.TryAdd(targetClass.Version.Method)) {
+                        // (#{type})target.ImmediateClass.Version.Method in #{versionSet}
+                        AddCondition(versionSet.MakeTest(
+                            Ast.Field(Ast.Field(Ast.Call(Ast.Convert(targetParameter, type), classGetter), Fields.RubyModule_Version), Fields.VersionHandle_Method),
+                            targetClass.Version.Method
+                        ));
+                        return;
+                    }
+
                     AddCondition(
                         // (#{type})target.ImmediateClass.Version.Method == #{immediateClass.Version.Method}
                         Ast.Equal(
@@ -287,7 +370,7 @@ namespace IronRuby.Runtime.Calls {
             // singleton nil:
             if (target == null) {
                 AddRestriction(Ast.Equal(targetParameter, AstUtils.Constant(null)));
-                AddVersionTest(context.NilClass);
+                AddVersionTest(context.NilClass, versionSet);
                 return;
             }
 
@@ -302,18 +385,30 @@ namespace IronRuby.Runtime.Calls {
                 return;
             }
 
+            // An object of a sealed CLR type whose class is a Ruby subclass of that type (a Thread subclass):
+            if (targetClass.GetNonSingletonClass().IsRubyClass) {
+                AddTypeRestriction(target.GetType(), targetParameter);
+                AddCondition(Methods.IsAdoptedClrRuleValid.OpCall(
+                    metaContext.Expression,
+                    targetParameter,
+                    AstUtils.Constant(targetClass),
+                    AstUtils.Constant(targetClass.Version.Method)
+                ));
+                return;
+            }
+
             var nominalClass = targetClass.NominalClass;
 
             Debug.Assert(!nominalClass.IsSingletonClass);
             Debug.Assert(!nominalClass.IsRubyClass);
 
-            // Do we need a singleton check?
-            if (nominalClass.ClrSingletonMethods == null ||
-                CollectionUtils.TrueForAll(resolvedNames, (methodName) => !nominalClass.ClrSingletonMethods.ContainsKey(methodName))) {
+            // Do we need a singleton check? (Always, once some object of the type has a Ruby subclass as its class.)
+            if (!nominalClass.HasAdoptedInstances && (nominalClass.ClrSingletonMethods == null ||
+                CollectionUtils.TrueForAll(resolvedNames, (methodName) => !nominalClass.ClrSingletonMethods.ContainsKey(methodName)))) {
 
                 // no: there is no singleton subclass of target class that defines any method being called:
                 AddTypeRestriction(target.GetType(), targetParameter);
-                AddVersionTest(targetClass);
+                AddVersionTest(targetClass, versionSet);
 
             } else if (targetClass.IsSingletonClass) {
 
@@ -357,16 +452,26 @@ namespace IronRuby.Runtime.Calls {
             AddCondition(Ast.Equal(Ast.Field(AstUtils.Constant(cls.Version), Fields.VersionHandle_Method), AstUtils.Constant(cls.Version.Method)));
         }
 
-        internal void AddSplattedArgumentTest(IList/*!*/ value, Expression/*!*/ expression, out int listLength, out ParameterExpression/*!*/ listVariable) {
-            Expression assignment;
-            listVariable = expression as ParameterExpression;
-            if (listVariable != null && typeof(IList).IsAssignableFrom(expression.Type)) {
-                assignment = expression;
+        private void AddVersionTest(RubyClass/*!*/ cls, RuleVersionSet versionSet) {
+            if (versionSet != null && versionSet.TryAdd(cls.Version.Method)) {
+                // #{cls.Version}.Method in #{versionSet}
+                AddCondition(versionSet.MakeTest(Ast.Field(AstUtils.Constant(cls.Version), Fields.VersionHandle_Method), cls.Version.Method));
             } else {
-                listVariable = GetTemporary(typeof(IList), "#list");
-                assignment = Ast.Assign(listVariable, AstUtils.Convert(expression, typeof(IList)));
+                AddVersionTest(cls);
             }
-            
+        }
+
+        internal void AddSplattedArgumentTest(IList/*!*/ value, Expression/*!*/ expression, out int listLength, out ParameterExpression/*!*/ listVariable) {
+            // Every splatted call comes through here, whoever built the list - `f(*args)' in Ruby
+            // source, Kernel#send, an Enumerator replaying the arguments it was made with. A hash
+            // a ruby2_keywords method is carrying goes back to being keyword arguments at exactly
+            // this point, and nowhere else. The list keeps its length, so the rule below is
+            // unaffected.
+            listVariable = GetTemporary(typeof(IList), "#list");
+            Expression assignment = Ast.Assign(listVariable,
+                Methods.SplatRuby2Keywords.OpCall(AstUtils.Convert(expression, typeof(IList)))
+            );
+
             listLength = value.Count;
             AddCondition(Ast.Equal(Ast.Property(assignment, typeof(ICollection).GetDeclaredProperty("Count")), AstUtils.Constant(value.Count)));
         }

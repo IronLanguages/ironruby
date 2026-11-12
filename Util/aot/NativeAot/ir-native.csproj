@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Prototype (part B of ../README.md): the `ir` interpreter as a NativeAOT executable.
+       Not part of the main build. Publish:
+         dotnet publish Util/aot/NativeAot/ir-native.csproj -c Release -p:DlrSourceDir=/root/workspace/dlr/src/core
+       Output: Util/aot/NativeAot/bin/Release/net10.0/linux-x64/publish/ir -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IronRubyTargetFrameworks>net10.0</IronRubyTargetFrameworks>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>ir</AssemblyName>
+    <RootNamespace>IronRuby.Hosting</RootNamespace>
+    <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
+    <PublishAot>true</PublishAot>
+    <Nullable>disable</Nullable>
+    <!-- IronRuby.Prism is an Exe project (it has a test driver); only its library half is used -->
+    <ValidateExecutableReferencesMatchSelfContained>false</ValidateExecutableReferencesMatchSelfContained>
+    <!-- IronRuby's library initializers, binders and ReflectionCache find members by name at
+         run time; nothing in IronRuby is annotated for trimming, so keep IronRuby whole. -->
+    <TrimMode>partial</TrimMode>
+    <IlcGenerateStackTraceData>true</IlcGenerateStackTraceData>
+    <!-- Ruby exposes UTF-7. NativeAOT bakes feature switches in at compile time, and the SDK's
+         own default (false) for this one wins over a RuntimeHostConfigurationOption item. -->
+    <EnableUnsafeUTF7Encoding>true</EnableUnsafeUTF7Encoding>
+    <!-- the warnings are the finding (see the README), not noise to fail the build on -->
+    <SuppressTrimAnalysisWarnings>false</SuppressTrimAnalysisWarnings>
+    <NoWarn>$(NoWarn);CS1591;CS0618</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <RuntimeHostConfigurationOption Include="System.IO.DisableFileLocking" Value="true" Trim="true" />
+    <!-- `dotnet build -p:PublishAot=false` makes a JIT build that takes NativeAOT's code paths
+         (no dynamic code: interpreter only) - the same behaviour, with a debugger and stack traces. -->
+    <RuntimeHostConfigurationOption Include="System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported" Value="false" Condition="'$(PublishAot)' != 'true'" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../../Src/Ruby/Ruby.csproj" />
+    <ProjectReference Include="../../../Src/Libraries/IronRuby.Libraries.csproj" />
+    <ProjectReference Include="../../../Src/Libraries.Yaml/IronRuby.Libraries.Yaml.csproj" />
+    <ProjectReference Include="../../../Src/Prism/IronRuby.Prism.csproj" />
+    <ProjectReference Include="$(DlrSourceDir)/Microsoft.Scripting/Microsoft.Scripting.csproj" />
+    <ProjectReference Include="$(DlrSourceDir)/Microsoft.Dynamic/Microsoft.Dynamic.csproj" />
+    <TrimmerRootAssembly Include="IronRuby" />
+    <TrimmerRootAssembly Include="IronRuby.Libraries" />
+    <TrimmerRootAssembly Include="IronRuby.Libraries.Yaml" />
+    <TrimmerRootAssembly Include="IronRuby.Prism" />
+    <TrimmerRootAssembly Include="Microsoft.Scripting" />
+    <TrimmerRootAssembly Include="Microsoft.Dynamic" />
+    <!-- Wall: Ruby code reaches .NET through CLR interop, resolved by reflection at run time.
+         Rooting System.Private.CoreLib whole does not link (it drags in internal runtime
+         entry points), so the types the prelude uses are listed one by one. -->
+    <TrimmerRootDescriptor Include="roots.xml" />
+  </ItemGroup>
+</Project>

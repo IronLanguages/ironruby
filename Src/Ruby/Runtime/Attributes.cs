@@ -14,38 +14,14 @@
  * ***************************************************************************/
 
 using System;
+using System.Collections.Concurrent;
+using System.Reflection;
 using Microsoft.Scripting.Utils;
-using IronRuby.Runtime;
-using IronRuby.Runtime.Calls;
 using IronRuby.Builtins;
 
 namespace IronRuby.Runtime {
 
     public abstract class RubyAttribute : Attribute {
-        private string _buildConfig;
-        private RubyCompatibility _compatibility = RubyCompatibility.Default;
-
-        /// <summary>
-        /// If set, indicates what build configurations this module should be available under
-        /// Can be any string that is valid after a #if
-        /// Default is to be available under all configurations
-        /// 
-        /// typical usage: BuildConfig = "!SILVERLIGHT"
-        /// 
-        /// TODO: is there a better way to do this?
-        /// </summary>
-        public string BuildConfig {
-            get { return _buildConfig; }
-            set { _buildConfig = value; }
-        }
-
-        /// <summary>
-        /// Which language version supports the feature
-        /// </summary>
-        public RubyCompatibility Compatibility {
-            get { return _compatibility; }
-            set { _compatibility = value; }
-        }
     }
 
     /// <summary>
@@ -86,11 +62,6 @@ namespace IronRuby.Runtime {
         private readonly string/*!*/ _name;
         private readonly RubyMethodAttributes _methodAttributes;
 
-        /// <summary>
-        /// RubyCompatibility is encoded along with the method attributes in the initialization code
-        /// </summary>
-        internal const int CompatibilityEncodingShift = 16;
-
         public string/*!*/ Name {
             get { return _name; }
         }
@@ -112,28 +83,26 @@ namespace IronRuby.Runtime {
         }
     }
 
+    /// <summary>
+    /// Marks a library method that only raises NotImplementedError on this platform, like MRI's
+    /// rb_f_notimplement: #respond_to? answers false for it although the method is defined.
+    /// </summary>
     [AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]
-    public sealed class RubyConstructorAttribute : RubyAttribute {
-        public RubyConstructorAttribute() {
+    public sealed class RubyNotImplementedAttribute : Attribute {
+        /// <summary>
+        /// Not implemented on Windows only, where MRI defines it as the stub too (IO#ioctl); the
+        /// same build runs on Unix, where the method works.
+        /// </summary>
+        public bool OnWindowsOnly { get; set; }
+
+        internal bool AppliesHere {
+            get { return !OnWindowsOnly || System.IO.Path.DirectorySeparatorChar == '\\'; }
         }
     }
 
-    [AttributeUsage(AttributeTargets.Class | AttributeTargets.Interface, AllowMultiple = true)]
-    public class DeclaresRubyModuleAttribute : RubyAttribute {
-        private readonly string/*!*/ _name;
-        private readonly Type/*!*/ _moduleDefinitionType;
-
-        public string/*!*/ Name {
-            get { return _name; }
-        }
-
-        public Type/*!*/ ModuleDefinitionType {
-            get { return _moduleDefinitionType; }
-        }
-
-        public DeclaresRubyModuleAttribute(string/*!*/ name, Type/*!*/ moduleDefinitionType) {
-            _name = name;
-            _moduleDefinitionType = moduleDefinitionType;
+    [AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]
+    public sealed class RubyConstructorAttribute : RubyAttribute {
+        public RubyConstructorAttribute() {
         }
     }
 
@@ -350,5 +319,103 @@ namespace IronRuby.Runtime {
     public class DefaultProtocolAttribute : Attribute {
     }
 
+    /// <summary>
+    /// Marks the parameter of a library method that receives its keyword arguments (as a Hash). It is not one of the
+    /// positional parameters MRI counts: a call whose positional arguments - not counting a trailing keyword Hash - are
+    /// more or fewer than the method takes raises "wrong number of arguments" with the count MRI gives
+    /// (Integer() is "given 0, expected 1..2", not "expected 1..3").
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Parameter, AllowMultiple = false)]
+    public sealed class KeywordsAttribute : Attribute {
+    }
+
+    /// <summary>
+    /// A library method's way past the keyword Hash for a call that passes literal keywords (`Integer(s, exception: false)'):
+    /// the call's positional arguments and keyword values, in the call's order, without the Hash and the overload resolution
+    /// of the ordinary call. Answers <see cref="IronRuby.Runtime.Jit.JitKeywordCall.NoDirect"/> for whatever it does not answer
+    /// itself - in particular anything that would raise - and the call is then made the ordinary way, which raises as it
+    /// always did, from where it always did.
+    /// </summary>
+    public delegate object LibraryKeywordEntry(object self, object p0, object p1, object k0, object k1, object k2);
+
+    /// <summary>
+    /// Marks a library method overload that has a <see cref="LibraryKeywordEntry"/>: <see cref="Factory"/> names a public
+    /// static method of the same class, LibraryKeywordEntry Factory(RubyContext context, int positionalCount, string[] keywords),
+    /// which makes the entry for a call with that many positional arguments and those keywords, or answers null for a call it
+    /// does not take. The JIT's keyword call sites (JitKeywordCall) use it once the method name resolves to this method.
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]
+    public sealed class LibraryKeywordEntryAttribute : Attribute {
+        public string/*!*/ Factory { get; }
+
+        public LibraryKeywordEntryAttribute(string/*!*/ factory) {
+            Factory = factory;
+        }
+    }
+
+    /// <summary>
+    /// Marks a library method (an overload) that sees the keyword arguments of its call as keyword arguments: a trailing
+    /// Hash the call passed as keywords reaches it still marked (Hash.IsKeywordArguments), so that it can tell `f(a: 1)'
+    /// from `f({a: 1})' or pass them on as keywords - Kernel#send, Proc#call, Struct#initialize (MRI's rb_keyword_given_p
+    /// and RB_PASS_CALLED_KEYWORDS). An overload with a <see cref="KeywordsAttribute"/> parameter does too.
+    /// Every other library method gets the hash unmarked, as a Ruby method without keyword parameters does: for it the
+    /// hash is a positional argument, which it may keep (Array#push), and a kept hash that said it was keyword arguments
+    /// would turn into the keywords of whatever call it is passed to later.
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Method | AttributeTargets.Constructor, AllowMultiple = false)]
+    public sealed class ReceivesKeywordsAttribute : Attribute {
+    }
+
+    /// <summary>
+    /// Marks a hidden string parameter of a library method that receives the name of the method being called - the
+    /// name the method was defined with, which for an alias is the aliased method's (MRI's rb_frame_this_func, which
+    /// is what <c>[1].collect</c> without a block names its Enumerator by). A method registered under several names
+    /// ([RubyMethod("map")], [RubyMethod("collect")]) learns which one was called. Opt-in: methods without it pay nothing.
+    /// The parameter goes after RubyCallSiteStorage and RubyContext/RubyScope parameters and before the BlockParam.
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Parameter, AllowMultiple = false)]
+    public sealed class CalledNameAttribute : Attribute {
+        internal static bool IsDefinedOn(ParameterInfo/*!*/ parameter) {
+            return parameter.ParameterType == typeof(string) && parameter.IsDefined(typeof(CalledNameAttribute), false);
+        }
+    }
+
+    /// <summary>
+    /// Marks a library method that does nothing but call another of the same type with the same parameters - named by
+    /// <see cref="ClrName"/> - under another Ruby name. MRI defines `collect' and `map' as one C function under two names,
+    /// and its backtrace names the frame by the name called; a backtrace here names a library frame by its CLR method, so
+    /// each name that can show in one has a method of its own. To Ruby the two are still one method (UnboundMethod#==).
+    /// BasicObject#equal? also uses it: MRI defines it and BasicObject#== with one C function, but here #== of a CLR-backed
+    /// object reaches the CLR Equals (a String subclass compares contents), which #equal? must not.
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]
+    public sealed class SameRubyMethodAttribute : Attribute {
+        private readonly string/*!*/ _clrName;
+
+        public string/*!*/ ClrName { get { return _clrName; } }
+
+        public SameRubyMethodAttribute(string/*!*/ clrName) {
+            ContractUtils.RequiresNotNull(clrName, "clrName");
+            _clrName = clrName;
+        }
+
+        private static readonly ConcurrentDictionary<MethodBase, MethodBase>/*!*/ _targets = new ConcurrentDictionary<MethodBase, MethodBase>();
+
+        /// <summary>The method <paramref name="method"/> calls if it is marked so, or the method itself.</summary>
+        internal static MethodBase/*!*/ GetTarget(MethodBase/*!*/ method) {
+            return _targets.GetOrAdd(method, static m => {
+                var attr = (SameRubyMethodAttribute)Attribute.GetCustomAttribute(m, typeof(SameRubyMethodAttribute), false);
+                if (attr == null || m.DeclaringType == null) {
+                    return m;
+                }
+                var parameters = m.GetParameters();
+                var types = new Type[parameters.Length];
+                for (int i = 0; i < types.Length; i++) {
+                    types[i] = parameters[i].ParameterType;
+                }
+                return (MethodBase)m.DeclaringType.GetMethod(attr.ClrName, BindingFlags.Public | BindingFlags.Static, null, types, null) ?? m;
+            });
+        }
+    }
 }
 

@@ -13,23 +13,20 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_SYNC_SOCKETS
 
 using System;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
-using System.Reflection;
 using System.Runtime.InteropServices;
-using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
 using IronRuby.Runtime;
-using System.IO;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 
 namespace IronRuby.StandardLibrary.Sockets {
-    [RubyClass("Socket", BuildConfig = "FEATURE_SYNC_SOCKETS")]
+    [RubyClass("Socket")]
     [Includes(typeof(SocketConstants), Copy = true)]
     public class RubySocket : RubyBasicSocket {
 
@@ -44,7 +41,26 @@ namespace IronRuby.StandardLibrary.Sockets {
             RubyClass/*!*/ self, [NotNull]object/*!*/ domain, [DefaultProtocol]int/*!*/ type, [DefaultProtocol]int protocol) {
 
             AddressFamily addressFamily = ConvertToAddressFamily(stringCast, fixnumCast, domain);
-            return new RubySocket(self.Context, new Socket(addressFamily, (SocketType)type, (ProtocolType)protocol));
+            return new RubySocket(self.Context, NewSocket(addressFamily, (SocketType)type, (ProtocolType)protocol));
+        }
+
+        /// <summary>
+        /// Creates an uninitialized socket: what a Ruby subclass's .new allocates before it runs
+        /// that subclass's #initialize.
+        /// </summary>
+        public RubySocket(RubyContext/*!*/ context)
+            : base(context) {
+        }
+
+        // What `super(family, type, protocol)` reaches from a Ruby subclass's #initialize -
+        // cool.io's TCPConnectSocket < ::Socket is one. Not called by the factory above.
+        [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        public static RubySocket/*!*/ Reinitialize(ConversionStorage<MutableString>/*!*/ stringCast, ConversionStorage<int>/*!*/ fixnumCast,
+            RubySocket/*!*/ self, [NotNull]object/*!*/ domain, [DefaultProtocol]int/*!*/ type, [DefaultProtocol, Optional]int protocol) {
+
+            AddressFamily addressFamily = ConvertToAddressFamily(stringCast, fixnumCast, domain);
+            self.Socket = NewSocket(addressFamily, (SocketType)type, (ProtocolType)protocol);
+            return self;
         }
 
 #endregion
@@ -149,17 +165,27 @@ namespace IronRuby.StandardLibrary.Sockets {
         }
 
         /// <summary>
-        /// Returns a pair of connected sockets
-        /// [Not Implemented]
+        /// getservbyport(3): the reverse of getservbyname, off the same built-in table.
         /// </summary>
-        [RubyMethod("socketpair", RubyMethodAttributes.PublicSingleton)]
-        [RubyMethod("pair", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray/*!*/ CreateSocketPair(RubyClass/*!*/ self, object domain, object type, object protocol) {
-            throw new NotImplementedError();
+        [RubyMethod("getservbyport", RubyMethodAttributes.PublicSingleton)]
+        public static MutableString/*!*/ GetServiceByPort(RubyClass/*!*/ self, [DefaultProtocol]int port,
+            [DefaultProtocol, Optional]MutableString protocol) {
+
+            if (protocol == null) {
+                protocol = _DefaultProtocol;
+            }
+
+            ServiceName service = SearchForService(port, protocol);
+            if (service != null) {
+                return MutableString.Create(service.Name);
+            }
+
+            throw SocketErrorOps.Create(MutableString.CreateAscii(
+                String.Format("no such service for port {0}/{1}", port, protocol.ToString())));
         }
 
         [RubyMethod("getnameinfo", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray/*!*/ GetNameInfo(ConversionStorage<MutableString>/*!*/ stringCast, ConversionStorage<int>/*!*/ fixnumCast, 
+        public static RubyArray/*!*/ GetNameInfo(ConversionStorage<MutableString>/*!*/ stringCast, ConversionStorage<int>/*!*/ fixnumCast,
             RubyClass/*!*/ self, [NotNull]RubyArray/*!*/ hostInfo, [Optional]object flags) {
             if (hostInfo.Count < 3 || hostInfo.Count > 4) {
                 throw RubyExceptions.CreateArgumentError("First parameter must be a 3 or 4 element array");
@@ -262,10 +288,11 @@ namespace IronRuby.StandardLibrary.Sockets {
         [RubyMethod("accept")]
         public static RubyArray/*!*/ Accept(RubyContext/*!*/ context, RubySocket/*!*/ self) {
             RubyArray result = new RubyArray(2);
-            RubySocket s = new RubySocket(context, self.Socket.Accept());
+            RubySocket s = new RubySocket(context, BlockingAccept(self.Socket, "Socket#accept", () => self.Socket.Accept()));
             result.Add(s);
-            SocketAddress addr = s.Socket.RemoteEndPoint.Serialize();
-            result.Add(MutableString.CreateAscii(addr.ToString()));
+            // CRuby's second element is an Addrinfo, which socket.rb builds from the packed
+            // sockaddr.  This used to be SocketAddress.ToString(), a CLR debug rendering.
+            result.Add(GetPeerName(s));
             return result;
         }
 
@@ -283,15 +310,20 @@ namespace IronRuby.StandardLibrary.Sockets {
 
         [RubyMethod("bind")]
         public static int Bind(RubyContext/*!*/ context, RubySocket/*!*/ self, MutableString sockaddr) {
-            IPEndPoint ep = UnpackSockAddr(sockaddr);
-            self.Socket.Bind(ep);
+            // CreateEndPoint rather than UnpackSockAddr: the latter reads every sockaddr as an
+            // IPv4 one, so a sockaddr_un bound whatever four bytes happened to follow the family.
+            EndPoint endPoint = CreateEndPoint(sockaddr);
+            var unix = endPoint as UnixDomainSocketEndPoint;
+            // Keeps the socket file when the socket is closed, as CRuby does - see
+            // UNIXSocket.ToBindEndPoint.
+            self.Socket.Bind(unix != null ? UNIXSocket.ToBindEndPoint(unix.ToString()) : endPoint);
             return 0;
         }
 
         [RubyMethod("connect")]
         public static int Connect(RubyContext/*!*/ context, RubySocket/*!*/ self, MutableString sockaddr) {
-            IPEndPoint ep = UnpackSockAddr(sockaddr);
-            self.Socket.Connect(ep);
+            EndPoint ep = CreateEndPoint(sockaddr);
+            Blocking(() => self.Socket.Connect(ep));
             return 0;
         }
 
@@ -305,6 +337,87 @@ namespace IronRuby.StandardLibrary.Sockets {
                 // Reset the blocking
                 self.Socket.Blocking = blocking;
             }
+        }
+
+        /// <summary>
+        /// connect(2) with a deadline, as CRuby's rsock_connect does it: a non-blocking connect, SO_ERROR
+        /// for a failure the kernel already knows (a refusal over loopback), then a wait of at most
+        /// <paramref name="seconds"/> - a zero timeout polls once - and SO_ERROR again for the verdict,
+        /// not a second connect(2), which some kernels (Darwin 27) answer with EISCONN for a connection
+        /// that failed [Bug #22223]. Answers 0 when connected, -1 when the time ran out, or the errno
+        /// it failed with (CRuby's SystemCallError "connect(2) for ...").
+        ///
+        /// On Unix the connect and the first checks are libc calls: CRuby polls microseconds after
+        /// connect(2), before a remote peer's refusal can arrive, and the exception .NET throws for
+        /// EINPROGRESS took long enough that it sometimes had - which turned the IO::TimeoutError of a
+        /// zero timeout into ECONNREFUSED. .NET's own connect then records the connection.
+        /// </summary>
+        [RubyMethod("__ir_raw_connect_within", RubyMethodAttributes.PrivateInstance)]
+        public static int ConnectWithin(RubySocket/*!*/ self, [NotNull]MutableString/*!*/ sockaddr, double seconds) {
+            Socket socket = self.Socket;
+            EndPoint ep = CreateEndPoint(sockaddr);
+            bool blocking = socket.Blocking;
+            socket.Blocking = false;
+            try {
+                // Once before connecting, so that the first one after it does not wait for the JIT
+                // (a fresh socket has no error to clear).
+                PendingError(socket);
+                int error = PosixMessages.StartConnect(socket, ep);
+                if (error < 0) {
+                    // No libc: .NET's connect, and its SocketException for a failure.
+                    try {
+                        socket.Connect(ep);
+                        return 0;
+                    } catch (SocketException e) when (e.SocketErrorCode is SocketError.WouldBlock or SocketError.InProgress) {
+                    }
+                } else if (error != PosixMessages.EINPROGRESS) {
+                    return error;
+                }
+
+                error = PendingError(socket);
+                if (error != 0) {
+                    return error;
+                }
+                if (seconds > 0) {
+                    long deadline = Stopwatch.GetTimestamp() + (long)(seconds * Stopwatch.Frequency);
+                    while (true) {
+                        long remaining = (deadline - Stopwatch.GetTimestamp()) * 1000000 / Stopwatch.Frequency;
+                        int slice = (int)Math.Max(0, Math.Min(remaining, PollSliceMicroseconds));
+                        if (socket.Poll(slice, SelectMode.SelectWrite) || socket.Poll(0, SelectMode.SelectError)) {
+                            break;
+                        }
+                        if (remaining <= slice) {
+                            return -1;
+                        }
+                        RubyUtils.CheckAsyncException();
+                    }
+                } else if (!socket.Poll(0, SelectMode.SelectWrite) && !socket.Poll(0, SelectMode.SelectError)) {
+                    return -1;
+                }
+
+                error = PendingError(socket);
+                if (error == 0 && !socket.Connected) {
+                    // Connected behind .NET's back (libc): its connect says EISCONN and records it.
+                    try {
+                        socket.Connect(ep);
+                    } catch (SocketException) {
+                    }
+                }
+                return error;
+            } finally {
+                socket.Blocking = blocking;
+            }
+        }
+
+        private static int PendingError(Socket/*!*/ socket) {
+            int error = PosixMessages.GetPendingError(socket);
+            if (error < 0) {
+                error = (int)socket.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Error);
+                if (error != 0) {
+                    throw new SocketException(error);
+                }
+            }
+            return error;
         }
 
         [RubyMethod("listen")]
@@ -323,11 +436,10 @@ namespace IronRuby.StandardLibrary.Sockets {
             int length, object/*Numeric*/ flags) {
             SocketFlags sFlags = ConvertToSocketFlag(fixnumCast, flags);
             byte[] buffer = new byte[length];
-            EndPoint fromEP = new IPEndPoint(IPAddress.Any, 0);
-            int received = self.Socket.ReceiveFrom(buffer, sFlags, ref fromEP);
+            EndPoint fromEP = AnyEndPoint(self.Socket.AddressFamily);
+            int received = Blocking(self.Socket, SelectMode.SelectRead, () => self.Socket.ReceiveFrom(buffer, sFlags, ref fromEP));
             MutableString str = MutableString.CreateBinary();
             str.Append(buffer, 0, received);
-            str.IsTainted = true;
             return RubyOps.MakeArray2(str, self.GetAddressArray(fromEP));
         }
 
@@ -337,10 +449,10 @@ namespace IronRuby.StandardLibrary.Sockets {
             RubyArray result = new RubyArray(2);
             // TODO: Do we need some kind of strong reference to the socket
             // here to stop the RubySocket from being garbage collected?
-            RubySocket s = new RubySocket(context, self.Socket.Accept());
+            RubySocket s = new RubySocket(context, BlockingAccept(self.Socket, "Socket#sysaccept", () => self.Socket.Accept()));
             result.Add(s.GetFileDescriptor());
-            SocketAddress addr = s.Socket.RemoteEndPoint.Serialize();
-            result.Add(MutableString.CreateAscii(addr.ToString()));
+            // As for #accept: the packed sockaddr, which socket.rb turns into an Addrinfo.
+            result.Add(GetPeerName(s));
             return result;
         }
 
@@ -348,7 +460,7 @@ namespace IronRuby.StandardLibrary.Sockets {
 
 #region Constants
 
-        [RubyModule("Constants", BuildConfig ="!SILVERLIGHT")]
+        [RubyModule("Constants")]
         public class SocketConstants {
 #region Address Family
 
@@ -412,24 +524,32 @@ namespace IronRuby.StandardLibrary.Sockets {
 
 #region Error Return Codes from GetAddressInfo
 
+            // The platform's getaddrinfo(3) codes, as CRuby takes them from netdb.h: negative in
+            // glibc, small positive numbers on macOS and the BSDs, Winsock error codes on Windows.
+            private static int Eai(int linux, int bsd, int windows) {
+                return RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? windows :
+                    RuntimeInformation.IsOSPlatform(OSPlatform.OSX) || RuntimeInformation.IsOSPlatform(OSPlatform.FreeBSD) ? bsd :
+                    linux;
+            }
+
             [RubyConstant]
-            public const int EAI_AGAIN = 2;
+            public static readonly int EAI_AGAIN = Eai(-3, 2, 11002);
             [RubyConstant]
-            public const int EAI_BADFLAGS = 3;
+            public static readonly int EAI_BADFLAGS = Eai(-1, 3, 10022);
             [RubyConstant]
-            public const int EAI_FAIL = 4;
+            public static readonly int EAI_FAIL = Eai(-4, 4, 11003);
             [RubyConstant]
-            public const int EAI_FAMILY = 5;
+            public static readonly int EAI_FAMILY = Eai(-6, 5, 10047);
             [RubyConstant]
-            public const int EAI_MEMORY = 6;
+            public static readonly int EAI_MEMORY = Eai(-10, 6, 8);
             [RubyConstant]
-            public const int EAI_NODATA = 7;
+            public static readonly int EAI_NODATA = Eai(-5, 7, 11001);
             [RubyConstant]
-            public const int EAI_NONAME = 8;
+            public static readonly int EAI_NONAME = Eai(-2, 8, 11001);
             [RubyConstant]
-            public const int EAI_SERVICE = 9;
+            public static readonly int EAI_SERVICE = Eai(-8, 9, 10109);
             [RubyConstant]
-            public const int EAI_SOCKTYPE = 10;
+            public static readonly int EAI_SOCKTYPE = Eai(-7, 10, 10044);
 
 #endregion
 
@@ -719,21 +839,19 @@ namespace IronRuby.StandardLibrary.Sockets {
                 str = str.Remove(0, 1);
             }
 
-            Tokenizer tokenizer = new Tokenizer();
-            tokenizer.Initialize(new StringReader(str));
-            Tokens token = tokenizer.GetNextToken();
-            TokenValue value = tokenizer.TokenValue;
-            Tokens nextToken = tokenizer.GetNextToken();
-
-            // We are only interested in the whole string being a valid Integer
-            if (token == Tokens.Integer && nextToken == Tokens.Integer) {
-                return isNegative ? -value.Integer1 : value.Integer1;
-            } else {
-                throw RubyExceptions.CreateTypeConversionError("String", "Integer");
+            // The whole string has to be one Ruby integer literal that fits a Fixnum.
+            if (IntegerLiteral.IsMatch(str)) {
+                IntegerValue value = Tokenizer.ParseInteger(str, 0);
+                if (value.IsFixnum) {
+                    return isNegative ? -value.Fixnum : value.Fixnum;
+                }
             }
+            throw RubyExceptions.CreateImplicitConversionError("String", "Integer");
         }
+
+        private static readonly System.Text.RegularExpressions.Regex IntegerLiteral = new System.Text.RegularExpressions.Regex(
+            @"\A(?:0[xX][0-9a-fA-F]+(?:_[0-9a-fA-F]+)*|0[bB][01]+(?:_[01]+)*|0[dD][0-9]+(?:_[0-9]+)*|0[oO]?[0-7]+(?:_[0-7]+)*|[1-9][0-9]*(?:_[0-9]+)*|0)\z");
 
 #endregion
     }
 }
-#endif

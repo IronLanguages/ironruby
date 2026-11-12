@@ -40,7 +40,7 @@ public static partial class $SelfOps {
     }
 
     [RubyConstructor]
-    [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
+    [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
     public static $Self InducedFrom(RubyClass/*!*/ self, [DefaultProtocol]int value) {
         if ($RangeCheckFixnum) {
             return ($Self)value;
@@ -49,7 +49,7 @@ public static partial class $SelfOps {
     }
     
     [RubyConstructor]
-    [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
+    [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
     public static $Self InducedFrom(RubyClass/*!*/ self, [NotNull]BigInteger/*!*/ value) {
         if (value >= $Self.MinValue && value <= $Self.MaxValue) {
             return ($Self)value;
@@ -58,7 +58,7 @@ public static partial class $SelfOps {
     }
 
     [RubyConstructor]
-    [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
+    [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
     public static $Self InducedFrom(RubyClass/*!*/ self, double value) {
         if (value >= $Self.MinValue && value <= $Self.MaxValue) {
             return ($Self)value;

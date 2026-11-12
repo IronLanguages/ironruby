@@ -13,19 +13,12 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CUSTOM_TYPE_DESCRIPTOR
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
-using Microsoft.Scripting;
-using Microsoft.Scripting.Actions.Calls;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
 using IronRuby.Compiler.Generation;
@@ -47,7 +40,6 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Usage", "CA1801:ReviewUnusedParameters", MessageId = "self")]
         public static AttributeCollection GetAttributes(object self) {
             return AttributeCollection.Empty;
         }
@@ -58,7 +50,6 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Usage", "CA1801:ReviewUnusedParameters", MessageId = "self")]
         public static string GetComponentName(object self) {
             return null;
         }
@@ -69,19 +60,16 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Usage", "CA1801:ReviewUnusedParameters", MessageId = "self")]
         public static EventDescriptor GetDefaultEvent(object self) {
             return null;
         }
 
         [Emitted]
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Usage", "CA1801:ReviewUnusedParameters", MessageId = "self")]
         public static PropertyDescriptor GetDefaultProperty(object self) {
             return null;
         }
 
         [Emitted]
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Usage", "CA1801:ReviewUnusedParameters", MessageId = "self"), System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Usage", "CA1801:ReviewUnusedParameters", MessageId = "editorBaseType")]
         public static object GetEditor(object self, Type editorBaseType) {
             return null;
         }
@@ -98,7 +86,6 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Usage", "CA1801:ReviewUnusedParameters", MessageId = "self")]
         public static EventDescriptorCollection GetEvents(object self) {
             return EventDescriptorCollection.Empty;
         }
@@ -172,59 +159,11 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Usage", "CA1801:ReviewUnusedParameters", MessageId = "pd")]
         public static object GetPropertyOwner(object self, PropertyDescriptor pd) {
             return self;
         }
 
         #endregion
-
-#if EXPOSE_INSTANCE_VARS
-        class RubyInstanceVariableDescriptor : PropertyDescriptor {
-            private readonly string _name;
-            private readonly Type _propertyType;
-            private readonly Type _componentType;
-
-            internal RubyInstanceVariableDescriptor(string name, Type propertyType, Type componentType)
-                : base(name, null) {
-                _name = name;
-                _propertyType = propertyType;
-                _componentType = componentType;
-            }
-
-            public override object GetValue(object component) {
-                object value;
-                GetClass(component).Context.TryGetInstanceVariable(component, _name, out value);
-                return value;
-            }
-            public override void SetValue(object component, object value) {
-                GetClass(component).Context.SetInstanceVariable(component, _name, value);
-            }
-
-            public override bool CanResetValue(object component) {
-                return false;
-            }
-
-            public override Type ComponentType {
-                get { return _componentType; }
-            }
-
-            public override bool IsReadOnly {
-                get { return false; }
-            }
-
-            public override Type PropertyType {
-                get { return _propertyType; }
-            }
-
-            public override void ResetValue(object component) {
-            }
-
-            public override bool ShouldSerializeValue(object component) {
-                return false;
-            }
-        }
-#endif // EXPOSE_INSTANCE_VARS
 
         class RubyPropertyDescriptor : PropertyDescriptor {
             private readonly string/*!*/ _name;
@@ -288,54 +227,6 @@ namespace IronRuby.Runtime {
             }
         }
 
-#if TODO
-        private class TypeConv : TypeConverter {
-            object convObj;
-
-            public TypeConv(object self) {
-                convObj = self;
-            }
-
-            #region TypeConverter overrides
-
-            public override bool CanConvertTo(ITypeDescriptorContext context, Type destinationType) {
-                object result;
-                return Converter.TryConvert(convObj, destinationType, out result);
-            }
-
-            public override bool CanConvertFrom(ITypeDescriptorContext context, Type sourceType) {
-                return Converter.CanConvertFrom(sourceType, convObj.GetType(), NarrowingLevel.All, true);
-            }
-
-            public override object ConvertFrom(ITypeDescriptorContext context, System.Globalization.CultureInfo culture, object value) {
-                return Converter.Convert(value, convObj.GetType());
-            }
-
-            public override object ConvertTo(ITypeDescriptorContext context, System.Globalization.CultureInfo culture, object value, Type destinationType) {
-                return Converter.Convert(convObj, destinationType);
-            }
-
-            public override bool GetCreateInstanceSupported(ITypeDescriptorContext context) {
-                return false;
-            }
-
-            public override bool GetPropertiesSupported(ITypeDescriptorContext context) {
-                return false;
-            }
-
-            public override bool GetStandardValuesSupported(ITypeDescriptorContext context) {
-                return false;
-            }
-
-            public override bool IsValid(ITypeDescriptorContext context, object value) {
-                object result;
-                return Converter.TryConvert(value, convObj.GetType(), out result);
-            }
-
-            #endregion
-        }
-#endif
     }
 }
 
-#endif

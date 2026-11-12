@@ -1,0 +1,155 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Largo <andi@idogawa.com>
+Date: Wed, 11 Nov 2026 16:00:00 +0100
+Subject: [PATCH] ThreadLocal<T>: do not keep finished threads alive
+
+A StorageInfo held the Thread that owns it, to tell its own entry from one
+left under the same ManagedThreadId by an earlier thread. The entry stays in
+the array after its thread has finished, until the array next grows, so it
+kept the finished Thread alive. The CLR keeps a dead thread's native record,
+and its ManagedThreadId, until the Thread is finalized: every new thread
+got a new id, and dead threads piled up in the runtime's thread list. The
+finalizer thread walks that list to remove each dead thread
+(ThreadStore::RemoveThread) and every GC suspension walks it too.
+
+In IronRuby, where InterpretedFrame.CurrentFrame is such a ThreadLocal,
+every Ruby thread that had run interpreted code stayed alive that way: a
+loop of `Thread.new { }.join` had ~4,700 dead threads in the CLR's list and
+spent most of its process CPU in RemoveThread on the finalizer thread, and
+20 joined threads were all still alive after full collections (0 now).
+
+An entry now carries a per-thread token object instead of the Thread. A
+ConditionalWeakTable maps a Thread to its token for TryGetValue, without
+keeping the Thread alive. A finished thread is collected, its id is reused,
+and the new thread replaces the stale entry on first use. Growing the array
+no longer prunes entries (it cannot tell a finished thread's from a live
+one's); with ids reused the array grows only as far as the most threads
+alive at once.
+---
+ .../Microsoft.Dynamic/Utils/ThreadLocal.cs    | 63 ++++++++++++++-----
+ 1 file changed, 49 insertions(+), 14 deletions(-)
+
+diff --git a/src/core/Microsoft.Dynamic/Utils/ThreadLocal.cs b/src/core/Microsoft.Dynamic/Utils/ThreadLocal.cs
+index 84ff189..a91664d 100644
+--- a/src/core/Microsoft.Dynamic/Utils/ThreadLocal.cs
++++ b/src/core/Microsoft.Dynamic/Utils/ThreadLocal.cs
+@@ -5,6 +5,7 @@
+ using System;
+ using System.Threading;
+ using System.Diagnostics;
++using System.Runtime.CompilerServices;
+ 
+ namespace Microsoft.Scripting.Utils {
+     /// <summary>
+@@ -108,7 +109,7 @@ namespace Microsoft.Scripting.Utils {
+             int threadId = thread.ManagedThreadId;
+             if (curStorage is not null && curStorage.Length > threadId) {
+                 StorageInfo res = curStorage[threadId];
+-                if (res is not null && res.Thread == thread) {
++                if (res is not null && res.Owner == ThreadToken.Of(thread)) {
+                     value = res.Value;
+                     return true;
+                 }
+@@ -140,7 +141,7 @@ namespace Microsoft.Scripting.Utils {
+             if (curStorage is not null && curStorage.Length > threadId) {
+                 StorageInfo res = curStorage[threadId];
+ 
+-                if (res is not null && (_refCounted || res.Thread == Thread.CurrentThread)) {
++                if (res is not null && (_refCounted || res.Owner == ThreadToken.Current)) {
+                     return res;
+                 }
+             }
+@@ -177,7 +178,7 @@ namespace Microsoft.Scripting.Utils {
+             StorageInfo[] curStorage = Updating;
+             try {
+                 int threadId = GetCurrentThreadId();
+-                StorageInfo newInfo = new StorageInfo(Thread.CurrentThread);
++                StorageInfo newInfo = new StorageInfo(ThreadToken.Current);
+ 
+                 // set to updating while potentially resizing/mutating, then we'll
+                 // set back to the current value.                                        
+@@ -190,19 +191,17 @@ namespace Microsoft.Scripting.Utils {
+                 if (curStorage is null) {
+                     curStorage = new StorageInfo[threadId + 1];
+                 } else if (curStorage.Length <= threadId) {
++                    // An entry of a thread that has finished stays until a thread that gets its id replaces
++                    // it: the entry no longer keeps the Thread alive, so the id is free for reuse as soon as
++                    // the Thread is collected, and the array grows only as far as the most threads alive at once.
+                     StorageInfo[] newStorage = new StorageInfo[threadId + 1];
+-                    for (int i = 0; i < curStorage.Length; i++) {
+-                        // leave out the threads that have exited
+-                        if (curStorage[i] is not null && curStorage[i].Thread.IsAlive) {
+-                            newStorage[i] = curStorage[i];
+-                        }
+-                    }
++                    Array.Copy(curStorage, newStorage, curStorage.Length);
+                     curStorage = newStorage;
+                 }
+ 
+                 // create our StorageInfo in the array, the empty check ensures we're only here
+                 // when we need to create.
+-                Debug.Assert(curStorage[threadId] is null || curStorage[threadId].Thread != Thread.CurrentThread);
++                Debug.Assert(curStorage[threadId] is null || curStorage[threadId].Owner != ThreadToken.Current);
+ 
+                 return curStorage[threadId] = newInfo;
+             } finally {
+@@ -221,16 +220,52 @@ namespace Microsoft.Scripting.Utils {
+         /// </summary>
+         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1034:NestedTypesShouldNotBeVisible")] // TODO
+         public sealed class StorageInfo {
+-            internal readonly Thread Thread;                 // the thread that owns the StorageInfo
++            // The owning thread's ThreadToken, not its Thread. The entry stays in the array after the thread has
++            // finished, and a reference to the Thread kept it from being collected: the CLR keeps a finished
++            // thread's native record, and its ManagedThreadId, until its Thread is finalized, so every new
++            // thread got a new id, and the dead threads piled up in the runtime's thread list, which every GC
++            // suspension and every thread exit walks.
++            internal readonly object Owner;
+             public T Value;                                // the current value for the owning thread
+ 
+-            internal StorageInfo(Thread curThread) {
+-                Assert.NotNull(curThread);
++            internal StorageInfo(object owner) {
++                Assert.NotNull(owner);
+ 
+-                Thread = curThread;
++                Owner = owner;
+             }
+         }
+ 
+         #endregion
+     }
++
++    /// <summary>
++    /// An object that stands for a thread, for as long as the thread lives, without keeping its Thread
++    /// alive. ManagedThreadIds are reused once a Thread has been collected, so a <see cref="ThreadLocal{T}"/>
++    /// entry found under the current thread's id belongs to it only if it carries its token.
++    /// </summary>
++    internal static class ThreadToken {
++        [ThreadStatic]
++        private static object t_token;
++
++        // for reading another thread's value (ThreadLocal.TryGetValue); weak in the Thread
++        private static readonly ConditionalWeakTable<Thread, object> s_tokens = new ConditionalWeakTable<Thread, object>();
++
++        internal static object Current {
++            get { return t_token ?? CreateCurrent(); }
++        }
++
++        [MethodImpl(MethodImplOptions.NoInlining)]
++        private static object CreateCurrent() {
++            return t_token = s_tokens.GetValue(Thread.CurrentThread, _ => new object());
++        }
++
++        /// <summary>The token of <paramref name="thread"/>, or null if it has never asked for one.</summary>
++        internal static object Of(Thread thread) {
++            if (thread == Thread.CurrentThread) {
++                return Current;
++            }
++            object token;
++            return s_tokens.TryGetValue(thread, out token) ? token : null;
++        }
++    }
+ }
+-- 
+2.47.3
+

@@ -13,5 +13,5 @@
 #
 # ****************************************************************************
 
-version = System::Environment.Version.Major == 4 ? "4.0.0.0" : "2.0.0.0"
-require "System.Windows.Forms, Version=#{version}, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+require "ironruby/windows_desktop"
+IronRuby::WindowsDesktop.require_assembly "System.Windows.Forms", "b77a5c561934e089"

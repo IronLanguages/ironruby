@@ -13,16 +13,11 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
-using IronRuby.Runtime.Calls;
 using IronRuby.Runtime.Conversions;
 
 namespace IronRuby.Compiler.Ast {
@@ -47,7 +42,16 @@ namespace IronRuby.Compiler.Ast {
 
         internal override MSA.Expression/*!*/ Transform(AstGenerator/*!*/ gen) {
             Assert.NotNull(gen);
-            return AstUtils.LightDynamic(ConvertToProcAction.Make(gen.Context), typeof(Proc), _expression.TransformRead(gen));
+            // &:sym and a refined #to_proc have to see the refinements active here, which the conversion site
+            // cannot - see RubyOps.TryConvertBlockWithRefinements
+            var value = Ast.Variable(typeof(object), "#block-arg");
+            return Ast.Block(new[] { value },
+                Ast.Assign(value, AstUtils.Box(_expression.TransformRead(gen))),
+                Ast.Coalesce(
+                    Methods.TryConvertBlockWithRefinements.OpCall(gen.CurrentScopeVariable, value),
+                    AstUtils.LightDynamic(ConvertToProcAction.Make(gen.Context), typeof(Proc), value)
+                )
+            );
         }
     }
 }

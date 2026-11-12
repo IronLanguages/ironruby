@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -25,7 +21,6 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Runtime.Serialization;
 using IronRuby.Compiler;
-using IronRuby.Compiler.Ast;
 using IronRuby.Compiler.Generation;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
@@ -51,10 +46,8 @@ namespace IronRuby.Builtins {
                 _names = ArrayUtils.Copy(names);
                 _nameIndices = new Dictionary<string, int>(names.Length);
                 for (int i = 0; i < names.Length; i++) {
-                    string name = names[i];
-                    if (!Tokenizer.IsVariableName(name)) {
-                        throw RubyExceptions.CreateNameError(String.Format("invalid attribute name `{0}'", name));
-                    }
+                    // Any symbol is a legal member name; only the ones that are also legal method
+                    // names get accessor methods (see AddClassMembers).
 
                     // overwrites duplicates:
                     _nameIndices[names[i]] = i;
@@ -90,7 +83,6 @@ namespace IronRuby.Builtins {
 
         #region Construction
 
-#if FEATURE_SERIALIZATION
         public RubyStruct(SerializationInfo/*!*/ info, StreamingContext context) 
             : base(info, context) {
             // TODO: deserialize _data
@@ -100,7 +92,6 @@ namespace IronRuby.Builtins {
             base.GetObjectData(info, context);
             // TODO: serialize _data
         }
-#endif
 
         // This class should not have a default constructor (or one that takes RubyClass or RubyContext)!
         // Struct class provides its own allocator (Struct#new), 
@@ -160,8 +151,10 @@ namespace IronRuby.Builtins {
             for (int i = 0; i < structMembers.Length; i++) {
                 string getter = structMembers[i];
 
-                cls.AddMethod(context, getter, new RubyCustomMethodInfo(CreateGetter(i), RubyMemberFlags.Public, cls));
-                cls.AddMethod(context, getter + '=', new RubyCustomMethodInfo(CreateSetter(i), RubyMemberFlags.Public, cls));
+                // any symbol is a legal member name; the accessors are defined for all of them,
+                // even when the resulting name is not writable as a literal method call
+                cls.AddMethod(context, getter, new RubyCustomMethodInfo(CreateGetter(i), RubyMemberFlags.Public, cls, 0));
+                cls.AddMethod(context, getter + '=', new RubyCustomMethodInfo(CreateSetter(i), RubyMemberFlags.Public, cls, 1));
             }
         }
 
@@ -219,12 +212,42 @@ namespace IronRuby.Builtins {
             if (TryGetIndex(name, out index)) {
                 return index;
             }
-            throw RubyExceptions.CreateNameError(String.Format("no member `{0}' in struct", name));
+            // with the name and the struct, as MRI's: did_you_mean suggests the members
+            throw RubyExceptions.WithNameAndReceiver(ImmediateClass.Context,
+                RubyExceptions.CreateNameError(String.Format("no member '{0}' in struct", name)), name, this);
+        }
+
+        // Structs whose #hash is being computed on this thread, outermost first.
+        [ThreadStatic]
+        private static List<RubyStruct> _hashing;
+
+        // MRI throws here, which no rescue sees. It unwinds through user #hash methods, so as a StackUnwinder it is
+        // not caught by their rescue clauses either (a plain Exception subclass would be a StandardError to Ruby).
+        private sealed class RecursiveHashException : StackUnwinder {
+            public RecursiveHashException() : base(null) { }
         }
 
         public int GetHashCode(UnaryOpStorage/*!*/ hashStorage, ConversionStorage<int>/*!*/ fixnumCast) {
-            // hash is: struct's hash, plus data hashes
-            return StructInfo.GetHashCode() ^ RubyArray.GetHashCode(hashStorage, fixnumCast, _data);
+            // MRI hashes a struct under rb_exec_recursive_outer: meeting a struct that is already
+            // being hashed abandons the whole computation, and the outermost struct hashes as its
+            // class alone. So a recursive struct hashes the same as an eql? one that holds it.
+            var hashing = _hashing ?? (_hashing = new List<RubyStruct>());
+            foreach (var s in hashing) {
+                if (ReferenceEquals(s, this)) {
+                    throw new RecursiveHashException();
+                }
+            }
+
+            bool outermost = hashing.Count == 0;
+            hashing.Add(this);
+            try {
+                // hash is: struct's hash, plus data hashes
+                return StructInfo.GetHashCode() ^ RubyArray.GetHashCode(hashStorage, fixnumCast, _data);
+            } catch (RecursiveHashException) when (outermost) {
+                return StructInfo.GetHashCode();
+            } finally {
+                hashing.RemoveAt(hashing.Count - 1);
+            }
         }
 
         public bool Equals(BinaryOpStorage/*!*/ eqlStorage, object obj) {
@@ -248,9 +271,17 @@ namespace IronRuby.Builtins {
             return self._data[index];
         }
 
+        /// <summary>
+        /// The member writer: the value is a positional argument, even a Hash passed as keywords (s.send(:a=, k: 1)), and kept,
+        /// it stops saying so (<see cref="RubyOps.ClearKeywordArguments"/>) - here rather than in the rule, which is interpreted
+        /// for its first calls.
+        /// </summary>
         [Emitted]
         public static object SetValue(RubyStruct/*!*/ self, int index, object value) {
-            return self._data[index] = value;
+            if (self.IsFrozen) {
+                throw RubyExceptions.CreateObjectFrozenErrorFor(self, "Struct");
+            }
+            return self._data[index] = RubyOps.ClearKeywordArguments(value);
         }
 
         #endregion
@@ -282,16 +313,41 @@ namespace IronRuby.Builtins {
 
         public object this[string name] {
             get { return _data[GetIndex(name)]; }
-            set { _data[GetIndex(name)] = value; }
+            set {
+                RequireNotFrozen();
+                _data[GetIndex(name)] = value;
+            }
         }
 
         public object this[int index] {
             get { return _data[index]; }
-            set { _data[index] = value; }
+            set {
+                RequireNotFrozen();
+                _data[index] = value;
+            }
+        }
+
+        private void RequireNotFrozen() {
+            if (IsFrozen) {
+                throw RubyExceptions.CreateObjectFrozenErrorFor(this, "Struct");
+            }
         }
 
         public int ItemCount {
             get { return _data.Length; }
+        }
+
+        /// <summary>
+        /// Whether the struct's class was built by Struct.new(..., keyword_init: true): ruby4.rb's
+        /// Struct.new keeps the option in the class's @__keyword_init__, which is what the class's
+        /// #keyword_init? answers. A subclass has none of its own.
+        /// </summary>
+        public bool IsKeywordInit {
+            get {
+                var data = ImmediateClass.GetNonSingletonClass().TryGetInstanceData();
+                object value;
+                return data != null && data.TryGetInstanceVariable(IronRuby.Runtime.RubyUtils.GetCoreStateInstanceVariableName("@__keyword_init__"), out value) && RubyOps.IsTrue(value);
+            }
         }
     }
 }

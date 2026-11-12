@@ -13,7 +13,6 @@
  *
  * ***************************************************************************/
 
-using Microsoft.Scripting;
 
 namespace IronRuby.Runtime {
     internal sealed class GlobalVariableInfo : GlobalVariable {
@@ -40,6 +39,15 @@ namespace IronRuby.Runtime {
         }
 
         public override void SetValue(RubyContext/*!*/ context, RubyScope scope, string/*!*/ name, object value) {
+            Assign(value);
+        }
+
+        // What a GlobalVariableSite reads and writes directly: an ordinary global is a slot.
+        internal object Value {
+            get { return _value; }
+        }
+
+        internal void Assign(object value) {
             _value = value;
             _isDefined = true;
         }

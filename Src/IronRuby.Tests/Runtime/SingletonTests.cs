@@ -13,7 +13,6 @@
  *
  * ***************************************************************************/
 
-using IronRuby.Runtime;
 using System;
 namespace IronRuby.Tests {
     public partial class Tests {
@@ -285,8 +284,11 @@ p $Sx.class_variables.sort
 
         public void AllowedSingletons1() {
             TestOutput(@"
-ok = ['x', true, false, nil, //]
-error = [1 << 70, 1, 1.0, :foo]
+# a regexp literal is frozen, so defining a singleton method on one raises FrozenError,
+# which is what CRuby 4.0.6 does too. Opening its singleton class still works, see
+# AllowedSingletons2.
+ok = ['x', true, false, nil]
+error = [1 << 70, 1, 1.0, :foo, //]
 
 ok.each do |x| 
   def x.foo; end 
@@ -309,8 +311,11 @@ puts 'ok'
 
         public void AllowedSingletons2() {
             TestOutput(@"
-ok = ['x', true, false, nil, //, 1 << 70, 1.0]
-error = [1, :foo]
+# The same list as AllowedSingletons1 above, because the two questions are the same one:
+# a Bignum and a Float hold no state to hang a singleton class on, whatever is being asked
+# of it. CRuby 4.0.6 raises TypeError for all four.
+ok = ['x', true, false, nil, //]
+error = [1 << 70, 1.0, 1, :foo]
 
 ok.each do |x| 
   class << x; end
@@ -371,8 +376,8 @@ $SM.c_c rescue p $!
 
 p $SM.c_m
 ", @"
-#<NameError: undefined method `c_c' for class `Class'>
-#<NoMethodError: undefined method `c_c' for #<Class:M>>
+#<NameError: undefined method 'c_c' for class 'Class'>
+#<NoMethodError: undefined method 'c_c' for class #<Class:M>>
 :c_m
 ");
         }
@@ -388,7 +393,7 @@ class << C
   new rescue p $!
 end
 ", @"
-#<Method: Class#new>
+#<Method: #<Class:#<Class:C>>(Class)#new(*)>
 #<TypeError: can't create instance of virtual class>
 ");
         }
@@ -404,6 +409,15 @@ def get_singletons(cls, n)
 end
 ";
 
+        /// <summary>
+        /// Class#superclass of a singleton class. The first level agrees with MRI now: the
+        /// singleton class of a class has the singleton class of its superclass above it, and the
+        /// singleton class of an object has the object's class. It used to answer the object's
+        /// *metaclass* at every level, which is what this test recorded.
+        ///
+        /// The deeper levels build MRI's meta tower too (#&lt;Class:#&lt;Class:Object&gt;&gt; and so
+        /// on); every superclass below is what CRuby 4.0 answers.
+        /// </summary>
         public void DummySingletons1() {
             Engine.Execute(SingletonHelpers);
             AssertOutput(() =>
@@ -421,22 +435,22 @@ end
 end
 "), @"
 C                                                  Object
-#<Class:C>                                         #<Class:#<Class:C>>
-#<Class:#<Class:C>>                                #<Class:#<Class:#<Class:C>>>
-#<Class:#<Class:#<Class:C>>>                       #<Class:#<Class:#<Class:#<Class:C>>>>
-#<Class:#<Class:#<Class:#<Class:C>>>>              #<Class:#<Class:#<Class:#<Class:C>>>>
+#<Class:C>                                         #<Class:Object>
+#<Class:#<Class:C>>                                #<Class:#<Class:Object>>
+#<Class:#<Class:#<Class:C>>>                       #<Class:#<Class:#<Class:Object>>>
+#<Class:#<Class:#<Class:#<Class:C>>>>              #<Class:#<Class:#<Class:#<Class:Object>>>>
 
-undefined method `superclass' for M:Module
-#<Class:M>                                         #<Class:#<Class:M>>
-#<Class:#<Class:M>>                                #<Class:#<Class:#<Class:M>>>
-#<Class:#<Class:#<Class:M>>>                       #<Class:#<Class:#<Class:#<Class:M>>>>
-#<Class:#<Class:#<Class:#<Class:M>>>>              #<Class:#<Class:#<Class:#<Class:M>>>>
+undefined method 'superclass' for module M
+#<Class:M>                                         Module
+#<Class:#<Class:M>>                                #<Class:Module>
+#<Class:#<Class:#<Class:M>>>                       #<Class:#<Class:Module>>
+#<Class:#<Class:#<Class:#<Class:M>>>>              #<Class:#<Class:#<Class:Module>>>
 
-undefined method `superclass' for #<MM:0x*>
-#<Class:#<MM:0x*>>                           #<Class:#<Class:#<MM:0x*>>>
-#<Class:#<Class:#<MM:0x*>>>                  #<Class:#<Class:#<Class:#<MM:0x*>>>>
-#<Class:#<Class:#<Class:#<MM:0x*>>>>         #<Class:#<Class:#<Class:#<Class:#<MM:0x*>>>>>
-#<Class:#<Class:#<Class:#<Class:#<MM:0x*>>>>> #<Class:#<Class:#<Class:#<Class:#<MM:0x*>>>>>
+undefined method 'superclass' for module #<MM:0x*>
+#<Class:#<MM:0x*>>                  MM
+#<Class:#<Class:#<MM:0x*>>>         #<Class:MM>
+#<Class:#<Class:#<Class:#<MM:0x*>>>> #<Class:#<Class:MM>>
+#<Class:#<Class:#<Class:#<Class:#<MM:0x*>>>>> #<Class:#<Class:#<Class:MM>>>
 ", OutputFlags.Match);
         }
 
@@ -469,11 +483,11 @@ end
 ", @"
 MM                             MetaModule
 #<Class:MM>                    S(MetaModule)
-#<Class:#<Class:MM>>           S(MetaModule)
+#<Class:#<Class:MM>>           S(Class)
 
 M                              Module
 #<Class:M>                     S(Module)
-#<Class:#<Class:M>>            S(Module)
+#<Class:#<Class:M>>            S(Class)
 
 Module                         S(Module)
 #<Class:Module>                S(Class)

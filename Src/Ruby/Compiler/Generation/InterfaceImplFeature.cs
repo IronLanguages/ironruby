@@ -49,7 +49,7 @@ namespace IronRuby.Compiler.Generation {
 
         private static void AddInterface(List<Type/*!*/>/*!*/ types, Type/*!*/ type) {
             Assert.NotNull(type);
-            Assert.Equals(true, type.IsInterface() && !type.ContainsGenericParameters());
+            Assert.Equals(true, type.IsInterface && !type.ContainsGenericParameters);
 
             for (int i = 0; i < types.Count; i++) {
                 Type t = types[i];
@@ -75,7 +75,7 @@ namespace IronRuby.Compiler.Generation {
         }
 
         public override int GetHashCode() {
-            return typeof(InterfaceImplFeature).GetHashCode();
+            return _hash;
         }
 
         public override bool Equals(object obj) {
@@ -92,10 +92,8 @@ namespace IronRuby.Compiler.Generation {
             return true;
         }
 
-#if FEATURE_REFEMIT
         public IFeatureBuilder/*!*/ MakeBuilder(TypeBuilder/*!*/ tb) {
             return new InterfacesBuilder(tb, _interfaces);
         }
-#endif
     }
 }

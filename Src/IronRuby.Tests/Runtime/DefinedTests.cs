@@ -96,10 +96,10 @@ public :foo
 puts defined? foo.foo
 "), @"
 method
-nil
-nil
+
+
 foo
-nil
+
 foo
 method
 ");
@@ -136,12 +136,12 @@ C.new.cs_defined?
 ");
             }, @"
 constant
-nil
+
 constant
-nil
-nil
+
+
 constant
-nil
+
 ");
         }
 
@@ -162,13 +162,12 @@ class << Object
   end
 end
 
-puts defined?(X::C)
+puts defined?(X::C)          # defined? never calls const_missing (MRI 1.9+)
 puts defined?(raise::C)
 puts defined?(foo::C)
 ", @"
-missing X
-constant
-nil
+
+
 constant
 ");
         }
@@ -183,7 +182,7 @@ print '.' if defined? FOO
 print '.' if defined? FOO
 print '7' if not (defined? Object and defined? FOO)
 print '8' if defined? FOO or defined? Object
-", 2, 0), @"
+", 0, 0), @"
 1278
 ");
         }
@@ -202,7 +201,7 @@ puts defined?((1+3)+1)
 
 puts defined? x = 1
 puts defined? x &= 1
-puts defined? x &&= 1
+puts defined? x &&= 1      # an assignment too (MRI 1.9+)
 ");
             }, @"
 true
@@ -213,7 +212,7 @@ expression
 method
 assignment
 assignment
-expression
+assignment
 ");
         }
 
@@ -259,16 +258,19 @@ c.foo_defined?
 c.foo_defined_on_M?
 ");
             }, @"
-nil
+
 class variable
 ");
         }
 
         public void DefinedOperator_ClassVariables2() {
             AssertOutput(delegate() {
+                // class variables at the top level are a RuntimeError (MRI 3.0+)
                 CompilerTest(@"
-@@x = 1
-puts defined? @@x
+class C
+  @@x = 1
+  puts defined? @@x
+end
 ");
             }, @"
 class variable
@@ -286,7 +288,7 @@ puts foo
 puts foo {}
 ");
             }, @"
-nil
+
 yield
 ");
         }
@@ -305,7 +307,7 @@ end
 bob 1
 ");
             }, @"
-nil
+
 local-variable
 local-variable
 local-variable
@@ -337,9 +339,9 @@ puts D.new.foo
 puts D.new.bar
 ");
             }, @"
-nil
+
 super
-nil
+
 ");
         }
     }

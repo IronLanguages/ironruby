@@ -13,20 +13,17 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using IronRuby.Runtime;
 using Microsoft.Scripting;
-using System.Collections.ObjectModel;
 
 namespace IronRuby.Compiler.Ast {
     using Ast = MSA.Expression;
@@ -42,6 +39,9 @@ namespace IronRuby.Compiler.Ast {
         private readonly ScopeBuilder _parent;
 
         private readonly AstParameters/*!*/ _hiddenVariables;
+
+        // How many ensure clauses of this scope the statements being transformed are in (see SourceLineMarker.InEnsure).
+        internal int EnsureDepth;
 
         // constant access site cache variables:
         private MSA.ParameterExpression _csCacheVariable;
@@ -89,8 +89,51 @@ namespace IronRuby.Compiler.Ast {
             return RubyOps.MakeObjectTupleType(LiftedVisibleVariableCount);            
         }
 
+        /// <summary>
+        /// The tuple variable that holds each lexical depth's locals, for the depths this
+        /// scope has already reached for: its own #locals, and one #closureN per outer scope
+        /// something in it has read. -X:OSR hands these to an outlined loop so that it can
+        /// address the locals directly.
+        /// </summary>
+        internal IEnumerable<KeyValuePair<int, MSA.ParameterExpression>>/*!*/ TupleVariablesByDepth {
+            get {
+                yield return new KeyValuePair<int, MSA.ParameterExpression>(_lexicalScope.Depth, _localsTuple);
+                if (_closures != null) {
+                    for (int i = 0; i < _closures.Count; i++) {
+                        yield return new KeyValuePair<int, MSA.ParameterExpression>(_lexicalScope.Depth - i - 1, _closures[i]);
+                    }
+                }
+            }
+        }
+
+        internal int LexicalDepth {
+            get { return _lexicalScope.Depth; }
+        }
+
+        // whether anything in the scope reads an outer scope's locals (see GetClosure)
+        internal bool HasClosures {
+            get { return _closures != null; }
+        }
+
+        internal MSA.ParameterExpression/*!*/ LocalsTupleVariable {
+            get { return _localsTuple; }
+        }
+
         internal ScopeBuilder Parent {
             get { return _parent; }
+        }
+
+        // how often the code assigns each local of the scope, by slot (AstGenerator.GetLocalAssignments)
+        private Dictionary<int, LocalAssignmentCount> _localAssignments;
+
+        internal LocalAssignmentCount/*!*/ GetLocalAssignments(int closureIndex) {
+            LocalAssignmentCount result;
+            if (_localAssignments == null) {
+                _localAssignments = new Dictionary<int, LocalAssignmentCount>();
+            } else if (_localAssignments.TryGetValue(closureIndex, out result)) {
+                return result;
+            }
+            return _localAssignments[closureIndex] = new LocalAssignmentCount();
         }
 
         internal LexicalScope/*!*/ LexicalScope {
@@ -159,18 +202,63 @@ namespace IronRuby.Compiler.Ast {
         public static MSA.Expression/*!*/ GetVariableAccessor(MSA.Expression/*!*/ tupleVariable, int tupleFieldIndex) {
             MSA.Expression accessor = tupleVariable;
 
-            foreach (var property in MutableTuple.GetAccessPath(tupleVariable.Type, tupleFieldIndex)) {
+            foreach (var property in GetAccessPath(tupleVariable.Type, tupleFieldIndex)) {
                 accessor = Ast.Property(accessor, property);
             }
 
             return accessor;
         }
 
+        // The properties that reach each slot of a locals tuple type, looked up once per type and
+        // slot. MutableTuple.GetAccessPath finds them by name every time, and every local variable
+        // reference the compiler transforms asks for one - a method with a hundred locals spent
+        // most of its transform there.
+        private static readonly ConcurrentDictionary<Type, PropertyInfo[][]>/*!*/ _accessPaths =
+            new ConcurrentDictionary<Type, PropertyInfo[][]>();
+
+        private static PropertyInfo/*!*/[]/*!*/ GetAccessPath(Type/*!*/ tupleType, int index) {
+            PropertyInfo[][] paths = _accessPaths.GetOrAdd(tupleType, t => new PropertyInfo[MutableTuple.GetSize(t)][]);
+            if ((uint)index >= (uint)paths.Length) {
+                // what MutableTuple.GetAccessPath says about a slot the tuple does not have
+                return new List<PropertyInfo>(MutableTuple.GetAccessPath(tupleType, index)).ToArray();
+            }
+            PropertyInfo[] path = Volatile.Read(ref paths[index]);
+            if (path == null) {
+                path = new List<PropertyInfo>(MutableTuple.GetAccessPath(tupleType, index)).ToArray();
+                Volatile.Write(ref paths[index], path);
+            }
+            return path;
+        }
+
+        /// <summary>
+        /// A new locals tuple. One of more than MutableTuple.MaxSize slots is a tuple of tuples
+        /// (MutableTuple.MakeTupleType), and `new' makes only the outer one: the nested ones are
+        /// made here as well, or the first store into one of their slots - a method's 127th local
+        /// after its parameter - raises a NullReferenceException.
+        /// </summary>
+        private static MSA.Expression/*!*/ NewTuple(Type/*!*/ tupleType) {
+            Type[] items = tupleType.GetGenericArguments();
+            MSA.Expression[] args = null;
+            for (int i = 0; i < items.Length; i++) {
+                if (typeof(MutableTuple).IsAssignableFrom(items[i])) {
+                    if (args == null) { args = new MSA.Expression[items.Length]; }
+                    args[i] = NewTuple(items[i]);
+                }
+            }
+            if (args == null) {
+                return Ast.New(tupleType);
+            }
+            for (int i = 0; i < items.Length; i++) {
+                if (args[i] == null) { args[i] = AstUtils.Constant(null, items[i]); }
+            }
+            return Ast.New(tupleType.GetConstructor(items), args);
+        }
+
         public MSA.Expression/*!*/ MakeLocalsStorage() {
             // TODO: use a factory instead of Ast.New to improve interpreter perf:
             MSA.Expression result = Ast.Assign(
                 _localsTuple, 
-                LiftedVisibleVariableCount == 0 ? (MSA.Expression)Ast.Constant(null, _localsTuple.Type) : Ast.New(_localsTuple.Type)
+                LiftedVisibleVariableCount == 0 ? (MSA.Expression)Ast.Constant(null, _localsTuple.Type) : NewTuple(_localsTuple.Type)
             );
             
             if (_parameters != null) {
@@ -188,6 +276,251 @@ namespace IronRuby.Compiler.Ast {
 
             return result;
         }
+
+        /// <summary>
+        /// Whether a block that reuses its scope (see RubyOps.TakeReusableBlockScope) reuses the
+        /// scope's locals tuple too: one of up to 8 locals, cleared when the call finishes.
+        /// </summary>
+        internal bool HasReusableLocals {
+            get {
+                int count = LiftedVisibleVariableCount;
+                return count > 0 && count <= 8 && _parameters == null;
+            }
+        }
+
+        /// <summary>
+        /// Takes the scope the last call of the block kept (into <paramref name="reusableScope"/>, null if there is
+        /// none) and then makes the locals storage: the taken scope's tuple, if the block reuses it, or a new one.
+        /// A tuple is only ever reused together with the scope it came from.
+        /// </summary>
+        public MSA.Expression/*!*/ MakeReusableLocalsStorage(MSA.Expression/*!*/ blockParameter, MSA.ParameterExpression/*!*/ reusableScope,
+            bool safePointInBody) {
+            var take = Ast.Assign(reusableScope,
+                (safePointInBody ? Methods.TakeReusableBlockScopeSafePointInBody : Methods.TakeReusableBlockScope).OpCall(blockParameter));
+            if (!HasReusableLocals) {
+                return Ast.Block(take, MakeLocalsStorage());
+            }
+            // (the type test only when there is a tuple to reuse: a block called once has none)
+            return Ast.Block(
+                take,
+                Ast.Assign(_localsTuple, Ast.Coalesce(
+                    Ast.Condition(
+                        Ast.Equal(reusableScope, AstUtils.Constant(null)),
+                        AstUtils.Constant(null, _localsTuple.Type),
+                        Ast.TypeAs(Methods.GetReusableLocals.OpCall(reusableScope), _localsTuple.Type)
+                    ),
+                    Ast.New(_localsTuple.Type)
+                ))
+            );
+        }
+
+        public MSA.Expression/*!*/ MakeClearLocals() {
+            Debug.Assert(HasReusableLocals);
+            int count = LiftedVisibleVariableCount;
+            var result = new AstExpressions(count + 1);
+            for (int i = 0; i < count; i++) {
+                result.Add(Ast.Assign(GetVariableAccessor(_localsTuple, i), AstUtils.Constant(null)));
+            }
+            result.Add(AstUtils.Empty());
+            return Ast.Block(result);
+        }
+
+        #region Register locals
+
+        // The most locals a body keeps in CLR variables (see TryUseRegisterLocals): a flat tuple, and a body that is small.
+        private const int MaxRegisterLocals = 16;
+
+        // one CLR variable per slot of the locals tuple, once TryUseRegisterLocals has rewritten a body to use them
+        private MSA.ParameterExpression[] _registers;
+
+        /// <summary>
+        /// A body that runs without its scope until something asks for one - a scope-free block (BlockDefinition), a light-frame
+        /// method (MethodDefinition.TransformLightFrame) - keeps its locals in CLR variables rather than in a MutableTuple allocated
+        /// on every call: { |x| x } and `def one(x); yield x; end' allocated one per call for nothing but their parameters. The
+        /// tuple is made, with the values the variables hold, together with the scope (<see cref="MaterializeLocals"/>), and from
+        /// then on every access goes to the tuple and not to the variable, so that a Binding or a TracePoint hook reading or writing
+        /// a local through the scope sees what the body sees, also afterwards. An access is therefore a test of the tuple variable
+        /// for null, which is all a body that never makes its scope pays.
+        /// Returns the rewritten body, or null if the body uses the tuple in a way this does not rewrite; the entry must then
+        /// initialize the variables with <see cref="MakeRegisterLocalsStorage"/> rather than <see cref="MakeLocalsStorage"/>.
+        /// </summary>
+        internal MSA.Expression TryUseRegisterLocals(MSA.Expression/*!*/ body) {
+            int count = LiftedVisibleVariableCount;
+            if (count == 0 || count > MaxRegisterLocals || _registers != null) {
+                return null;
+            }
+
+            var registers = new MSA.ParameterExpression[count];
+            for (int i = 0; i < registers.Length; i++) {
+                registers[i] = Ast.Variable(typeof(object), "#r" + i);
+            }
+
+            var rewriter = new RegisterLocalsRewriter(this, registers);
+            var result = rewriter.Visit(body);
+            if (rewriter.Failed) {
+                _registers = null;
+                return null;
+            }
+
+            foreach (var register in registers) {
+                AddHidden(register);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// The entry of a body <see cref="TryUseRegisterLocals"/> rewrote: no tuple, and the parameters in their variables.
+        /// </summary>
+        internal MSA.Expression/*!*/ MakeRegisterLocalsStorage() {
+            Debug.Assert(_registers != null);
+            var result = new AstExpressions();
+            result.Add(Ast.Assign(_localsTuple, Ast.Constant(null, _localsTuple.Type)));
+            int j = 0;
+            if (_parameters != null) {
+                for (int i = _firstClosureParam; i < _parameters.Count; i++, j++) {
+                    result.Add(Ast.Assign(_registers[j], AstUtils.Convert(_parameters[i], typeof(object))));
+                }
+            }
+            // a local the body has not assigned yet is nil, also where the variable is reused
+            for (; j < _registers.Length; j++) {
+                result.Add(Ast.Assign(_registers[j], AstUtils.Constant(null)));
+            }
+            result.Add(AstUtils.Empty());
+            return Ast.Block(result);
+        }
+
+        /// <summary>
+        /// The locals tuple of a body that uses register locals, made from the variables the first time it is asked for.
+        /// </summary>
+        internal MSA.Expression/*!*/ MaterializeLocals() {
+            Debug.Assert(_registers != null);
+            var result = new AstExpressions();
+            result.Add(Ast.Assign(_localsTuple, NewTuple(_localsTuple.Type)));
+            for (int i = 0; i < _registers.Length; i++) {
+                result.Add(Ast.Assign(GetVariableAccessor(_localsTuple, i), _registers[i]));
+            }
+            result.Add(_localsTuple);
+            return Ast.Coalesce(_localsTuple, Ast.Block(result));
+        }
+
+        /// <summary>
+        /// Turns each access to a slot of the locals tuple into an access to its variable while there is no tuple, and passes the
+        /// tuple a scope is made with (CreateBlockScopeLazy, CreateMethodScopeLazy) as made on demand. Any other use of the tuple,
+        /// or a node it cannot look into, fails the rewrite.
+        /// </summary>
+        private sealed class RegisterLocalsRewriter : MSA.ExpressionVisitor {
+            private readonly ScopeBuilder/*!*/ _scope;
+            private readonly MSA.ParameterExpression/*!*/ _tuple;
+            private readonly PropertyInfo/*!*/[]/*!*/ _slots;
+            private readonly MSA.ParameterExpression/*!*/[]/*!*/ _registers;
+
+            internal bool Failed;
+
+            internal RegisterLocalsRewriter(ScopeBuilder/*!*/ scope, MSA.ParameterExpression/*!*/[]/*!*/ registers) {
+                _scope = scope;
+                _tuple = scope._localsTuple;
+                _registers = registers;
+                // MaterializeLocals, which the rewrite calls, reads them
+                scope._registers = registers;
+                _slots = new PropertyInfo[registers.Length];
+                for (int i = 0; i < _slots.Length; i++) {
+                    var path = GetAccessPath(_tuple.Type, i);
+                    _slots[i] = (path.Length == 1) ? path[0] : null;
+                }
+            }
+
+            private int GetSlot(MSA.Expression node) {
+                var member = node as MSA.MemberExpression;
+                if (member == null || member.Expression != _tuple) {
+                    return -1;
+                }
+                int slot = Array.IndexOf(_slots, member.Member as PropertyInfo);
+                if (slot < 0) {
+                    // a slot past the lifted locals (a hidden one) or a nested tuple
+                    Failed = true;
+                }
+                return slot;
+            }
+
+            private MSA.Expression/*!*/ IsTupleMissing() {
+                return Ast.Equal(_tuple, AstUtils.Constant(null, _tuple.Type));
+            }
+
+            protected override MSA.Expression/*!*/ VisitParameter(MSA.ParameterExpression/*!*/ node) {
+                if (node == _tuple) {
+                    Failed = true;
+                }
+                return node;
+            }
+
+            protected override MSA.Expression/*!*/ VisitMember(MSA.MemberExpression/*!*/ node) {
+                int slot = GetSlot(node);
+                if (slot >= 0) {
+                    return Ast.Condition(IsTupleMissing(), _registers[slot], node, typeof(object));
+                }
+                return (node.Expression == _tuple) ? node : base.VisitMember(node);
+            }
+
+            protected override MSA.Expression/*!*/ VisitBinary(MSA.BinaryExpression/*!*/ node) {
+                int slot = GetSlot(node.Left);
+                if (slot >= 0) {
+                    if (node.NodeType != MSA.ExpressionType.Assign) {
+                        // a compound assignment, which the compiler does not make of a local
+                        Failed = true;
+                        return node;
+                    }
+                    var value = Ast.Variable(typeof(object), "#v");
+                    return Ast.Block(new[] { value },
+                        Ast.Assign(value, AstUtils.Convert(Visit(node.Right), typeof(object))),
+                        Ast.Condition(IsTupleMissing(),
+                            Ast.Assign(_registers[slot], value),
+                            Ast.Assign(node.Left, value),
+                            typeof(object)
+                        )
+                    );
+                }
+                return base.VisitBinary(node);
+            }
+
+            protected override MSA.Expression/*!*/ VisitUnary(MSA.UnaryExpression/*!*/ node) {
+                switch (node.NodeType) {
+                    case MSA.ExpressionType.PreIncrementAssign:
+                    case MSA.ExpressionType.PreDecrementAssign:
+                    case MSA.ExpressionType.PostIncrementAssign:
+                    case MSA.ExpressionType.PostDecrementAssign:
+                        if (GetSlot(node.Operand) >= 0) {
+                            Failed = true;
+                            return node;
+                        }
+                        break;
+                }
+                return base.VisitUnary(node);
+            }
+
+            protected override MSA.Expression/*!*/ VisitMethodCall(MSA.MethodCallExpression/*!*/ node) {
+                if (node.Object == null && (node.Method == Methods.CreateBlockScopeLazy || node.Method == Methods.CreateMethodScopeLazy)) {
+                    var arguments = new MSA.Expression[node.Arguments.Count];
+                    for (int i = 0; i < arguments.Length; i++) {
+                        arguments[i] = (node.Arguments[i] == _tuple) ? _scope.MaterializeLocals() : Visit(node.Arguments[i]);
+                    }
+                    return Ast.Call(node.Method, arguments);
+                }
+                return base.VisitMethodCall(node);
+            }
+
+            protected override MSA.Expression/*!*/ VisitExtension(MSA.Expression/*!*/ node) {
+                if (node is TraceLineExpression || node is TraceReturnExpression || node is CompiledFrameExpression) {
+                    return base.VisitExtension(node);
+                }
+                if (node is SourceLineMarker || node is EnterInterpretedFrameExpression) {
+                    return node;
+                }
+                Failed = true;
+                return node;
+            }
+        }
+
+        #endregion
 
         public MSA.Expression/*!*/ GetVariableNamesExpression() {
             if (LiftedVisibleVariableCount == 0) {

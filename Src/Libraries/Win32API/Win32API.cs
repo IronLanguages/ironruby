@@ -1,4 +1,4 @@
-﻿/* ****************************************************************************
+/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -12,31 +12,21 @@
  *
  *
  * ***************************************************************************/
-// debug only:
-// #define USE_SNIPPETS
 
-#if !SILVERLIGHT && !WIN8 && !ANDROID && !WP75
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections;
 using System.ComponentModel;
-using System.Globalization;
 using System.Threading;
 using System.Diagnostics;
 using System.Reflection.Emit;
 using System.Reflection;
 using System.Security;
-using System.Security.Permissions;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Dynamic;
 
-using Microsoft.Scripting.Generation;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 
@@ -52,7 +42,7 @@ namespace IronRuby.StandardLibrary.Win32API {
     using AstExpressions = ReadOnlyCollectionBuilder<Expression>;
     using AstUtils = Microsoft.Scripting.Ast.Utils;
 
-    [RubyClass("Win32API", BuildConfig = "!SILVERLIGHT && !WIN8 && !ANDROID")]
+    [RubyClass("Win32API")]
     public class Win32API : RubyObject {
         private enum ArgType : byte {
             // ignored
@@ -189,7 +179,7 @@ namespace IronRuby.StandardLibrary.Win32API {
             return Reinitialize(new Win32API(self), libraryName, functionName, parameterTypes, returnType);
         }
 
-        [RubyConstructor(Compatibility=RubyCompatibility.Ruby19)]
+        [RubyConstructor]
         public static Win32API/*!*/ Create(RubyClass/*!*/ self,
             [DefaultProtocol, NotNull]MutableString/*!*/ libraryName,
             [DefaultProtocol, NotNull]MutableString/*!*/ functionName,
@@ -370,15 +360,10 @@ namespace IronRuby.StandardLibrary.Win32API {
                 parameterTypes[1 + i] = ToNativeType(_signature[i]);
             }
 
-#if USE_SNIPPETS
-            TypeGen tg = Snippets.Shared.DefineType("calli", typeof(object), false, false);
-            MethodBuilder dm = tg.TypeBuilder.DefineMethod("calli", CompilerHelpers.PublicStatic, returnType, parameterTypes);
-#else
             DynamicMethod dm = new DynamicMethod("calli", returnType, parameterTypes, DynamicModule);
-#endif
 
             var il = dm.GetILGenerator();
-            var signature = SignatureHelper.GetMethodSigHelper(CallingConvention.Winapi, returnType);
+            var signature = SignatureHelper.GetMethodSigHelper(CallingConventions.Standard, returnType);
 
             // calli args:
             for (int i = 1; i < parameterTypes.Length; i++) {
@@ -391,11 +376,7 @@ namespace IronRuby.StandardLibrary.Win32API {
             il.Emit(OpCodes.Calli, signature);
             il.Emit(OpCodes.Ret);
 
-#if USE_SNIPPETS
-            return _calliStub = tg.TypeBuilder.CreateType().GetMethod("calli");
-#else
             return _calliStub = dm;
-#endif
         }
 
         private static ModuleBuilder _dynamicModule;                                      // the dynamic module we generate unsafe code into
@@ -404,25 +385,14 @@ namespace IronRuby.StandardLibrary.Win32API {
         /// <summary>
         /// Gets the ModuleBuilder used to generate our unsafe call stubs into.
         /// </summary>
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Portability", "CA1903:UseOnlyApiFromTargetedFramework", MessageId = "System.AppDomain.#DefineDynamicAssembly(System.Reflection.AssemblyName,System.Reflection.Emit.AssemblyBuilderAccess,System.Collections.Generic.IEnumerable`1<System.Reflection.Emit.CustomAttributeBuilder>)")]
         private static ModuleBuilder DynamicModule {
             get {
                 if (_dynamicModule == null) {
                     lock (_lock) {
                         if (_dynamicModule == null) {
-                            var attributes = new[] { 
-                                new CustomAttributeBuilder(typeof(UnverifiableCodeAttribute).GetConstructor(ReflectionUtils.EmptyTypes), new object[0]),
-                                //PermissionSet(SecurityAction.Demand, Unrestricted = true)
-                                new CustomAttributeBuilder(typeof(PermissionSetAttribute).GetConstructor(new Type[] { typeof(SecurityAction) }), 
-                                    new object[]{ SecurityAction.Demand },
-                                    new PropertyInfo[] { typeof(PermissionSetAttribute).GetProperty("Unrestricted") }, 
-                                    new object[] { true }
-                                )
-                            };
-
                             string name = typeof(Win32API).Namespace + ".DynamicAssembly";
-                            var assembly = AppDomain.CurrentDomain.DefineDynamicAssembly(new AssemblyName(name), AssemblyBuilderAccess.Run, attributes);
-                            assembly.DefineVersionInfoResource();
+                            var assembly = AssemblyBuilder.DefineDynamicAssembly(new AssemblyName(name), AssemblyBuilderAccess.Run);
+                            assembly.SetCustomAttribute(new CustomAttributeBuilder(typeof(UnverifiableCodeAttribute).GetConstructor(ReflectionUtils.EmptyTypes), new object[0]));
                             _dynamicModule = assembly.DefineDynamicModule(name);
                         }
                     }
@@ -435,4 +405,3 @@ namespace IronRuby.StandardLibrary.Win32API {
 #endregion
     }
 }
-#endif

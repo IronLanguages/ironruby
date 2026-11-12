@@ -13,14 +13,10 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using Microsoft.Scripting;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
@@ -40,6 +36,10 @@ namespace IronRuby.Compiler.Ast {
 
         public static Literal/*!*/ Integer(int value, SourceSpan location) {
             return new Literal(ScriptingRuntimeHelpers.Int32ToObject(value), location);
+        }
+
+        public static Literal/*!*/ Long(long value, SourceSpan location) {
+            return new Literal(value, location);
         }
 
         public static Literal/*!*/ Double(double value, SourceSpan location) {
@@ -62,7 +62,7 @@ namespace IronRuby.Compiler.Ast {
             return new Literal(ScriptingRuntimeHelpers.False, location);
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             return AstUtils.Constant(_value);
         }
 

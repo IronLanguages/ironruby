@@ -13,21 +13,17 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
-using System.Collections.ObjectModel;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
+
+using IronRuby.Runtime.Osr;
 
 namespace IronRuby.Compiler.Ast {
     using Ast = MSA.Expression;
@@ -67,8 +63,27 @@ namespace IronRuby.Compiler.Ast {
 
         private bool HasFormalParametersInArray {
             get {
-                return ParameterCount > MaxBlockArity || HasUnsplatParameter || HasProcParameter; 
+                return ParameterCount > MaxBlockArity || HasUnsplatParameter || HasProcParameter || HasPostParameters;
             }
+        }
+
+        // Mandatory parameters written after the optional/rest ones, as in |a, *b, c|.
+        // A trailing Placeholder is not one of those: it is how `|a,|` spells "swallow the rest",
+        // so it binds like a rest parameter rather than like a post parameter.
+        private int PostParameterCount {
+            get {
+                int count = 0;
+                for (int i = _parameters.LeadingMandatoryCount; i < _parameters.Mandatory.Length; i++) {
+                    if (!(_parameters.Mandatory[i] is Placeholder)) {
+                        count++;
+                    }
+                }
+                return count;
+            }
+        }
+
+        private bool HasPostParameters {
+            get { return PostParameterCount > 0; }
         }
 
         private bool HasUnsplatParameter {
@@ -153,53 +168,157 @@ namespace IronRuby.Compiler.Ast {
                 scopeVariable,
                 redoLabel
             );
+            gen.CurrentBlock.LexicalDepth = _definedScope.Depth;
+            gen.CurrentBlock.HasOwnCompiledFrame = true;
 
+            // the binding of the parameters is one assignment of each, whatever it takes to make it
+            gen.BindingParameters = true;
             MSA.Expression paramInit = MakeParametersInitialization(gen, parameters);
-            MSA.ParameterExpression blockUnwinder, filterVariable;
+            gen.BindingParameters = false;
+            gen.CountParameterAssignments(_parameters);
+            MSA.ParameterExpression blockUnwinder;
 
-            MSA.Expression traceCall, traceReturn;
-			if (gen.TraceEnabled) {
-                int firstStatementLine = _body.Count > 0 ? _body.First.Location.Start.Line : Location.End.Line;
-                int lastStatementLine = _body.Count > 0 ? _body.Last.Location.End.Line : Location.End.Line;
-
-                traceCall = Methods.TraceBlockCall.OpCall(scopeVariable, blockParameter, gen.SourcePathConstant, AstUtils.Constant(firstStatementLine));
-                traceReturn = Methods.TraceBlockReturn.OpCall(scopeVariable, blockParameter, gen.SourcePathConstant, AstUtils.Constant(lastStatementLine));
-            } else {
-                traceCall = traceReturn = Ast.Empty();
+            // `do ... rescue ... end`: the entry safe point goes inside the rescued statements, so that a
+            // Thread#raise that came in between two calls of the block meets the rescue (see
+            // RubyOps.CreateBlockScopeSafePointInBody).
+            Body rescuedBody = (_body.Count == 1) ? _body.First as Body : null;
+            bool safePointInBody = rescuedBody != null && rescuedBody.HasRescue;
+            if (safePointInBody) {
+                rescuedBody.SafePointFirst = true;
             }
 
-            MSA.Expression body = AstUtils.Try(
-                paramInit,
-                traceCall,
-                Ast.Label(redoLabel),
-                AstUtils.Try(
-                    gen.TransformStatements(_body, ResultOperation.Return)
-                ).Catch(blockUnwinder = Ast.Parameter(typeof(BlockUnwinder), "#u"),
-                    // redo:
-                    AstUtils.IfThen(Ast.Field(blockUnwinder, BlockUnwinder.IsRedoField), Ast.Goto(redoLabel)),
+            MSA.Expression statements = gen.TransformStatements(_body, ResultOperation.Return);
+            bool hasNestedReturn = gen.CurrentBlock.HasNestedReturn;
+            var outerVariables = gen.CurrentBlock.OuterVariables;
+            var outerVariableAssignments = gen.CurrentBlock.OuterVariableAssignments;
+            var assignedOuterVariables = gen.CurrentBlock.AssignedOuterVariables;
 
-                    // next:
-                    gen.Return(Ast.Field(blockUnwinder, BlockUnwinder.ReturnValueField))
-                )
-            ).Filter(filterVariable = Ast.Parameter(typeof(Exception), "#e"),
-                Methods.FilterBlockException.OpCall(scopeVariable, filterVariable)
+            // A body that never uses its scope - { }, { |x| x } - has no use for the RubyBlockScope
+            // every invocation would allocate, except to hand to the TracePoint hooks, which only
+            // evaluate their scope while a TracePoint listens: there it is made on demand.
+            MSA.Expression lazyScope = null;
+            if (!hasNestedReturn && !gen.TraceEnabled && !gen.CompilerOptions.IsEval && !scope.HasClosures && IsScopeFreeBody()) {
+                var names = scope.GetVariableNamesExpression();
+                Func<MSA.Expression> makeScope = () => Methods.CreateBlockScopeLazy.OpCall(
+                    scope.LocalsTupleVariable, names, blockParameter, selfParameter, EnterInterpretedFrameExpression.Instance
+                );
+                var lazy = Ast.Coalesce(scopeVariable, Ast.Assign(scopeVariable, makeScope()));
+                var rewriter = new LazyScopeRewriter(scopeVariable, lazy);
+                var lazyParamInit = rewriter.Visit(paramInit);
+                var lazyStatements = rewriter.Visit(statements);
+                if (!rewriter.NeedsScope) {
+                    paramInit = lazyParamInit;
+                    statements = lazyStatements;
+                    lazyScope = lazy;
+                }
+            }
+
+            var bodyTry = AstUtils.Try(
+                statements
+            ).Catch(blockUnwinder = Ast.Parameter(typeof(BlockUnwinder), "#u"),
+                // redo:
+                AstUtils.IfThen(Ast.Field(blockUnwinder, BlockUnwinder.IsRedoField), Ast.Goto(redoLabel)),
+
+                // next:
+                gen.Return(Ast.Field(blockUnwinder, BlockUnwinder.ReturnValueField))
+            );
+
+            MSA.Expression enterNestedReturn, leaveNestedReturn;
+            if (hasNestedReturn) {
+                // a return in a nested block leaves this block if it runs as a lambda, however it was invoked:
+                MSA.ParameterExpression lambdaUnwinder;
+                // a LambdaUnwinder only (IsLambdaScopeUnwinderTarget), so that nothing else is caught on its way (see Proc.BuildCall)
+                bodyTry = bodyTry.Filter(lambdaUnwinder = Ast.Parameter(typeof(LambdaUnwinder), "#lu"),
+                    Methods.IsLambdaScopeUnwinderTarget.OpCall(scopeVariable, lambdaUnwinder),
+                    gen.Return(Methods.GetLambdaUnwinderReturnValue.OpCall(lambdaUnwinder))
+                );
+                enterNestedReturn = Methods.EnterLambdaReturnScope.OpCall(scopeVariable);
+                leaveNestedReturn = Methods.LeaveLambdaReturnScope.OpCall(scopeVariable);
+            } else {
+                enterNestedReturn = leaveNestedReturn = Ast.Empty();
+            }
+
+            // No handler for the exceptions that leave the block: it used to have one whose filter captured
+            // their backtrace, but a filter is a catch and a rethrow, a CLR exception dispatch of its own per
+            // block an exception leaves (see MethodDefinition.TransformBody, which does the same).
+            MSA.Expression body = AstUtils.Try(
+                enterNestedReturn,
+                paramInit,
+                Ast.Label(redoLabel),
+                bodyTry
             ).Finally(
-                traceReturn,
+                leaveNestedReturn,
+                Methods.ReleaseScopeFrame.OpCall(scopeVariable),
                 Ast.Empty()
             );
 
-            body = gen.AddReturnTarget(
-                scope.CreateScope(
-                    scopeVariable,
-                    Methods.CreateBlockScope.OpCall(new AstExpressions {
-                        scope.MakeLocalsStorage(),
-                        scope.GetVariableNamesExpression(),
-                        blockParameter, 
-                        selfParameter,
-                        EnterInterpretedFrameExpression.Instance
-                    }),
-                    body
-                )
+            // A body that needs its scope but defines no closure over it can reuse the scope of the
+            // previous call of the block, unless something captured that (see RubyScope.IsCaptured).
+            // A nested block literal is a Proc over the scope on every call: nothing to reuse.
+            bool reuseScope = lazyScope == null && !hasNestedReturn && !gen.CurrentBlock.HasNestedBlock &&
+                !gen.TraceEnabled && !gen.CompilerOptions.IsEval;
+
+            body = gen.Traceable
+                ? new TraceReturnExpression(lazyScope ?? scopeVariable, gen.AddReturnTarget(body), TraceEvents.BReturn | TraceEvents.Return, gen.SourcePath, Location.End.Line)
+                : gen.AddReturnTarget(body);
+
+            if (reuseScope) {
+                // the body stays in statement position: as a call argument it would have to be spilled
+                var result = scope.DefineHiddenVariable("#result", typeof(object));
+                bool keepLocals = scope.HasReusableLocals;
+                MSA.Expression leave = Methods.LeaveReusableBlockScope.OpCall(scopeVariable, AstUtils.Constant(keepLocals));
+                if (keepLocals) {
+                    leave = Ast.IfThen(leave, scope.MakeClearLocals());
+                }
+                body = Ast.Block(
+                    Ast.Assign(result, AstUtils.Convert(body, typeof(object))),
+                    leave,
+                    result
+                );
+            }
+
+            // A scope-free body keeps its locals in CLR variables: { |x| x } would otherwise allocate their tuple on every call.
+            MSA.Expression registerBody = (lazyScope != null) ? scope.TryUseRegisterLocals(body) : null;
+
+            MSA.Expression enterScope;
+            if (registerBody != null) {
+                body = registerBody;
+                enterScope = Ast.Block(
+                    scope.MakeRegisterLocalsStorage(),
+                    Ast.Condition(Methods.EnterScopeFreeBlock.OpCall(),
+                        Methods.TraceBlockCall.OpCall(Methods.CreateBlockScopeLazy.OpCall(
+                            scope.MaterializeLocals(), scope.GetVariableNamesExpression(), blockParameter, selfParameter,
+                            EnterInterpretedFrameExpression.Instance
+                        )),
+                        AstUtils.Constant(null, typeof(RubyBlockScope))
+                    )
+                );
+            } else if (reuseScope) {
+                // the scope to reuse is taken first, its tuple from it (see RubyOps.TakeReusableBlockScope)
+                var reusableScope = scope.DefineHiddenVariable("#reusable", typeof(RubyBlockScope));
+                enterScope = Methods.CreateReusableBlockScope.OpCall(new AstExpressions {
+                    scope.MakeReusableLocalsStorage(blockParameter, reusableScope, safePointInBody),
+                    scope.GetVariableNamesExpression(),
+                    blockParameter,
+                    selfParameter,
+                    EnterInterpretedFrameExpression.Instance,
+                    reusableScope
+                });
+            } else {
+                enterScope = (lazyScope != null ? Methods.CreateBlockScopeIfTraced :
+                    safePointInBody ? Methods.CreateBlockScopeSafePointInBody : Methods.CreateBlockScope).OpCall(new AstExpressions {
+                    scope.MakeLocalsStorage(),
+                    scope.GetVariableNamesExpression(),
+                    blockParameter, 
+                    selfParameter,
+                    EnterInterpretedFrameExpression.Instance
+                });
+            }
+
+            body = scope.CreateScope(
+                scopeVariable,
+                enterScope,
+                body
             );
 
             gen.LeaveBlockDefinition();
@@ -207,26 +326,157 @@ namespace IronRuby.Compiler.Ast {
             int parameterCount = ParameterCount;
             var attributes = _parameters.GetBlockSignatureAttributes();
 
-            var dispatcher = Ast.Constant(
-                BlockDispatcher.Create(parameterCount, attributes, gen.SourcePath, Location.Start.Line), typeof(BlockDispatcher)
-            );
+            var blockDispatcher = BlockDispatcher.Create(parameterCount, PostParameterCount, attributes, gen.SourcePath, Location.Start.Line);
+            blockDispatcher.ParameterSignature = _parameters.Signature;
+            if (outerVariables != null) {
+                blockDispatcher.OuterVariableNames = outerVariables.ToArray();
+                blockDispatcher.AssignedOuterVariableNames = assignedOuterVariables?.ToArray();
+                blockDispatcher.OuterVariableAssignments = outerVariableAssignments.ToArray();
+            }
+            if (!isLambda && gen.CanReplaceLoops) {
+                // -X:OSR: `n.times { }', `a.each { }' and the like run their loop in C#; a block that
+                // can be is outlined into that loop once it is hot (BlockLoopSite)
+                blockDispatcher.LoopInfo = BlockLoopInfo.TryCreate(this, gen.Context, _definedScope.Depth,
+                    gen.SourcePath + ":" + Location.Start.Line);
+            }
+
+            var dispatcher = Ast.Constant(blockDispatcher, typeof(BlockDispatcher));
+            string encodedName = RubyStackTraceBuilder.EncodeMethodName(BlockFrameLabel(gen), gen.SourcePath, Location, gen.DebugMode);
 
             return Ast.Coalesce(
                 (isLambda ? Methods.InstantiateLambda : Methods.InstantiateBlock).OpCall(gen.CurrentScopeVariable, gen.CurrentSelfVariable, dispatcher),
                 (isLambda ? Methods.DefineLambda : Methods.DefineBlock).OpCall(gen.CurrentScopeVariable, gen.CurrentSelfVariable, dispatcher,
                     BlockDispatcher.CreateLambda(
-                        body,
-                        RubyStackTraceBuilder.EncodeMethodName(gen.CurrentMethod.MethodName, gen.SourcePath, Location, gen.DebugMode),
+                        new CompiledFrameExpression(body, encodedName, Location.Start.Line),
+                        encodedName,
                         parameters,
                         parameterCount,
+                        PostParameterCount,
                         attributes
                     )
                 )
             );
         }
 
+        // MRI labels a block frame "block in <enclosing>", and counts the nesting once there
+        // is more than one level. This runs after LeaveBlockDefinition, so the generator's
+        // block chain is already the enclosing one and this block is the extra level.
+        private static string/*!*/ BlockFrameLabel(AstGenerator/*!*/ gen) {
+            string enclosing;
+            AstGenerator.BlockScope outermost;
+            int levels = 1;
+            var module = gen.GetEnclosingModuleFrame();
+            if (module != null) {
+                enclosing = module.FrameLabel;
+                outermost = module.OuterBlock;
+            } else if (gen.CompilerOptions.EvalFrameBaseLabel != null && gen.CurrentMethod == gen.TopLevelScope) {
+                // a block in an eval counts its levels from the frame the eval runs in
+                enclosing = gen.CompilerOptions.EvalFrameBaseLabel;
+                levels += gen.CompilerOptions.EvalFrameBlockLevels;
+                outermost = null;
+            } else {
+                enclosing = gen.CurrentMethod.FrameLabel ?? gen.CurrentMethod.MethodName ?? gen.TopLevelFrameLabel;
+                outermost = null;
+            }
+
+            for (var block = gen.CurrentBlock; block != null && block != outermost; block = block.ParentBlock) {
+                levels++;
+            }
+
+            return AstGenerator.FormatBlockLabel(enclosing, levels);
+        }
+
+        /// <summary>
+        /// Nothing in the parameters or the body needs the block's scope at runtime: plain
+        /// parameters, and statements that only read and assign the block's own locals, literals and
+        /// self. Every call site takes the scope, and so do constants, instance and global variables,
+        /// so this is the call-free body: { }, { |x| x }, { |a, b| a }.
+        /// The transformed body is still checked (LazyScopeRewriter); this is the cheap filter.
+        /// </summary>
+        private bool IsScopeFreeBody() {
+            if (_parameters.Optional.Length > 0 || _parameters.Unsplat != null || _parameters.Block != null || HasPostParameters) {
+                return false;
+            }
+            var signature = _parameters.Signature;
+            if (signature != null && (signature.TakesKeywords || signature.RefusesKeywords)) {
+                return false;
+            }
+            foreach (var parameter in _parameters.Mandatory) {
+                if (!(parameter is LocalVariable) && !(parameter is Placeholder)) {
+                    return false;
+                }
+            }
+            foreach (var statement in _body) {
+                if (!IsScopeFree(statement)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static bool IsScopeFree(Expression/*!*/ node) {
+            if (node is LocalVariable || node is Literal || node is SelfReference) {
+                return true;
+            }
+            var assignment = node as SimpleAssignmentExpression;
+            return assignment != null && assignment.Operation == null && assignment.Left is LocalVariable && IsScopeFree(assignment.Right);
+        }
+
+        /// <summary>
+        /// Points the TracePoint hooks of a scope-free body at the scope made on demand. Any other use
+        /// of the scope, or a node it cannot look into, means the body needs its scope after all.
+        /// </summary>
+        private sealed class LazyScopeRewriter : MSA.ExpressionVisitor {
+            private readonly MSA.ParameterExpression/*!*/ _scope;
+            private readonly MSA.Expression/*!*/ _lazyScope;
+            private int _inTraceHook;
+
+            internal bool NeedsScope;
+
+            internal LazyScopeRewriter(MSA.ParameterExpression/*!*/ scope, MSA.Expression/*!*/ lazyScope) {
+                _scope = scope;
+                _lazyScope = lazyScope;
+            }
+
+            protected override MSA.Expression/*!*/ VisitParameter(MSA.ParameterExpression/*!*/ node) {
+                if (node == _scope) {
+                    if (_inTraceHook > 0) {
+                        return _lazyScope;
+                    }
+                    NeedsScope = true;
+                }
+                return node;
+            }
+
+            protected override MSA.Expression/*!*/ VisitExtension(MSA.Expression/*!*/ node) {
+                if (node is TraceLineExpression) {
+                    _inTraceHook++;
+                    try {
+                        return base.VisitExtension(node);
+                    } finally {
+                        _inTraceHook--;
+                    }
+                }
+                if (node is SourceLineMarker) {
+                    return node;
+                }
+                if (node is CompiledFrameExpression) {
+                    return base.VisitExtension(node);
+                }
+                NeedsScope = true;
+                return node;
+            }
+        }
+
         private MSA.Expression/*!*/ GetParameterAccess(AstParameters/*!*/ parameters, MSA.Expression paramsArray, int i) {
             return (paramsArray != null) ? (MSA.Expression)Ast.ArrayAccess(paramsArray, AstUtils.Constant(i)) : parameters[HiddenParameterCount + i];
+        }
+
+        private MSA.Expression/*!*/ GetPositionalParameterAccess(AstParameters/*!*/ parameters, MSA.Expression paramsArray, int i, bool clearsKeywords) {
+            var access = GetParameterAccess(parameters, paramsArray, i);
+            // the call only for a Hash (exactly, see RubyOps.ClearKeywordArguments): the test is all an argument of any other
+            // class costs
+            return clearsKeywords ? Ast.Condition(Ast.TypeEqual(access, typeof(Hash)), Methods.ClearKeywordArguments.OpCall(access), access) : access;
         }
 
         private MSA.Expression/*!*/ MakeParametersInitialization(AstGenerator/*!*/ gen, AstParameters/*!*/ parameters) {
@@ -242,15 +492,22 @@ namespace IronRuby.Compiler.Ast {
 
             var paramsArray = HasFormalParametersInArray ? parameters[HiddenParameterCount] : null;
 
+            // A block that declares no keywords takes a Hash passed as keywords (yield(a: 1)) as a positional argument, which
+            // it may keep: it stops saying it is keyword arguments, as for a method (RubyOps.ClearKeywordArguments). The
+            // dispatcher of a block with few plain parameters does that before the call (BlockDispatcher.Positional).
+            var signature = _parameters.Signature;
+            bool clearsKeywords = signature != null && !signature.TakesKeywords && !signature.RefusesKeywords &&
+                !BlockDispatcher.UnmarksKeywordArguments(ParameterCount, PostParameterCount, _parameters.GetBlockSignatureAttributes());
+
             int parameterIndex = 0;
             for (int i = 0; i < _parameters.Mandatory.Length; i++) {
-                result.Add(_parameters.Mandatory[i].TransformWrite(gen, GetParameterAccess(parameters, paramsArray, parameterIndex)));
+                result.Add(_parameters.Mandatory[i].TransformWrite(gen, GetPositionalParameterAccess(parameters, paramsArray, parameterIndex, clearsKeywords)));
                 parameterIndex++;
             }
 
             if (_parameters.Optional.Length > 0) {
                 for (int i = 0; i < _parameters.Optional.Length; i++) {
-                    result.Add(_parameters.Optional[i].Left.TransformWrite(gen, GetParameterAccess(parameters, paramsArray, parameterIndex)));
+                    result.Add(_parameters.Optional[i].Left.TransformWrite(gen, GetPositionalParameterAccess(parameters, paramsArray, parameterIndex, clearsKeywords)));
                     parameterIndex++;
                 }
                 result.Add(_parameters.TransformOptionalsInitialization(gen));

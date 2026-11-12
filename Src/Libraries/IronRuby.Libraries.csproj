@@ -1,164 +1,75 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
-<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0">
-  <Import Project="$(ProjectDir)..\..\Build\Common.proj" />
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <SchemaVersion>2.0</SchemaVersion>
-    <ProjectGuid>{77323B06-15A2-4CF4-8A7A-86EAA2B66498}</ProjectGuid>
-    <OutputType>Library</OutputType>
-    <AppDesignerFolder>Properties</AppDesignerFolder>
-    <RootNamespace>IronRuby.Libraries</RootNamespace>
+    <TargetFrameworks>$(IronRubyTargetFrameworks)</TargetFrameworks>
     <AssemblyName>IronRuby.Libraries</AssemblyName>
-    <WarningLevel>4</WarningLevel>
-    <BaseAddress>891289600</BaseAddress>
-    <CodeAnalysisRuleSet>$(AssemblyName).ruleset</CodeAnalysisRuleSet>
-    <DocumentationFile>$(OutputPath)\$(AssemblyName).xml</DocumentationFile>
+    <RootNamespace>IronRuby</RootNamespace>
+    <!-- Src/Libraries/Zstd calls ZstdSharp's ZSTD_* functions, which take pointers. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'FxCop|AnyCPU' ">
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Win8Debug|AnyCPU' ">
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Win8Release|AnyCPU' ">
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'v2Debug|AnyCPU' ">
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'v2Release|AnyCPU' ">
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Silverlight3Debug|AnyCPU' ">
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Silverlight3Release|AnyCPU' ">
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Silverlight4Debug|AnyCPU' ">
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Silverlight4Release|AnyCPU' ">
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'AndroidDebug|AnyCPU' ">
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'AndroidRelease|AnyCPU' ">
-  </PropertyGroup>
-  <ItemGroup>
-    <Compile Include="..\..\..\Hosts\Silverlight\SilverlightVersion.cs" Condition=" '$(IsSilverlight)' == 'true' ">
-      <Link>Properties\SilverlightVersion.cs</Link>
-    </Compile>
-    <Compile Include="BigDecimal\BigDecimal.cs" />
-    <Compile Include="BigDecimal\BigDecimalKernelOps.cs" />
-    <Compile Include="BigDecimal\BigDecimalOps.cs" />
-    <Compile Include="BigDecimal\Fraction.cs" />
-    <Compile Include="Builtins\ArgFilesSingletonOps.cs" />
-    <Compile Include="Builtins\ArrayOps.cs" />
-    <Compile Include="Builtins\BasicObjectOps.cs" />
-    <Compile Include="Builtins\BigNumOps.cs" />
-    <Compile Include="Builtins\BindingOps.cs" />
-    <Compile Include="Builtins\BuiltinsInitializer.cs" />
-    <Compile Include="Builtins\ClassOps.cs" />
-    <Compile Include="Builtins\Comparable.cs" />
-    <Compile Include="Builtins\Dir.cs" />
-    <Compile Include="Builtins\Enumerable.cs" />
-    <Compile Include="Builtins\Enumerator.cs" />
-    <Compile Include="Builtins\EnvironmentSingletonOps.cs" />
-    <Compile Include="Builtins\Errno.cs" />
-    <Compile Include="Builtins\ExceptionOps.cs" />
-    <Compile Include="Builtins\Exceptions.cs" />
-    <Compile Include="Builtins\FalseClass.cs" />
-    <Compile Include="Builtins\FileOps.cs" />
-    <Compile Include="Builtins\FileTest.cs" />
-    <Compile Include="Builtins\FixnumOps.cs" />
-    <Compile Include="Builtins\FloatOps.cs" />
-    <Compile Include="Builtins\PrintOps.cs" />
-    <Compile Include="Builtins\RubyGC.cs" />
-    <Compile Include="Builtins\HashOps.cs" />
-    <Compile Include="Builtins\Integer.cs" />
-    <Compile Include="Builtins\IoOps.cs" />
-    <Compile Include="Builtins\KernelOps.cs" />
-    <Compile Include="Builtins\Marshal.cs" />
-    <Compile Include="Builtins\MatchDataOps.cs" />
-    <Compile Include="Builtins\ObjectSpace.cs" />
-    <Compile Include="Builtins\RubyEncodingOps.cs" />
-    <Compile Include="Builtins\RubyMath.cs" />
-    <Compile Include="Builtins\MethodOps.cs" />
-    <Compile Include="Builtins\ModuleOps.cs" />
-    <Compile Include="Builtins\MutableStringOps.cs" />
-    <Compile Include="Builtins\NilClassOps.cs" />
-    <Compile Include="Builtins\Numeric.cs" />
-    <Compile Include="Builtins\ObjectOps.cs" />
-    <Compile Include="Builtins\Precision.cs" />
-    <Compile Include="Builtins\RubyPipe.cs" />
-    <Compile Include="Builtins\RubyProcess.cs" />
-    <Compile Include="Builtins\ProcOps.cs" />
-    <Compile Include="Builtins\RangeOps.cs" />
-    <Compile Include="Builtins\RubyRegexOps.cs" />
-    <Compile Include="Builtins\Signal.cs" />
-    <Compile Include="Builtins\SingletonOps.cs" />
-    <Compile Include="Builtins\StringFormatter.cs" />
-    <Compile Include="Builtins\StructOps.cs" />
-    <Compile Include="Builtins\SymbolOps.cs" />
-    <Compile Include="Builtins\ThreadGroup.cs" />
-    <Compile Include="Builtins\ThreadOps.cs" />
-    <Compile Include="Builtins\RubyTime.cs" />
-    <Compile Include="Builtins\TrueClass.cs" />
-    <Compile Include="Builtins\UnboundMethod.cs" />
-    <Compile Include="Builtins\RubyEncoder.cs" />
-    <Compile Include="Digest\Digest.cs" />
-    <Compile Include="Extensions\CharOps.cs" />
-    <Compile Include="Extensions\ClrBigInteger.cs" />
-    <Compile Include="Extensions\ClrFloat.cs" />
-    <Compile Include="Extensions\ClrInteger.cs" />
-    <None Include="Extensions\ClrInteger.Generator.rb" />
-    <Compile Include="Extensions\ClrInteger.Generated.cs" />
-    <Compile Include="Extensions\ClrNameOps.cs" />
-    <Compile Include="Extensions\ClrStringOps.cs" />
-    <Compile Include="Extensions\DecimalOps.cs" />
-    <Compile Include="Extensions\FlagEnumerationOps.cs" />
-    <Compile Include="Extensions\IComparableOps.cs" />
-    <Compile Include="Extensions\IDictionaryOps.cs" />
-    <Compile Include="Extensions\IEnumerableOps.cs" />
-    <Compile Include="Extensions\IListOps.cs" />
-    <Compile Include="Extensions\IronRubyOps.cs" />
-    <Compile Include="Extensions\MultiDimensionalArrayOps.cs" />
-    <Compile Include="Extensions\SingleOps.cs" />
-    <Compile Include="Extensions\TypeGroupOps.cs" />
-    <Compile Include="Extensions\TypeOps.cs" />
-    <Compile Include="Extensions\TypeTrackerOps.cs" />
-    <Compile Include="FileControl\Fcntl.cs" />
-    <Compile Include="Iconv\Iconv.cs" />
-    <Compile Include="Initializers.Generated.cs" />
-    <Compile Include="Open3\Open3.cs" />
-    <Compile Include="OpenSSL\OpenSSL.cs" />
-    <Compile Include="ParseTree\IronRubyParseTreeOps.cs" />
-    <Compile Include="Properties\AssemblyInfo.cs" />
-    <Compile Include="Socket\BasicSocket.cs" />
-    <Compile Include="Socket\IPSocket.cs" />
-    <Compile Include="Socket\Socket.cs" />
-    <Compile Include="Socket\SocketError.cs" />
-    <Compile Include="Socket\SocketStream.cs" />
-    <Compile Include="Socket\TCPServer.cs" />
-    <Compile Include="Socket\TCPSocket.cs" />
-    <Compile Include="Socket\UDPSocket.cs" />
-    <Compile Include="StringIO\StringIO.cs" />
-    <Compile Include="StringScanner\StringScanner.cs" />
-    <Compile Include="Stubs.cs" />
-    <Compile Include="Thread\RubyConditionVariable.cs" />
-    <Compile Include="Thread\RubyMutex.cs" />
-    <Compile Include="Thread\RubyQueue.cs" />
-    <Compile Include="Thread\SizedQueue.cs" />
-    <Compile Include="Thread\ThreadOps.cs" />
-    <Compile Include="Win32API\Win32API.cs" />
-    <Compile Include="Zlib\zlib.cs" />
-    <None Include="IronRuby.Libraries.ruleset" />
+  <ItemGroup Condition="'$(BootstrapInitializers)' == 'true'">
+    <!-- Bootstrap build for Src/ClassInitGenerator: the generated registrations
+         are stale by definition while regenerating them, so leave them out. -->
+    <Compile Remove="Initializers.Generated.cs" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\Ruby\Ruby.csproj">
-      <Project>{7F6984B4-EE6D-4E6F-ABB1-E210D7DC4FDD}</Project>
-      <Name>Ruby</Name>
-      <Private>False</Private>
-    </ProjectReference>
+    <!-- SQLite3 library (Src/Libraries/Sqlite3): Microsoft.Data.Sqlite brings
+         SQLitePCLRaw, whose bundle_e_sqlite3 carries a native SQLite for
+         linux-x64/win-x64 under runtimes/<rid>/native. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.33" />
+    <!-- SQLitePCLRaw before 2.1.12 carries a SQLite older than 3.50.2 (CVE-2025-6965,
+         NU1903). Microsoft.Data.Sqlite 8.0.33 already depends on 2.1.13; the explicit
+         reference keeps the floor if Microsoft.Data.Sqlite is ever moved back. -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.13" />
+    <!-- The HTML5 parser behind Nokogiri::HTML5 / Nokogiri::HTML4 (Src/Libraries/Nokogiri).
+         AngleSharp implements the WHATWG tokenizer and tree-construction algorithm, which is
+         what nokogiri's gumbo does; nothing in the .NET base class library parses tag soup. -->
+    <PackageReference Include="AngleSharp" Version="1.5.0" />
+    <PackageReference Include="AngleSharp.Xml" Version="1.2.0" />
+    <!-- The codec behind the zstd-ruby gem's extension (Src/Libraries/Zstd): ZstdSharp is a
+         C# port of libzstd 1.5.7 - the version zstd-ruby 1.5.7.0 bundles - and is MIT-licensed.
+         Managed, so it needs no libzstd on the machine. -->
+    <PackageReference Include="ZstdSharp.Port" Version="0.8.8" />
   </ItemGroup>
-  <Import Project="$(CSharpTargets)" />
-  <Import Project="$(BeforeTargetFiles)" />
-  <Target Name="BeforeBuild" DependsOnTargets="$(BeforeTargets);GenerateCurrentVersion" />
-  <Import Project="$(AfterTargetFiles)" />
-  <Target Name="AfterBuild" DependsOnTargets="$(AfterTargets)" />
+  <ItemGroup>
+    <!-- cmark-gfm for markly (Src/Libraries/Markly), built from the markly gem's own C
+         sources by Util/build-markly.sh into Markly/native/build.  Ship whichever
+         platforms' builds are there, as Src/Prism/IronRuby.Prism.csproj does libprism;
+         without one, `require "markly"` raises a LoadError naming the script. -->
+    <Content Include="Markly\native\build\libmarkly_cmark.so" Condition="Exists('$(MSBuildThisFileDirectory)Markly\native\build\libmarkly_cmark.so')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>libmarkly_cmark.so</Link>
+    </Content>
+    <Content Include="Markly\native\build\markly_cmark.dll" Condition="Exists('$(MSBuildThisFileDirectory)Markly\native\build\markly_cmark.dll')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>markly_cmark.dll</Link>
+    </Content>
+    <Content Include="Markly\native\build\libmarkly_cmark.dylib" Condition="Exists('$(MSBuildThisFileDirectory)Markly\native\build\libmarkly_cmark.dylib')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>libmarkly_cmark.dylib</Link>
+    </Content>
+  </ItemGroup>
+  <ItemGroup>
+    <!-- librbs, the rbs gem's parser behind `rbs_extension` (Src/Libraries/Rbs), built by
+         Util/build-librbs.sh into Rbs/native/build: librbs.so, librbs.dylib, or librbs.dll
+         under MinGW gcc on Windows.  Ship whichever ones are there, as libprism is shipped
+         from Src/Prism; RbsNative picks by RuntimeInformation. -->
+    <Content Include="Rbs\native\build\librbs.so" Condition="Exists('Rbs\native\build\librbs.so')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>librbs.so</Link>
+    </Content>
+    <Content Include="Rbs\native\build\librbs.dll" Condition="Exists('Rbs\native\build\librbs.dll')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>librbs.dll</Link>
+    </Content>
+    <Content Include="Rbs\native\build\librbs.dylib" Condition="Exists('Rbs\native\build\librbs.dylib')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>librbs.dylib</Link>
+    </Content>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Ruby\Ruby.csproj" />
+    <ProjectReference Include="..\Prism\IronRuby.Prism.csproj" />
+    <ProjectReference Include="$(DlrSourceDir)\Microsoft.Scripting\Microsoft.Scripting.csproj" />
+    <ProjectReference Include="$(DlrSourceDir)\Microsoft.Dynamic\Microsoft.Dynamic.csproj" />
+  </ItemGroup>
 </Project>

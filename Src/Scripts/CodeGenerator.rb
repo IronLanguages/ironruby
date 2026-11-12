@@ -74,13 +74,13 @@ class Generator
       
     # $MethodName
     t.gsub!(/#{ParamStart}([A-Za-z0-9]+)#{ParamEnd}/) do
-      (m = method $1) rescue raise "Templating function `#{$1}' not defined."
+      (m = method $1) rescue raise "Templating function '#{$1}' not defined."
 	  m.call
 	end
     
     # $MethodName{...}
     t.gsub!(/#{ParamStart}([A-Za-z0-9]+)[{]#{ParamEnd}(.*?)#{Open}[}]#{Close}/) do 
-      (m = method $1) rescue raise "Templating function `#{$1}' not defined."
+      (m = method $1) rescue raise "Templating function '#{$1}' not defined."
       if m.arity == 0
         m.call
       else

@@ -13,18 +13,15 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_SYNC_SOCKETS
 
 using System.Net;
 using System.Net.Sockets;
-using Microsoft.Scripting.Runtime;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using System.Runtime.InteropServices;
-using Microsoft.Scripting.Math;
 
 namespace IronRuby.StandardLibrary.Sockets {
-    [RubyClass("IPSocket", BuildConfig = "FEATURE_SYNC_SOCKETS")]
+    [RubyClass("IPSocket")]
     public abstract class IPSocket : RubyBasicSocket {
 
         /// <summary>
@@ -52,7 +49,13 @@ namespace IronRuby.StandardLibrary.Sockets {
 
         [RubyMethod("peeraddr")]
         public static object/*!*/ GetPeerAddress(RubyContext/*!*/ context, IPSocket/*!*/ self) {
-            return self.GetAddressArray(self.Socket.RemoteEndPoint);
+            EndPoint remote = self.Socket.RemoteEndPoint;
+            if (remote == null) {
+                // getpeername(2) on a socket that was never connected is ENOTCONN; .NET just
+                // hands back a null endpoint, which turned into a NullReferenceException.
+                throw new Errno.NotConnectedError();
+            }
+            return self.GetAddressArray(remote);
         }
 
         [RubyMethod("recvfrom")]
@@ -61,15 +64,12 @@ namespace IronRuby.StandardLibrary.Sockets {
 
             SocketFlags sFlags = ConvertToSocketFlag(conversionStorage, flags);
             byte[] buffer = new byte[length];
-            EndPoint fromEP = new IPEndPoint(IPAddress.Any, 0);
-            int received = self.Socket.ReceiveFrom(buffer, sFlags, ref fromEP);
+            EndPoint fromEP = AnyEndPoint(self.Socket.AddressFamily);
+            int received = Blocking(self.Socket, SelectMode.SelectRead, () => self.Socket.ReceiveFrom(buffer, sFlags, ref fromEP));
             MutableString str = MutableString.CreateBinary();
             str.Append(buffer, 0, received);
-
-            str.IsTainted = true;
             return RubyOps.MakeArray2(str, self.GetAddressArray(fromEP));
         }
 #endregion
     }
 }
-#endif

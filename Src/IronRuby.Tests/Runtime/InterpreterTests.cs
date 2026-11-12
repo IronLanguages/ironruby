@@ -13,20 +13,13 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Text;
 using Microsoft.Scripting.Generation;
 using Microsoft.Scripting.Utils;
 using System.Runtime.CompilerServices;
-using System.Threading;
 using System.Reflection;
 
 namespace IronRuby.Tests {
@@ -91,27 +84,12 @@ namespace IronRuby.Tests {
             Assert(compiled.ValueEquals(sync));
         }
 
-        private void XTraceTestLambda(Expression<Action> lambda) {
+        private void TraceTestLambda(Expression<Action> lambda, object[] expectedTrace) {
             object[] compiled, interpreted, sync;
             RunTraceTest(lambda, null, out compiled, out interpreted, out sync);
-
-            Console.WriteLine("-- compiled --");
-
-            foreach (var obj in compiled) {
-                Console.WriteLine(obj);
-            }
-
-            Console.WriteLine("-- interpreted --");
-
-            foreach (var obj in interpreted) {
-                Console.WriteLine(obj);
-            }
-
-            Console.WriteLine("-- sync --");
-
-            foreach (var obj in sync) {
-                Console.WriteLine(obj);
-            }
+            Assert(compiled.ValueEquals(expectedTrace));
+            Assert(interpreted.ValueEquals(expectedTrace));
+            Assert(sync.ValueEquals(expectedTrace));
         }
 
         #endregion
@@ -531,6 +509,84 @@ namespace IronRuby.Tests {
         }
 
         /// <summary>
+        /// An exception the frame does not catch, whose finally block throws one that an enclosing handler of the same frame
+        /// does catch: the handler completes and the first exception is gone (Build/dlr-patches/0107 lets an exception
+        /// through a frame with only finally blocks for it, but not when a handler encloses one of them).
+        /// </summary>
+        [Options(NoRuntime = true)]
+        public void Interpreter_FinallyThrowCaughtInFrame1() {
+            var l0 = Ast.Lambda<Action>(
+                Ast.Block(
+                    Ast.TryCatch(
+                        Ast.TryFinally(
+                            Ast.Block(
+                                TraceCall(Ast.Constant(0)),
+                                Ast.Throw(Ast.New(typeof(InvalidOperationException)))
+                            ),
+                            Ast.Block(
+                                TraceCall(Ast.Constant(1)),
+                                Ast.Throw(Ast.New(typeof(ArgumentException)))
+                            )
+                        ),
+                        Ast.Catch(typeof(ArgumentException), TraceCall(Ast.Constant(2)))
+                    ),
+                    TraceCall(Ast.Constant(3))
+                )
+            );
+
+            TraceTestLambda(l0, new object[] { 0, 1, 2, 3 });
+        }
+
+        /// <summary>
+        /// The other half of Interpreter_FinallyThrowCaughtInFrame1: the finally block that throws and the handler that catches
+        /// it are in C# below the interpreted frame. Build/dlr-patches/0107 lets the first exception through the frame (its
+        /// filter decides the frame's finally blocks run as it goes), but the dispatch never reaches the frame: the handler
+        /// below ends it, and the frame completes normally. It must then return its result, not run its finally blocks again
+        /// and return one of its locals - which it did while the filter's decision outlived the dispatch.
+        /// </summary>
+        [Options(NoRuntime = true)]
+        public void Interpreter_FinallyThrowCaughtBelowFrame1() {
+            var local = Ast.Variable(typeof(object), "local");
+            var result = Ast.Variable(typeof(object), "result");
+
+            var l0 = Ast.Lambda<Func<object>>(
+                // local last: the stale path returned the frame's last local, which must not be the result
+                Ast.Block(new[] { result, local },
+                    Ast.Assign(local, Ast.Constant("local")),
+                    Ast.TryFinally(
+                        Ast.Assign(result, Ast.Call(null, typeof(Tests).GetMethod(nameof(ThrowFromFinallyAndCatch)))),
+                        Ast.Assign(local, Ast.Constant("finally"))
+                    ),
+                    result
+                )
+            );
+
+            foreach (var f in new[] { l0.Compile(), l0.LightCompile(Int32.MaxValue) }) {
+                object value;
+                try {
+                    value = f();
+                } catch (InvalidOperationException) {
+                    value = "escaped";
+                }
+                Assert(42.Equals(value), String.Format("returned {0}", value));
+            }
+        }
+
+        // The InvalidOperationException has no handler below the caller, so the caller sees it first; the finally block's
+        // ArgumentException, thrown while it is dispatched, replaces it and is caught here.
+        public static object ThrowFromFinallyAndCatch() {
+            try {
+                try {
+                    throw new InvalidOperationException();
+                } finally {
+                    throw new ArgumentException();
+                }
+            } catch (ArgumentException) {
+            }
+            return 42;
+        }
+
+        /// <summary>
         /// Pending continuation override: jump from finally should cancel any pending jumps (gotos or throws) from try-block.
         /// </summary>
         [Options(NoRuntime = true)]
@@ -602,171 +658,6 @@ namespace IronRuby.Tests {
 
             Assert(comparer(fsc[0], fsi[0]));
             Assert(comparer(fsc[1], fsi[1]));
-        }
-
-        /// <summary>
-        /// ThreadAbortException handling.
-        /// </summary>
-        [Options(NoRuntime = true)]
-        public void Interpreter3() {
-            if (_driver.PartialTrust) return;
-
-            var label = Ast.Label(typeof(void));
-            foreach (var gotoLabel in new Expression[] { Ast.Goto(label), Ast.Empty() }) {
-                var var_tracker = Ast.Parameter(typeof(List<object>));
-                var var_abort1 = Ast.Parameter(typeof(ThreadAbortException));
-                var var_e = Ast.Parameter(typeof(Exception));
-                var var_abort2 = Ast.Parameter(typeof(ThreadAbortException));
-
-                var m_Interpreter3_abort = new Action(Interpreter3_abort).Method;
-                var m_Interpreter3_catchAbortThrowNSE = new Action<List<object>, ThreadAbortException>(Interpreter3_catchAbortThrowNSE).Method;
-                var m_Interpreter3_catchE = new Action<List<object>, Exception>(Interpreter3_catchE).Method;
-                var m_Interpreter3_unreachable = new Action<List<object>>(Interpreter3_unreachable).Method;
-                var m_Interpreter3_catchAbort = new Action<List<object>, ThreadAbortException>(Interpreter3_catchAbort).Method;
-
-                var l = Ast.Lambda<Action<List<object>>>(
-                    AstUtils.Try(
-                        AstUtils.Try(
-                            AstUtils.Try(
-                                Ast.Call(null, m_Interpreter3_abort)
-                            ).Catch(var_abort1,
-                                Ast.Call(null, m_Interpreter3_catchAbortThrowNSE, var_tracker, var_abort1)
-                            )
-                        ).Catch(var_e,
-                            Ast.Call(null, m_Interpreter3_catchE, var_tracker, var_e),
-                            gotoLabel
-                        ),
-                        Ast.Call(null, m_Interpreter3_unreachable, var_tracker),
-                        Ast.Label(label, Ast.Call(null, m_Interpreter3_unreachable, var_tracker))
-                    ).Catch(var_abort2,
-                        Ast.Call(null, m_Interpreter3_catchAbort, var_tracker, var_abort2)
-                    ),
-                    new[] { var_tracker }
-                );
-
-                var ctracker = new List<object>();
-                var itracker = new List<object>();
-                try {
-                    l.Compile()(ctracker);
-                    l.LightCompile()(itracker);
-                } catch (ThreadAbortException) {
-                    Thread.ResetAbort();
-                    Assert(false);
-                    return;
-                }
-
-                foreach (var t in new[] { ctracker, itracker }) {
-                    Assert(t.Count == 10);
-                    Assert(t[0] as string == "1");
-                    Assert(t[1] is ThreadAbortException);
-                    Assert(t[2] as string == "stateInfo");
-                    Assert(t[3] as string == "2");
-                    Assert(t[4] is NotSupportedException);
-                    Assert((ThreadState)t[5] == ThreadState.AbortRequested);
-                    Assert(t[6] as string == "3");
-                    Assert(t[7] is ThreadAbortException);
-                    Assert(ReferenceEquals(t[8], t[2]));
-                    Assert((ThreadState)t[9] == ThreadState.AbortRequested);
-                }
-            }
-        }
-
-        public static void Interpreter3_abort() {
-            Thread.CurrentThread.Abort("stateInfo");
-        }
-
-        public static void Interpreter3_catchAbortThrowNSE(List<object> tracker, ThreadAbortException e) {
-            tracker.Add("1");
-            tracker.Add(e);
-            tracker.Add(e.ExceptionState);
-            throw new NotSupportedException();
-        }
-
-        public static void Interpreter3_catchE(List<object> tracker, Exception e) {
-            tracker.Add("2");
-            tracker.Add(e);
-            tracker.Add(Thread.CurrentThread.ThreadState);
-        }
-
-        public static void Interpreter3_unreachable(List<object> tracker) {
-            tracker.Add("UNREACHABLE");
-        }
-
-        public static void Interpreter3_catchAbort(List<object> tracker, ThreadAbortException e) {
-            tracker.Add("3");
-            tracker.Add(e);
-            tracker.Add(e.ExceptionState);
-            tracker.Add(Thread.CurrentThread.ThreadState);
-            Thread.ResetAbort();
-        }
-
-        public static void Interpreter4() {
-            // TODO: figure out if this is specified behavior of thread abort:
-
-            //var var_tracker = Ast.Parameter(typeof(List<object>));
-            //var var_abort1 = Ast.Parameter(typeof(ThreadAbortException));
-            //var var_abort2 = Ast.Parameter(typeof(ThreadAbortException));
-            //var var_abort3 = Ast.Parameter(typeof(ThreadAbortException));
-            //var var_abort4 = Ast.Parameter(typeof(ThreadAbortException));
-
-            //var m_Interpreter4_abort = new Action(Interpreter4_abort).Method;
-            //var m_Interpreter4_traceE = new Action<List<object>, ThreadAbortException>(Interpreter4_traceE).Method;
-            //var m_Interpreter4_traceS = new Action<List<object>, string>(Interpreter4_traceS).Method;
-            //var m_Interpreter4_reset = new Action<List<object>, ThreadAbortException>(Interpreter4_reset).Method;
-
-            //var l = Ast.Lambda<Action<List<object>>>(
-            //    AstUtils.Try(
-            //        AstUtils.Try(
-            //            Ast.Call(null, m_Interpreter4_abort, Ast.Constant("r1"))
-            //        ).Catch(var_abort1,
-            //            Ast.Call(null, m_Interpreter4_traceE, var_tracker, var_abort1),
-            //            AstUtils.Try(
-            //                AstUtils.Try(
-            //                    Ast.Call(null, m_Interpreter4_abort, Ast.Constant("r2"))
-            //                ).Catch(var_abort2,
-            //                    Ast.Call(null, m_Interpreter4_traceE, var_tracker, var_abort2)
-            //                ),
-            //                Ast.Call(null, m_Interpreter4_traceS, var_tracker, Ast.Constant("1"))
-            //            ).Catch(var_abort3,
-            //                Ast.Call(null, m_Interpreter4_traceE, var_tracker, var_abort3)
-            //            ),
-            //            Ast.Call(null, m_Interpreter4_traceS, var_tracker, Ast.Constant("2"))
-            //        ),
-            //        Ast.Call(null, m_Interpreter4_traceS, var_tracker, Ast.Constant("2"))
-            //    ).Catch(var_abort4,
-            //        Ast.Call(null, m_Interpreter4_reset, var_tracker, var_abort4)
-            //    ),
-            //    new[] { var_tracker }
-            //);
-
-            //var ctracker = new List<object>();
-            //var itracker = new List<object>();
-            //try {
-            //    l.Compile()(ctracker);
-            //    //l.LightCompile()(itracker);
-            //} catch (ThreadAbortException) {
-            //    Thread.ResetAbort();
-            //    Assert(false);
-            //    return;
-            //}
-        }
-
-        public static void Interpreter4_abort(string value) {
-            Thread.CurrentThread.Abort(value);
-        }
-
-        public static void Interpreter4_traceE(List<object> tracker, ThreadAbortException e) {
-            tracker.Add(e.ExceptionState);
-        }
-
-        public static void Interpreter4_traceS(List<object> tracker, string s) {
-            tracker.Add(s);
-        }
-
-        public static void Interpreter4_reset(List<object> tracker, ThreadAbortException e) {
-            tracker.Add(e.ExceptionState);
-            Thread.ResetAbort();
-            tracker.Add(e.ExceptionState);
         }
 
         [Options(NoRuntime = true)]
@@ -857,7 +748,7 @@ namespace IronRuby.Tests {
                 )
             );
             
-            //XTraceTestLambda(l1);
+            TraceTestLambda(l1, new object[] { 1, 2, 3, 1 });
 
             var e_var = Ast.Parameter(typeof(Exception), "e");
             var ex1 = new Exception("ex1");
@@ -874,9 +765,7 @@ namespace IronRuby.Tests {
                 )
             );
 
-            l2.Compile()();
-
-            //XTraceTestLambda(l2);
+            TraceTestLambda(l2, new object[] { "ex1", null, "ex2", null });
 
             var l3 = Ast.Lambda<Action>(
                 Ast.Block(new[] { i_var },
@@ -889,9 +778,7 @@ namespace IronRuby.Tests {
                 )
             );
 
-            l3.Compile()();
-
-            //XTraceTestLambda(l2);
+            TraceTestLambda(l3, new object[] { 2 });
 
             // TODO: add tests for loop compiler
         }

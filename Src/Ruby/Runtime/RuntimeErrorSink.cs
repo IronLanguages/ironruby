@@ -14,7 +14,6 @@
  * ***************************************************************************/
 
 using System;
-using System.Dynamic;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
@@ -57,35 +56,35 @@ namespace IronRuby.Runtime {
             CountError(severity);
 
             string path;
-            string codeLine;
-            RubyEncoding encoding;
+            RubyEncoding encoding = RubyEncoding.UTF8;
             int line = span.Start.Line;
             if (sourceUnit != null) {
                 path = sourceUnit.Path;
-                using (SourceCodeReader reader = sourceUnit.GetReader()) {
-                    if (line > 0) {
-                        try {
-                            reader.SeekLine(line);
-                            codeLine = reader.ReadLine();
-                        } catch (Exception) {
-                            codeLine = null;
-                        }
-                    } else {
-                        codeLine = null;
-                    }
-                    encoding = reader.Encoding != null ? RubyEncoding.GetRubyEncoding(reader.Encoding) : RubyEncoding.UTF8;
-                }
             } else {
-                path = null;
-                codeLine = null;
-                encoding = RubyEncoding.UTF8;
+                // A runtime warning has no source unit. MRI still names the line that raised it,
+                // so recover it from the Ruby call stack instead of reporting "unknown:0".
+                if (!_context.TryGetCurrentSourceLocation(out path, out line)) {
+                    path = null;
+                    line = 0;
+                }
             }
 
             if (severity == Severity.Error || severity == Severity.FatalError) {
-                throw new SyntaxError(message, path, line, span.Start.Column, codeLine);
+                // prism's message names the line and shows the code (see PrismAstBridge.SyntaxErrorDescription)
+                throw new SyntaxError(message, path, line);
             } else {
-                WriteMessage(
-                    MutableString.Create(RubyContext.FormatErrorMessage(message, "warning", path, line, span.Start.Column, null), encoding)
+                if (sourceUnit != null) {
+                    using (SourceCodeReader reader = sourceUnit.GetReader()) {
+                        if (reader.Encoding != null) {
+                            encoding = RubyEncoding.GetRubyEncoding(reader.Encoding);
+                        }
+                    }
+                }
+                // Through Warning.warn, not straight to $stderr: this is the single point every
+                // RubyContext.ReportWarning site and every prism parser warning funnels through.
+                _context.DispatchWarning(
+                    MutableString.Create(RubyContext.FormatWarning(message, path, line), encoding),
+                    null
                 );
             }
         }

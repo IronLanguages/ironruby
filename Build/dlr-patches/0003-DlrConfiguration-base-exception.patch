@@ -1,0 +1,30 @@
+From 3fe7206763b3664346792e4022a995ccf9bf042f Mon Sep 17 00:00:00 2001
+From: Largo <andi@idogawa.com>
+Date: Tue, 22 Sep 2026 15:20:03 +0200
+Subject: Report the whole base exception when a language fails to load
+
+InnerException?.Message alone hid the type and the stack of the real
+failure, which is the only information there is when a language's
+constructor throws during startup.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ src/core/Microsoft.Scripting/Runtime/DlrConfiguration.cs | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/core/Microsoft.Scripting/Runtime/DlrConfiguration.cs b/src/core/Microsoft.Scripting/Runtime/DlrConfiguration.cs
+index 8350c7d..778e782 100644
+--- a/src/core/Microsoft.Scripting/Runtime/DlrConfiguration.cs
++++ b/src/core/Microsoft.Scripting/Runtime/DlrConfiguration.cs
+@@ -67,7 +67,7 @@ namespace Microsoft.Scripting.Runtime {
+                     context = (LanguageContext)Activator.CreateInstance(type, new object[] { domainManager, _options })!;
+                 } catch (TargetInvocationException e) {
+                     throw new TargetInvocationException(
+-                        $"Failed to load language '{DisplayName}': {e.InnerException?.Message}",
++                        $"Failed to load language '{DisplayName}': {e.GetBaseException()}",
+                         e.InnerException
+                     );
+                 } catch (Exception e) {
+-- 
+2.47.3
+

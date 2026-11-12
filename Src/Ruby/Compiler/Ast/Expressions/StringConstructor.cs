@@ -13,15 +13,10 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
-using System.Reflection;
 using System.Text;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
@@ -65,7 +60,7 @@ namespace IronRuby.Compiler.Ast {
             _kind = kind;
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             switch (_kind) {
                 case StringKind.Mutable:
                     return TransformConcatentation(gen, _parts, StringFactory.Instance);
@@ -73,24 +68,43 @@ namespace IronRuby.Compiler.Ast {
                 case StringKind.Symbol:
                     return TransformConcatentation(gen, _parts, SymbolFactory.Instance);
 
-                case StringKind.Command:
+                case StringKind.Command: {
+                    var command = TransformConcatentation(gen, _parts, StringFactory.Instance);
+
+                    // `cmd` hands ` a frozen string, whatever the frozen_string_literal
+                    // setting; an interpolated `cmd #{x}` hands it a mutable one. The
+                    // concatenation allocates per evaluation, so freezing it is safe.
+                    if (_parts.Count == 1 && _parts[0] is StringLiteral) {
+                        command = Ast.Call(command, Methods.MutableString_Freeze);
+                    }
+
                     return CallSiteBuilder.InvokeMethod(gen.Context, "`", new RubyCallSignature(1, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf),
                         gen.CurrentScopeVariable,
                         gen.CurrentSelfVariable,
-                        TransformConcatentation(gen, _parts, StringFactory.Instance)
+                        command
                     );
+                }
             }
 
             throw Assert.Unreachable;
         }
         
         internal static MSA.Expression/*!*/ MakeConversion(AstGenerator/*!*/ gen, Expression/*!*/ expression) {
-            return AstUtils.LightDynamic(ConvertToSAction.Make(gen.Context), typeof(MutableString), expression.TransformRead(gen));
+            // an interpolation in a heredoc can be lines below the statement: a backtrace from it
+            // names its own line
+            // a to_s a refinement supplies is not visible to the conversion site - see RubyOps.TryConvertToSWithRefinements
+            var value = Ast.Variable(typeof(object), "#interpolated");
+            var conversion = Ast.Block(new[] { value },
+                Ast.Assign(value, AstUtils.Box(expression.TransformRead(gen))),
+                Ast.Coalesce(
+                    Methods.TryConvertToSWithRefinements.OpCall(gen.CurrentScopeVariable, value),
+                    AstUtils.LightDynamic(ConvertToSAction.Make(gen.Context), typeof(MutableString), value)
+                )
+            );
+            return expression.Location.IsValid ? gen.AddDebugInfo(conversion, expression.Location) : conversion;
         }
 
         #region Factories
-
-        // TODO:
 
         internal interface IFactory {
             MSA.Expression/*!*/ CreateExpression(AstGenerator/*!*/ gen, string/*!*/ literal, RubyEncoding/*!*/ encoding);
@@ -153,10 +167,6 @@ namespace IronRuby.Compiler.Ast {
             private int _length;
             private bool _isBinary;
 
-            private void ObjectInvariant() {
-                ContractUtils.Invariant(_isBinary || CollectionUtils.TrueForAll(this, (item) => item is string));
-            }
-
             public LiteralConcatenation(RubyEncoding/*!*/ sourceEncoding) {
                 Assert.NotNull(sourceEncoding);
                 _encoding = sourceEncoding;
@@ -209,8 +219,6 @@ namespace IronRuby.Compiler.Ast {
             }
 
             public object/*!*/ GetValue() {
-                ContractUtils.Ensures(ContractUtils.Result<object>() is byte[] || ContractUtils.Result<object>() is string);
-
                 if (Count == 1) {
                     return this[0];
                 }
@@ -271,7 +279,7 @@ namespace IronRuby.Compiler.Ast {
 
             // finish trailing literals:
             if (concat.Count > 0) {
-                merged.Add(StringLiteral.Transform(concat.GetValue(), concat.Encoding));
+                merged.Add(TransformLiteralPart(concat.GetValue(), concat.Encoding));
             }
 
             if (merged.Count <= RubyOps.MakeStringParamCount) {
@@ -284,6 +292,16 @@ namespace IronRuby.Compiler.Ast {
                 // TODO: we should emit Append calls directly, and not create an array first
                 return factory.CreateExpressionN(gen, merged);
             } 
+        }
+
+        // The literal text between interpolations. Every CreateMutableString*, CreateSymbol* and
+        // CreateRegex* helper the parts go to copies out of them, so one instance made here serves
+        // every evaluation instead of a new string each time; frozen, so that a helper which ever
+        // kept a part rather than copying it would fail loudly instead of sharing it.
+        private static MSA.Expression/*!*/ TransformLiteralPart(object/*!*/ value, RubyEncoding/*!*/ encoding) {
+            var str = value as string;
+            var part = (str != null) ? MutableString.Create(str, encoding) : MutableString.CreateBinary((byte[])value, encoding);
+            return AstUtils.Constant(part.Freeze(), typeof(MutableString));
         }
 
         //
@@ -315,7 +333,7 @@ namespace IronRuby.Compiler.Ast {
                     }
                 } else {
                     if (concat.Count > 0) {
-                        result.Add(StringLiteral.Transform(concat.GetValue(), concat.Encoding));
+                        result.Add(TransformLiteralPart(concat.GetValue(), concat.Encoding));
                         concat.Clear();
                     }
 

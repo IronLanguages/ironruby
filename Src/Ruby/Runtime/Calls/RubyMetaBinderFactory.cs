@@ -13,19 +13,20 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
-using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Threading;
 using System.Dynamic;
 using IronRuby.Runtime.Conversions;
 
 namespace IronRuby.Runtime.Calls {
+    /// <summary>
+    /// Caches binders by what they bind, so that call sites that do the same thing share one binder and its rules.
+    /// A lookup takes no lock; when two threads race for a missing binder, both may build one but only the first
+    /// stored is ever returned.
+    /// </summary>
     internal sealed class RubyMetaBinderFactory {
         private static RubyMetaBinderFactory _Shared;
 
@@ -43,312 +44,132 @@ namespace IronRuby.Runtime.Calls {
 
         private readonly RubyContext _context;
 
-        // (name, signature) => binder:
-        private readonly Dictionary<Key<string/*!*/, RubyCallSignature>, RubyCallAction>/*!*/ _callActions;
-
-        // (scope id, signature) => binder:
-        private readonly Dictionary<Key<int, RubyCallSignature>, SuperCallAction>/*!*/ _superCallActions;
+        private readonly ConcurrentDictionary<(string/*!*/ Name, RubyCallSignature Signature), RubyCallAction>/*!*/ _callActions = new();
+        private readonly ConcurrentDictionary<(int ScopeId, RubyCallSignature Signature), SuperCallAction>/*!*/ _superCallActions = new();
 
         // (typeof(action)) => binder:
-        private readonly Dictionary<Type, RubyConversionAction>/*!*/ _conversionActions;
+        private readonly ConcurrentDictionary<Type, RubyConversionAction>/*!*/ _conversionActions = new();
 
-        // (CompositeConversion) => binder:
-        private readonly Dictionary<CompositeConversion, CompositeConversionAction>/*!*/ _compositeConversionActions;
+        // (CompositeConversion) => binder; an array, read without a lock, as CompositeConversionAction.Make asks on every call:
+        private readonly CompositeConversionAction[]/*!*/ _compositeConversionActions = new CompositeConversionAction[Enum.GetValues<CompositeConversion>().Length];
 
         // (type) => binder:
-        private readonly Dictionary<Type, GenericConversionAction>/*!*/ _genericConversionActions;
+        private readonly ConcurrentDictionary<Type, GenericConversionAction>/*!*/ _genericConversionActions = new();
 
-        // interop binders:
-        private Dictionary<CallInfo, InteropBinder.CreateInstance> _interopCreateInstance;
-        private Dictionary<CallInfo, InteropBinder.Return> _interopReturn;
-        private Dictionary<CallInfo, InteropBinder.Invoke> _interopInvoke;
-        private Dictionary<Key<string, CallInfo>, InteropBinder.InvokeMember> _interopInvokeMember;
-        private Dictionary<string, InteropBinder.GetMember> _interopGetMember;
-        private Dictionary<string, InteropBinder.TryGetMemberExact> _interopTryGetMemberExact;
-        private Dictionary<string, InteropBinder.SetMember> _interopSetMember;
-        private Dictionary<string, InteropBinder.SetMemberExact> _interopSetMemberExact;
-        private Dictionary<CallInfo, InteropBinder.GetIndex> _interopGetIndex;
-        private Dictionary<CallInfo, InteropBinder.SetIndex> _interopSetIndex;
-        private Dictionary<Key<string, CallInfo>, InteropBinder.SetIndexedProperty> _interopSetIndexedProperty;
-        private Dictionary<ExpressionType, DynamicMetaObjectBinder> _interopOperation;
-        private Dictionary<Key<Type, bool>, InteropBinder.Convert> _interopConvert;
+        // interop binders, created on first use:
+        private ConcurrentDictionary<CallInfo, InteropBinder.CreateInstance> _interopCreateInstance;
+        private ConcurrentDictionary<CallInfo, InteropBinder.Return> _interopReturn;
+        private ConcurrentDictionary<CallInfo, InteropBinder.Invoke> _interopInvoke;
+        private ConcurrentDictionary<(string, CallInfo), InteropBinder.InvokeMember> _interopInvokeMember;
+        private ConcurrentDictionary<string, InteropBinder.GetMember> _interopGetMember;
+        private ConcurrentDictionary<string, InteropBinder.TryGetMemberExact> _interopTryGetMemberExact;
+        private ConcurrentDictionary<string, InteropBinder.SetMember> _interopSetMember;
+        private ConcurrentDictionary<string, InteropBinder.SetMemberExact> _interopSetMemberExact;
+        private ConcurrentDictionary<CallInfo, InteropBinder.GetIndex> _interopGetIndex;
+        private ConcurrentDictionary<CallInfo, InteropBinder.SetIndex> _interopSetIndex;
+        private ConcurrentDictionary<(string, CallInfo), InteropBinder.SetIndexedProperty> _interopSetIndexedProperty;
+        private ConcurrentDictionary<ExpressionType, DynamicMetaObjectBinder> _interopOperation;
+        private ConcurrentDictionary<(Type, bool), InteropBinder.Convert> _interopConvert;
         private InteropBinder.Splat _interopSplat;
 
         internal RubyMetaBinderFactory(RubyContext context) {
             _context = context;
-            _callActions = new Dictionary<Key<string, RubyCallSignature>, RubyCallAction>();
-            _superCallActions = new Dictionary<Key<int, RubyCallSignature>, SuperCallAction>();
-            _conversionActions = new Dictionary<Type, RubyConversionAction>();
-            _compositeConversionActions = new Dictionary<CompositeConversion, CompositeConversionAction>();
-            _genericConversionActions = new Dictionary<Type, GenericConversionAction>();
+        }
+
+        private TBinder/*!*/ GetOrCreate<TKey, TBinder>(ref ConcurrentDictionary<TKey, TBinder> cache, TKey key, Func<TKey, RubyContext, TBinder>/*!*/ factory) {
+            var binders = Volatile.Read(ref cache) ?? Interlocked.CompareExchange(ref cache, new(), null) ?? cache;
+            return binders.GetOrAdd(key, factory, _context);
         }
 
         public RubyCallAction/*!*/ Call(string/*!*/ methodName, RubyCallSignature signature) {
-            var key = Key.Create(methodName, signature);
-
-            lock (_callActions) {
-                RubyCallAction result;
-                if (!_callActions.TryGetValue(key, out result)) {
-                    _callActions.Add(key, result = new RubyCallAction(_context, methodName, signature));
-                }
-                return result;
-            }
+            return _callActions.GetOrAdd((methodName, signature), static (key, context) => new RubyCallAction(context, key.Name, key.Signature), _context);
         }
 
         public SuperCallAction/*!*/ SuperCall(int/*!*/ lexicalScopeId, RubyCallSignature signature) {
-            var key = Key.Create(lexicalScopeId, signature);
-
-            lock (_superCallActions) {
-                SuperCallAction result;
-                if (!_superCallActions.TryGetValue(key, out result)) {
-                    _superCallActions.Add(key, result = new SuperCallAction(_context, signature, lexicalScopeId));
-                }
-                return result;
-            }
+            return _superCallActions.GetOrAdd((lexicalScopeId, signature), static (key, context) => new SuperCallAction(context, key.Signature, key.ScopeId), _context);
         }
 
         public TAction/*!*/ Conversion<TAction>() where TAction : RubyConversionAction, new() {
-            var key = typeof(TAction);
-
-            lock (_conversionActions) {
-                RubyConversionAction result;
-                if (!_conversionActions.TryGetValue(key, out result)) {
-                    _conversionActions.Add(key, result = new TAction() { Context = _context });
-                }
-                return (TAction)result;
-            }
+            return (TAction)_conversionActions.GetOrAdd(typeof(TAction), static (_, context) => new TAction() { Context = context }, _context);
         }
 
         public CompositeConversionAction/*!*/ CompositeConversion(CompositeConversion conversion) {
-            var key = conversion;
+            CompositeConversionAction result = Volatile.Read(ref _compositeConversionActions[(int)conversion]);
+            if (result != null) {
+                return result;
+            }
 
-            lock (_conversionActions) {
-                CompositeConversionAction result;
-                if (!_compositeConversionActions.TryGetValue(key, out result)) {
-                    _compositeConversionActions.Add(key, result = CompositeConversionAction.Make(_context, conversion));
+            lock (_compositeConversionActions) {
+                result = _compositeConversionActions[(int)conversion];
+                if (result == null) {
+                    Volatile.Write(ref _compositeConversionActions[(int)conversion], result = CompositeConversionAction.Create(_context, conversion));
                 }
                 return result;
             }
         }
 
         public GenericConversionAction/*!*/ GenericConversionAction(Type/*!*/ type) {
-            lock (_conversionActions) {
-                GenericConversionAction result;
-                if (!_genericConversionActions.TryGetValue(type, out result)) {
-                    _genericConversionActions.Add(type, result = new GenericConversionAction(_context, type));
-                }
-                return result;
-            }
+            return _genericConversionActions.GetOrAdd(type, static (type, context) => new GenericConversionAction(context, type), _context);
         }
 
         public InteropBinder.CreateInstance/*!*/ InteropCreateInstance(CallInfo/*!*/ callInfo) {
-            if (_interopCreateInstance == null) {
-                Interlocked.CompareExchange(ref _interopCreateInstance, new Dictionary<CallInfo, InteropBinder.CreateInstance>(), null);
-            }
-
-            lock (_interopCreateInstance) {
-                InteropBinder.CreateInstance result;
-                if (!_interopCreateInstance.TryGetValue(callInfo, out result)) {
-                    _interopCreateInstance.Add(callInfo, result = new InteropBinder.CreateInstance(_context, callInfo));
-                }
-                return result;
-            }
+            return GetOrCreate(ref _interopCreateInstance, callInfo, static (callInfo, context) => new InteropBinder.CreateInstance(context, callInfo));
         }
 
         public InteropBinder.Return/*!*/ InteropReturn(CallInfo/*!*/ callInfo) {
-            if (_interopReturn == null) {
-                Interlocked.CompareExchange(ref _interopReturn, new Dictionary<CallInfo, InteropBinder.Return>(), null);
-            }
-
-            lock (_interopReturn) {
-                InteropBinder.Return result;
-                if (!_interopReturn.TryGetValue(callInfo, out result)) {
-                    _interopReturn.Add(callInfo, result = new InteropBinder.Return(_context, callInfo));
-                }
-                return result;
-            }
+            return GetOrCreate(ref _interopReturn, callInfo, static (callInfo, context) => new InteropBinder.Return(context, callInfo));
         }
 
         public InteropBinder.Invoke/*!*/ InteropInvoke(CallInfo/*!*/ callInfo) {
-            if (_interopInvoke == null) {
-                Interlocked.CompareExchange(ref _interopInvoke, new Dictionary<CallInfo, InteropBinder.Invoke>(), null);
-            }
-
-            lock (_interopInvoke) {
-                InteropBinder.Invoke result;
-                if (!_interopInvoke.TryGetValue(callInfo, out result)) {
-                    _interopInvoke.Add(callInfo, result = new InteropBinder.Invoke(_context, callInfo));
-                }
-                return result;
-            }
+            return GetOrCreate(ref _interopInvoke, callInfo, static (callInfo, context) => new InteropBinder.Invoke(context, callInfo));
         }
 
         public InteropBinder.InvokeMember/*!*/ InteropInvokeMember(string/*!*/ name, CallInfo/*!*/ callInfo) {
-            if (_interopInvokeMember == null) {
-                Interlocked.CompareExchange(ref _interopInvokeMember, new Dictionary<Key<string, CallInfo>, InteropBinder.InvokeMember>(), null);
-            }
-
-            var key = Key.Create(name, callInfo);
-
-            lock (_interopInvokeMember) {
-                InteropBinder.InvokeMember result;
-                if (!_interopInvokeMember.TryGetValue(key, out result)) {
-                    _interopInvokeMember.Add(key, result = new InteropBinder.InvokeMember(_context, name, callInfo, null));
-                }
-                return result;
-            }
+            return GetOrCreate(ref _interopInvokeMember, (name, callInfo), static (key, context) => new InteropBinder.InvokeMember(context, key.Item1, key.Item2, null));
         }
 
         public InteropBinder.GetMember/*!*/ InteropGetMember(string/*!*/ name) {
-            if (_interopGetMember == null) {
-                Interlocked.CompareExchange(ref _interopGetMember, new Dictionary<string, InteropBinder.GetMember>(), null);
-            }
-
-            lock (_interopGetMember) {
-                InteropBinder.GetMember result;
-                if (!_interopGetMember.TryGetValue(name, out result)) {
-                    _interopGetMember.Add(name, result = new InteropBinder.GetMember(_context, name, null));
-                }
-                return result;
-            }
+            return GetOrCreate(ref _interopGetMember, name, static (name, context) => new InteropBinder.GetMember(context, name, null));
         }
 
         public InteropBinder.TryGetMemberExact/*!*/ InteropTryGetMemberExact(string/*!*/ name) {
-            if (_interopTryGetMemberExact == null) {
-                Interlocked.CompareExchange(ref _interopTryGetMemberExact, new Dictionary<string, InteropBinder.TryGetMemberExact>(), null);
-            }
-
-            lock (_interopTryGetMemberExact) {
-                InteropBinder.TryGetMemberExact result;
-                if (!_interopTryGetMemberExact.TryGetValue(name, out result)) {
-                    _interopTryGetMemberExact.Add(name, result = new InteropBinder.TryGetMemberExact(_context, name));
-                }
-                return result;
-            }
+            return GetOrCreate(ref _interopTryGetMemberExact, name, static (name, context) => new InteropBinder.TryGetMemberExact(context, name));
         }
 
         public InteropBinder.SetMember/*!*/ InteropSetMember(string/*!*/ name) {
-            if (_interopSetMember == null) {
-                Interlocked.CompareExchange(ref _interopSetMember, new Dictionary<string, InteropBinder.SetMember>(), null);
-            }
-
-            lock (_interopSetMember) {
-                InteropBinder.SetMember result;
-                if (!_interopSetMember.TryGetValue(name, out result)) {
-                    _interopSetMember.Add(name, result = new InteropBinder.SetMember(_context, name));
-                }
-                return result;
-            }
+            return GetOrCreate(ref _interopSetMember, name, static (name, context) => new InteropBinder.SetMember(context, name));
         }
 
         public InteropBinder.SetMemberExact/*!*/ InteropSetMemberExact(string/*!*/ name) {
-            if (_interopSetMemberExact == null) {
-                Interlocked.CompareExchange(ref _interopSetMemberExact, new Dictionary<string, InteropBinder.SetMemberExact>(), null);
-            }
-
-            lock (_interopSetMemberExact) {
-                InteropBinder.SetMemberExact result;
-                if (!_interopSetMemberExact.TryGetValue(name, out result)) {
-                    _interopSetMemberExact.Add(name, result = new InteropBinder.SetMemberExact(_context, name));
-                }
-                return result;
-            }
+            return GetOrCreate(ref _interopSetMemberExact, name, static (name, context) => new InteropBinder.SetMemberExact(context, name));
         }
 
         public InteropBinder.GetIndex/*!*/ InteropGetIndex(CallInfo/*!*/ callInfo) {
-            if (_interopGetIndex == null) {
-                Interlocked.CompareExchange(ref _interopGetIndex, new Dictionary<CallInfo, InteropBinder.GetIndex>(), null);
-            }
-
-            lock (_interopGetIndex) {
-                InteropBinder.GetIndex result;
-                if (!_interopGetIndex.TryGetValue(callInfo, out result)) {
-                    _interopGetIndex.Add(callInfo, result = new InteropBinder.GetIndex(_context, callInfo));
-                }
-                return result;
-            }
+            return GetOrCreate(ref _interopGetIndex, callInfo, static (callInfo, context) => new InteropBinder.GetIndex(context, callInfo));
         }
 
         public InteropBinder.SetIndex/*!*/ InteropSetIndex(CallInfo/*!*/ callInfo) {
-            if (_interopSetIndex == null) {
-                Interlocked.CompareExchange(ref _interopSetIndex, new Dictionary<CallInfo, InteropBinder.SetIndex>(), null);
-            }
-
-            lock (_interopSetIndex) {
-                InteropBinder.SetIndex result;
-                if (!_interopSetIndex.TryGetValue(callInfo, out result)) {
-                    _interopSetIndex.Add(callInfo, result = new InteropBinder.SetIndex(_context, callInfo));
-                }
-                return result;
-            }
+            return GetOrCreate(ref _interopSetIndex, callInfo, static (callInfo, context) => new InteropBinder.SetIndex(context, callInfo));
         }
 
         public InteropBinder.SetIndexedProperty/*!*/ InteropSetIndexedProperty(string/*!*/ name, CallInfo/*!*/ callInfo) {
-            if (_interopSetIndexedProperty == null) {
-                Interlocked.CompareExchange(ref _interopSetIndexedProperty, new Dictionary<Key<string, CallInfo>, InteropBinder.SetIndexedProperty>(), null);
-            }
-
-            var key = Key.Create(name, callInfo);
-
-            lock (_interopSetIndexedProperty) {
-                InteropBinder.SetIndexedProperty result;
-                if (!_interopSetIndexedProperty.TryGetValue(key, out result)) {
-                    _interopSetIndexedProperty.Add(key, result = new InteropBinder.SetIndexedProperty(_context, name, callInfo));
-                }
-                return result;
-            }
+            return GetOrCreate(ref _interopSetIndexedProperty, (name, callInfo), static (key, context) => new InteropBinder.SetIndexedProperty(context, key.Item1, key.Item2));
         }
 
         public InteropBinder.BinaryOperation/*!*/ InteropBinaryOperation(ExpressionType op) {
-            if (_interopOperation == null) {
-                Interlocked.CompareExchange(ref _interopOperation, new Dictionary<ExpressionType, DynamicMetaObjectBinder>(), null);
-            }
-
-            lock (_interopOperation) {
-                DynamicMetaObjectBinder result;
-                if (!_interopOperation.TryGetValue(op, out result)) {
-                    _interopOperation.Add(op, result = new InteropBinder.BinaryOperation(_context, op));
-                }
-                return (InteropBinder.BinaryOperation)result;
-            }
+            return (InteropBinder.BinaryOperation)GetOrCreate(ref _interopOperation, op, static (op, context) => new InteropBinder.BinaryOperation(context, op));
         }
 
         public InteropBinder.UnaryOperation/*!*/ InteropUnaryOperation(ExpressionType op) {
-            if (_interopOperation == null) {
-               Interlocked.CompareExchange(ref _interopOperation, new Dictionary<ExpressionType, DynamicMetaObjectBinder>(), null);
-            }
-
-            lock (_interopOperation) {
-                DynamicMetaObjectBinder result;
-                if (!_interopOperation.TryGetValue(op, out result)) {
-                    _interopOperation.Add(op, result = new InteropBinder.UnaryOperation(_context, op));
-                }
-                return (InteropBinder.UnaryOperation)result;
-            }
+            return (InteropBinder.UnaryOperation)GetOrCreate(ref _interopOperation, op, static (op, context) => new InteropBinder.UnaryOperation(context, op));
         }
 
         public InteropBinder.Convert/*!*/ InteropConvert(Type/*!*/ type, bool isExplicit) {
-            if (_interopConvert == null) {
-                Interlocked.CompareExchange(ref _interopConvert, new Dictionary<Key<Type, bool>, InteropBinder.Convert>(), null);
-            }
-
-            var key = Key.Create(type, isExplicit);
-
-            lock (_interopConvert) {
-                InteropBinder.Convert result;
-                if (!_interopConvert.TryGetValue(key, out result)) {
-                    _interopConvert.Add(key, result = new InteropBinder.Convert(_context, type, isExplicit));
-                }
-                return result;
-            }
+            return GetOrCreate(ref _interopConvert, (type, isExplicit), static (key, context) => new InteropBinder.Convert(context, key.Item1, key.Item2));
         }
 
         public InteropBinder.Splat/*!*/ InteropSplat() {
-            if (_interopSplat == null) {
-                _interopSplat = new InteropBinder.Splat(_context);
-            }
-            return _interopSplat;
+            return _interopSplat ??= new InteropBinder.Splat(_context);
         }
     }
 }
- 

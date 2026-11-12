@@ -14,3 +14,10 @@
 # ****************************************************************************
 
 load_assembly 'IronRuby.Libraries', 'IronRuby.StandardLibrary.StringScanner'
+
+# Version and Id are Ruby Strings in MRI. A [RubyConstant] on a CLR string field would make
+# them System::String instances instead, which answer the wrong #class.
+class StringScanner
+  Version = "3.1.6"
+  Id = "$Id$"
+end

@@ -15,11 +15,6 @@
 
 using System;
 using System.IO;
-using System.Threading;
-using Microsoft.Scripting.Runtime;
-using Microsoft.Scripting.Utils;
-using IronRuby.Runtime;
-using System.Text;
 using System.Diagnostics;
 
 namespace IronRuby.Builtins {
@@ -40,7 +35,13 @@ namespace IronRuby.Builtins {
                     _reader.Dispose();
                 }
                 if (_writer != null) {
-                    _writer.Dispose();
+                    try {
+                        _writer.Dispose();
+                    } catch (IOException) {
+                        // Closing the writable half of a bidirectional popen after the child has
+                        // exited commonly observes EPIPE. Any pending Ruby write was flushed by
+                        // IO#close before disposal and reported there; disposal itself is silent.
+                    }
                 }
             }
 
@@ -68,55 +69,58 @@ namespace IronRuby.Builtins {
         }
 
         public override void Flush() {
-            if (_reader != null) {
-                _reader.BaseStream.Flush();
-            }
             if (_writer != null) {
                 _writer.Flush();
             }
         }
 
         public override long Length {
-            get { throw new NotImplementedException(); }
+            get { throw new NotSupportedException(); }
         }
 
         public override long Position {
-            get { throw new NotImplementedException(); }
-            set { throw new NotImplementedException(); }
+            get { throw new NotSupportedException(); }
+            set { throw new NotSupportedException(); }
         }
 
+        // A Ruby IO reads and writes bytes: they go straight to and from the pipes under the reader
+        // and the writer, which only own the pipes. Going through the writer's text encoding would
+        // turn any byte not valid in it into an exception or a replacement character.
+
         public override int ReadByte() {
-            if (_reader == null) {
-                throw new InvalidOperationException();
-            }
-            return _reader.Read();
+            return ReadStream.ReadByte();
         }
 
         public override int Read(byte[]/*!*/ buffer, int offset, int count) {
-            if (_reader == null) {
-                throw new InvalidOperationException();
-            }
-
-            // TODO:
-            return _reader.BaseStream.Read(buffer, offset, count);
+            return ReadStream.Read(buffer, offset, count);
         }
 
         public override long Seek(long offset, SeekOrigin origin) {
-            throw new NotImplementedException();
+            throw new NotSupportedException();
         }
 
         public override void SetLength(long value) {
-            throw new NotImplementedException();
+            throw new NotSupportedException();
         }
 
-        public override void Write(byte[] buffer, int offset, int count) {
+        public override void Write(byte[]/*!*/ buffer, int offset, int count) {
             if (_writer == null) {
                 throw new InvalidOperationException();
             }
 
-            // TODO:
-            Debug.Assert(_writer != null);
-            _writer.Write(_writer.Encoding.GetString(buffer, offset, count));
+            // whatever text the writer still holds goes first; IO.popen's write end is synchronous, as in MRI
+            _writer.Flush();
+            _writer.BaseStream.Write(buffer, offset, count);
+            _writer.BaseStream.Flush();
+        }
+
+        private Stream/*!*/ ReadStream {
+            get {
+                if (_reader == null) {
+                    throw new InvalidOperationException();
+                }
+                return _reader.BaseStream;
+            }
         }
     }
 }

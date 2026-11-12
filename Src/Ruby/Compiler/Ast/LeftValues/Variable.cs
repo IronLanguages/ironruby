@@ -13,20 +13,14 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System.Diagnostics;
-using System.Dynamic;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Compiler.Ast {
-    using Ast = Expression;
 
     public abstract class Variable : LeftValue {
         private readonly string/*!*/ _name;
@@ -46,7 +40,7 @@ namespace IronRuby.Compiler.Ast {
             return AstUtils.Constant(_name);
         }
 
-        internal sealed override MSA.Expression TransformTargetRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression TransformTargetRead(AstGenerator/*!*/ gen) {
             return null;
         }
 
@@ -62,6 +56,7 @@ namespace IronRuby.Compiler.Ast {
             Debug.Assert(targetValue == null);
             return TransformWriteVariable(gen, rightValue);
         }
+
 
         public override string/*!*/ ToString() {
             return _name.ToString();

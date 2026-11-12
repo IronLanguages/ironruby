@@ -26,6 +26,27 @@ namespace IronRuby.Builtins {
         private readonly int _runtimeId;
         private readonly MutableString/*!*/ _string;
 
+        // The string is frozen, so its hash never changes; computing it walks (and for some
+        // content representations copies) the characters, which every Hash lookup with a Symbol
+        // key - keyword arguments above all - would otherwise pay again.
+        private readonly int _hashCode;
+
+        // Symbol#name answers the same frozen String every time it is called, so it is made once.
+        private MutableString _frozenName;
+
+        // Symbol#to_proc answers the same Proc each time, as MRI's does.
+        private Proc _methodInvoker;
+
+        public Proc MethodInvoker {
+            get { return _methodInvoker; }
+            set { _methodInvoker = value; }
+        }
+
+        /// <summary>The String Symbol#name answers - one per symbol, frozen.</summary>
+        public MutableString/*!*/ FrozenName {
+            get { return _frozenName ?? (_frozenName = MutableString.Create(_string).Freeze()); }
+        }
+
         internal RubySymbol(MutableString/*!*/ str, int id, int runtimeId) {
             Assert.NotNull(str);
             Debug.Assert(str.IsFrozen);
@@ -34,13 +55,14 @@ namespace IronRuby.Builtins {
             _string = str;
             _id = id;
             _runtimeId = runtimeId;
+            _hashCode = str.GetHashCode();
         }
 
         #region Equals, GetHashCode, CompareTo
         
         public override int GetHashCode() {
             // TODO: the same value, different encoding => different hash? different symbols?
-            return _string.GetHashCode();
+            return _hashCode;
         }
 
         public bool Equals(RubySymbol other) {
@@ -132,16 +154,6 @@ namespace IronRuby.Builtins {
 
         public bool IsFrozen {
             get { return false; }
-        }
-
-        public bool IsTainted {
-            get { return false; }
-            set { /* nop */ }
-        }
-
-        public bool IsUntrusted {
-            get { return false; }
-            set { /* nop */ }
         }
 
         public void Freeze() {

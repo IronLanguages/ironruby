@@ -13,11 +13,7 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-#else
-using Microsoft.Scripting.Ast;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -46,9 +42,11 @@ namespace IronRuby.Runtime.Calls {
         private readonly int _leadingMandatoryParamCount;
         private readonly int _optionalParamCount;
         private readonly bool _hasUnsplatParameter;
+        private readonly RubyParameterSignature _keywordSignature;
 
         private int _actualArgumentCount;
         private CallArguments _callArguments;
+        private int _lastArgumentParameterIndex = -1;
 
         // splatted argument list length and storage:
         private int _listLength;
@@ -86,21 +84,40 @@ namespace IronRuby.Runtime.Calls {
             get { return _mandatoryParamCount - _leadingMandatoryParamCount; }
         }
 
+        /// <summary>
+        /// Where the last of the call's actual arguments ended up, or -1 when it went into the
+        /// rest parameter (which has its own handling) or the call had no arguments. Only a
+        /// trailing hash can be the keyword arguments of a call, so this is the one parameter a
+        /// callee that declares no keywords has to unmark.
+        /// </summary>
+        public int LastArgumentParameterIndex {
+            get {
+                Debug.Assert(_actualArgumentCount != -1);
+                return _lastArgumentParameterIndex;
+            }
+        }
+
         /// <param name="implicitParamCount">Parameters for which arguments are provided implicitly, i.e. not specified by user.</param>
         /// <param name="mandatoryParamCount">Number of parameters for which an actual argument must be specified.</param>
         /// <param name="leadingMandatoryParamCount">Number of mandatory parameters that precede any optional parameters.</param>
         /// <param name="optionalParamCount">Number of optional parameters.</param>
         /// <param name="hasUnsplatParameter">Method has * parameter (accepts any number of additional parameters).</param>
-        public ArgsBuilder(int implicitParamCount, int mandatoryParamCount, int leadingMandatoryParamCount, int optionalParamCount, bool hasUnsplatParameter) {
+        /// <param name="keywordSignature">
+        /// The declared parameters of a method whose keywords (or **nil) were lowered onto the parameters above;
+        /// an arity error then describes the declared positionals rather than the lowered ones.
+        /// </param>
+        public ArgsBuilder(int implicitParamCount, int mandatoryParamCount, int leadingMandatoryParamCount, int optionalParamCount, bool hasUnsplatParameter,
+            RubyParameterSignature keywordSignature = null) {
             Debug.Assert(leadingMandatoryParamCount >= 0 && leadingMandatoryParamCount <= mandatoryParamCount);
             Debug.Assert(leadingMandatoryParamCount == mandatoryParamCount || optionalParamCount > 0 || hasUnsplatParameter);
-            
+
             _arguments = new Expression[implicitParamCount + mandatoryParamCount + optionalParamCount + (hasUnsplatParameter ? 1 : 0)];
             _implicitParamCount = implicitParamCount;
             _mandatoryParamCount = mandatoryParamCount;
             _leadingMandatoryParamCount = leadingMandatoryParamCount;
             _optionalParamCount = optionalParamCount;
             _hasUnsplatParameter = hasUnsplatParameter;
+            _keywordSignature = keywordSignature;
             _actualArgumentCount = -1;
         }
 
@@ -119,6 +136,43 @@ namespace IronRuby.Runtime.Calls {
         public void SetImplicit(int index, Expression/*!*/ arg) {
             Debug.Assert(_actualArgumentCount == -1);
             _arguments[index] = arg;
+        }
+
+        /// <summary>
+        /// MRI spells the expected count of a variable-arity signature as a range:
+        /// "2+" (mandatory + rest), "1..3" (mandatory + optionals), plain "2" otherwise.
+        /// </summary>
+        private void SetArityError(MetaObjectBuilder/*!*/ metaBuilder) {
+            if (_keywordSignature != null) {
+                // MRI counts the positional arguments alone: a trailing hash the call built out of keyword
+                // syntax is not one of them. Whether it is that hash is known only when the rule runs.
+                Expression given = AstUtils.Constant(_actualArgumentCount);
+                if (_actualArgumentCount > 0) {
+                    given = Ast.Condition(
+                        Methods.IsKeywordArgumentsHash.OpCall(AstUtils.Box(GetArgument(_actualArgumentCount - 1, out _))),
+                        AstUtils.Constant(_actualArgumentCount - 1),
+                        given
+                    );
+                }
+                metaBuilder.SetArityError(Methods.MakeWrongNumberOfArgumentsErrorN.OpCall(
+                    given, AstUtils.Constant(_keywordSignature.DescribeExpectedArguments())
+                ));
+            } else if (_hasUnsplatParameter) {
+                metaBuilder.SetArityError(Methods.MakeWrongNumberOfArgumentsErrorN.OpCall(
+                    AstUtils.Constant(_actualArgumentCount),
+                    AstUtils.Constant(_mandatoryParamCount.ToString(System.Globalization.CultureInfo.InvariantCulture) + "+")
+                ));
+            } else if (_optionalParamCount > 0) {
+                metaBuilder.SetArityError(Methods.MakeWrongNumberOfArgumentsErrorN.OpCall(
+                    AstUtils.Constant(_actualArgumentCount),
+                    AstUtils.Constant(
+                        _mandatoryParamCount.ToString(System.Globalization.CultureInfo.InvariantCulture) + ".." +
+                        (_mandatoryParamCount + _optionalParamCount).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    )
+                ));
+            } else {
+                metaBuilder.SetWrongNumberOfArgumentsError(_actualArgumentCount, _mandatoryParamCount);
+            }
         }
 
         private Expression GetArgument(int argIndex, out bool isSplatted) {
@@ -157,26 +211,29 @@ namespace IronRuby.Runtime.Calls {
             }
 
             // check:
-            if (HasTooFewArguments) {
-                metaBuilder.SetWrongNumberOfArgumentsError(_actualArgumentCount, _mandatoryParamCount);
-                return;
-            }
-
-            if (HasTooManyArguments) {
-                metaBuilder.SetWrongNumberOfArgumentsError(_actualArgumentCount, _mandatoryParamCount);
+            if (HasTooFewArguments || HasTooManyArguments) {
+                SetArityError(metaBuilder);
                 return;
             }
 
             bool isSplatted;
 
+            int lastArgument = _actualArgumentCount - 1;
+
             // leading mandatory:
             for (int i = 0; i < _leadingMandatoryParamCount; i++) {
                 _arguments[LeadingMandatoryIndex + i] = GetArgument(i, out isSplatted);
+                if (i == lastArgument) {
+                    _lastArgumentParameterIndex = LeadingMandatoryIndex + i;
+                }
             }
 
             // trailing mandatory:
             for (int i = 0; i < TrailingMandatoryCount; i++) {
                 _arguments[TrailingMandatoryIndex + i] = GetArgument(_actualArgumentCount - TrailingMandatoryCount + i, out isSplatted);
+                if (_actualArgumentCount - TrailingMandatoryCount + i == lastArgument) {
+                    _lastArgumentParameterIndex = TrailingMandatoryIndex + i;
+                }
             }
 
             int start = _leadingMandatoryParamCount;
@@ -184,7 +241,14 @@ namespace IronRuby.Runtime.Calls {
 
             // optional:
             for (int i = 0; i < _optionalParamCount; i++) {
-                _arguments[OptionalParameterIndex + i] = (start < end) ? GetArgument(start++, out isSplatted) : Ast.Field(null, Fields.DefaultArgument);
+                if (start < end) {
+                    if (start == lastArgument) {
+                        _lastArgumentParameterIndex = OptionalParameterIndex + i;
+                    }
+                    _arguments[OptionalParameterIndex + i] = GetArgument(start++, out isSplatted);
+                } else {
+                    _arguments[OptionalParameterIndex + i] = Ast.Field(null, Fields.DefaultArgument);
+                }
             }
 
             // unsplat:

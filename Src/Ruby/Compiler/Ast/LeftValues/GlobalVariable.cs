@@ -13,14 +13,9 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
 using System.Diagnostics;
-using System.Dynamic;
 using Microsoft.Scripting;
 
 namespace IronRuby.Compiler.Ast {
@@ -38,11 +33,21 @@ namespace IronRuby.Compiler.Ast {
         }
 
         internal override MSA.Expression/*!*/ TransformReadVariable(AstGenerator/*!*/ gen, bool tryRead) {
-            return Methods.GetGlobalVariable.OpCall(gen.CurrentScopeVariable, TransformName(gen));
+            if (gen.SavingToDisk) {
+                return (tryRead ? Methods.GetGlobalVariable : Methods.ReadGlobalVariable).OpCall(gen.CurrentScopeVariable, TransformName(gen));
+            }
+            return (tryRead ? Methods.GetCachedGlobalVariable : Methods.ReadCachedGlobalVariable).OpCall(
+                gen.CurrentScopeVariable, AstUtils.Constant(new IronRuby.Runtime.GlobalVariableSite(Name, gen.IsCoreLibrary))
+            );
         }
 
         internal override MSA.Expression/*!*/ TransformWriteVariable(AstGenerator/*!*/ gen, MSA.Expression/*!*/ rightValue) {
-            return Methods.SetGlobalVariable.OpCall(AstUtils.Box(rightValue), gen.CurrentScopeVariable, TransformName(gen));
+            if (gen.SavingToDisk) {
+                return Methods.SetGlobalVariable.OpCall(AstUtils.Box(rightValue), gen.CurrentScopeVariable, TransformName(gen));
+            }
+            return Methods.SetCachedGlobalVariable.OpCall(
+                AstUtils.Box(rightValue), gen.CurrentScopeVariable, AstUtils.Constant(new IronRuby.Runtime.GlobalVariableSite(Name, gen.IsCoreLibrary))
+            );
         }
 
         internal override MSA.Expression TransformDefinedCondition(AstGenerator/*!*/ gen) {

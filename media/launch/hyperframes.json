@@ -1,0 +1,7 @@
+{
+  "$schema": "https://hyperframes.heygen.com/schema/hyperframes.json",
+  "paths": {
+    "assets": "assets"
+  },
+  "authoringSkill": "general-video"
+}

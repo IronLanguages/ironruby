@@ -13,26 +13,17 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using System.Linq.Expressions;
-using CsBinder = Microsoft.CSharp.RuntimeBinder.Binder;
-using CSharpBinderFlags = Microsoft.CSharp.RuntimeBinder.CSharpBinderFlags;
-#else
-using Microsoft.Scripting.Ast;
-using dynamic = System.Object;
-#endif
 
 using System;
-using System.Diagnostics;
 using System.Dynamic;
 using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
 using Microsoft.Scripting.Hosting;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Collections;
-using IronRuby.Runtime;
 using System.Collections.Generic;
 
 namespace IronRuby.Tests {
@@ -546,13 +537,11 @@ end
             // Ruby attributes are invoked directly via SetMember/GetMember:
             AreEqual(MySetMemberBinder.Invoke(ruby_array_list, "ruby_attribute", 123), 123);
             AreEqual(MyGetMemberBinder.Invoke(ruby_array_list, "ruby_attribute"), 123);
-#if !CLR2
             List<object> result = new List<object>();
             foreach (object item in (dynamic)ruby_array_list) {
                 result.Add(item);
             }
             Assert(result.Count == 2 && (int)result[0] == 100 && (int)result[1] == 200);
-#endif
         }
 
         public void Dlr_MethodMissing() {
@@ -730,13 +719,11 @@ Number.new(100)
             AreEqual(MyUnaryOperationBinder.Invoke(ExpressionType.Increment, one_hundred), 100 + 1);
             AreEqual(MyUnaryOperationBinder.Invoke(ExpressionType.Decrement, one_hundred), 100 - 1);
 
-#if !CLR2
             dynamic number = one_hundred;
             number--;
             Assert(number == 99);
             number++;
             Assert(number == 100);
-#endif
         }
 
         public void Dlr_Comparable() {
@@ -779,13 +766,11 @@ RubyEquatable.new(100)
             AreEqual(MyBinaryOperationBinder.Invoke(ExpressionType.Equal, equatable, 101), false);
             AreEqual(MyBinaryOperationBinder.Invoke(ExpressionType.NotEqual, equatable, 100), false);
             AreEqual(MyBinaryOperationBinder.Invoke(ExpressionType.NotEqual, equatable, 101), true);
-#if CLR4
             dynamic dynamicEquatable = equatable;
             Assert((bool)(dynamicEquatable == 100));
             Assert(!(bool)(dynamicEquatable == 101));
             Assert(!(bool)(dynamicEquatable != 100));
             Assert((bool)(dynamicEquatable != 101));
-#endif
         }
 
         public void Dlr_RubyObjects() {
@@ -802,13 +787,11 @@ scope.ruby_method = method(:inc)
 scope.ruby_proc = proc { |a| a + 2 } 
 ", scope);
 
-#if !CLR2
             dynamic s = scope;
             AreEqual(s.ruby_array[0], 100);
             AreEqual(s.ruby_hash[1], 3);
             AreEqual(s.ruby_method(1), 2);
             AreEqual(s.ruby_proc(1), 3);
-#endif
             object method = scope.GetVariable("ruby_method");
             AreEqual(MyInvokeBinder.Invoke(method, 1), 2);
 
@@ -817,10 +800,34 @@ scope.ruby_proc = proc { |a| a + 2 }
         }
 
         public void Dlr_Methods() {
-            //assert_equal Methods.default_values(100), 'a:100 b:2'
-            //assert_equal Methods.varargs(100, 200), '100 200'
-            //assert_equal Methods.multiple_return_values, [100, 200]
-            //assert_equal Methods.with_block {|x| x + 1000}, 1100
+            object methods = Engine.Execute(@"
+class Methods
+  def default_values(a, b = 2)
+    ""a:#{a} b:#{b}""
+  end
+
+  def varargs(*args)
+    args.join(' ')
+  end
+
+  def multiple_return_values
+    return 100, 200
+  end
+end
+
+Methods.new
+");
+            dynamic m = methods;
+            AreEqual(m.default_values(100).ToString(), "a:100 b:2");
+            AreEqual(m.default_values(100, 3).ToString(), "a:100 b:3");
+            AreEqual(m.varargs(100, 200).ToString(), "100 200");
+            AreEqual(m.varargs().ToString(), "");
+
+            var values = (RubyArray)m.multiple_return_values();
+            Assert(values.Count == 2 && (int)values[0] == 100 && (int)values[1] == 200);
+
+            AreEqual(MyInvokeMemberBinder.Invoke(methods, "default_values", 1).ToString(), "a:1 b:2");
+            AreEqual(MyInvokeMemberBinder.Invoke(methods, "varargs").ToString(), "");
         }
 
         public void Dlr_Visibility() {
@@ -866,11 +873,6 @@ end");
             var classD = Runtime.Globals.GetVariable("D");
             var d = Engine.Operations.CreateInstance(classD);
             Assert(d is Hash);
-        }
-
-        public void Dlr_Languages() {
-            //# Pass in ref/out params
-            //# Named arguments
         }
 
         public class DynamicObject1 : DynamicObject {
@@ -941,7 +943,7 @@ C.xxx rescue puts $!.to_s[0, 22]
 1
 2
 2
-undefined method `xxx'
+undefined method 'xxx'
 ");
         }
 

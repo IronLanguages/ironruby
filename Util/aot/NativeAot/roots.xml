@@ -1,0 +1,95 @@
+<!-- .NET types Ruby code reaches through CLR interop, which IronRuby resolves by reflection at run
+     time: the trimmer cannot see those uses, so each type is kept whole here. This is the list the
+     core prelude (ruby4.rb and what it requires) needs; a program that uses other .NET types
+     through interop needs them added - which is the general problem, see the README. -->
+<linker>
+  <assembly fullname="System.Private.CoreLib">
+    <type fullname="System.Math" preserve="all" />
+    <type fullname="System.MathF" preserve="all" />
+    <type fullname="System.GC" preserve="all" />
+    <type fullname="System.Diagnostics.Stopwatch" preserve="all" />
+    <type fullname="System.BitConverter" preserve="all" />
+    <type fullname="System.Type" preserve="all" />
+    <type fullname="System.RuntimeType" preserve="all" />
+    <type fullname="System.Text.NormalizationForm" preserve="all" />
+    <type fullname="System.Globalization.StringInfo" preserve="all" />
+    <type fullname="System.Globalization.TextElementEnumerator" preserve="all" />
+    <type fullname="System.Environment" preserve="all" />
+    <type fullname="System.GCMemoryInfo" preserve="all" />
+    <type fullname="System.TimeSpan" preserve="all" />
+    <type fullname="System.String" preserve="all" />
+    <type fullname="System.Object" preserve="all" />
+    <!-- conversions: the DLR's binders look for op_Implicit/op_Explicit and the like by reflection -->
+    <type fullname="System.Int32" preserve="all" />
+    <type fullname="System.Int64" preserve="all" />
+    <type fullname="System.UInt32" preserve="all" />
+    <type fullname="System.UInt64" preserve="all" />
+    <type fullname="System.Int16" preserve="all" />
+    <type fullname="System.UInt16" preserve="all" />
+    <type fullname="System.Byte" preserve="all" />
+    <type fullname="System.SByte" preserve="all" />
+    <type fullname="System.Double" preserve="all" />
+    <type fullname="System.Single" preserve="all" />
+    <type fullname="System.Decimal" preserve="all" />
+    <type fullname="System.Boolean" preserve="all" />
+    <type fullname="System.Char" preserve="all" />
+    <!-- members IronRuby's and the DLR's code generators look up by name (typeof(X).GetMethod("...")) -->
+    <type fullname="System.Collections.ICollection" preserve="all" />
+    <type fullname="System.Collections.IList" preserve="all" />
+    <type fullname="System.Collections.IEnumerable" preserve="all" />
+    <type fullname="System.Collections.IEnumerator" preserve="all" />
+    <type fullname="System.Collections.IDictionary" preserve="all" />
+    <type fullname="System.Collections.Generic.IList`1" preserve="all" />
+    <type fullname="System.Collections.Generic.ICollection`1" preserve="all" />
+    <type fullname="System.Collections.Generic.IEnumerable`1" preserve="all" />
+    <type fullname="System.Collections.Generic.IDictionary`2" preserve="all" />
+    <type fullname="System.Delegate" preserve="all" />
+    <type fullname="System.MulticastDelegate" preserve="all" />
+    <type fullname="System.MissingMemberException" preserve="all" />
+    <type fullname="System.MissingMethodException" preserve="all" />
+    <type fullname="System.ParamArrayAttribute" preserve="all" />
+    <type fullname="System.WeakReference" preserve="all" />
+    <type fullname="System.DateTime" preserve="all" />
+    <type fullname="System.Runtime.ExceptionServices.ExceptionDispatchInfo" preserve="all" />
+    <type fullname="System.Runtime.InteropServices.Marshal" preserve="all" />
+    <type fullname="System.InvalidOperationException" preserve="all" />
+    <type fullname="System.ArgumentException" preserve="all" />
+    <type fullname="System.NotSupportedException" preserve="all" />
+    <type fullname="System.MemberAccessException" preserve="all" />
+    <type fullname="System.Runtime.CompilerServices.RuntimeHelpers" preserve="all" />
+    <type fullname="System.IntPtr" preserve="all" />
+    <type fullname="System.Reflection.FieldInfo" preserve="all" />
+    <type fullname="System.Reflection.MethodInfo" preserve="all" />
+    <type fullname="System.Reflection.MethodBase" preserve="all" />
+    <type fullname="System.Reflection.PropertyInfo" preserve="all" />
+    <type fullname="System.Reflection.Missing" preserve="all" />
+    <type fullname="System.Runtime.Serialization.ISerializable" preserve="all" />
+    <type fullname="System.Runtime.CompilerServices.StrongBox`1" preserve="all" />
+    <type fullname="System.Nullable`1" preserve="all" />
+    <type fullname="System.Exception" preserve="all" />
+    <type fullname="System.Array" preserve="all" />
+    <type fullname="System.Threading.Monitor" preserve="all" />
+    <type fullname="System.Threading.Interlocked" preserve="all" />
+    <type fullname="System.Convert" preserve="all" />
+    <type fullname="System.Enum" preserve="all" />
+    <type fullname="System.ValueType" preserve="all" />
+    <type fullname="System.IComparable" preserve="all" />
+    <type fullname="System.IDisposable" preserve="all" />
+    <type fullname="System.Activator" preserve="all" />
+  </assembly>
+  <assembly fullname="System.Linq.Expressions">
+    <type fullname="System.Runtime.CompilerServices.CallSite" preserve="all" />
+    <type fullname="System.Runtime.CompilerServices.CallSite`1" preserve="all" />
+    <type fullname="System.Runtime.CompilerServices.CallSiteOps" preserve="all" />
+    <type fullname="System.Dynamic.IDynamicMetaObjectProvider" preserve="all" />
+    <type fullname="System.Dynamic.DynamicMetaObject" preserve="all" />
+    <type fullname="System.Linq.Expressions.Expression" preserve="all" />
+  </assembly>
+  <assembly fullname="System.Runtime.Numerics">
+    <type fullname="System.Numerics.BigInteger" preserve="all" />
+    <type fullname="System.Numerics.Complex" preserve="all" />
+  </assembly>
+  <assembly fullname="System.Security.Cryptography">
+    <type fullname="System.Security.Cryptography.RandomNumberGenerator" preserve="all" />
+  </assembly>
+</linker>

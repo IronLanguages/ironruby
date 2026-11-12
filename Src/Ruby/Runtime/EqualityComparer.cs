@@ -15,9 +15,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
-using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime.Calls;
 
@@ -54,16 +54,44 @@ namespace IronRuby.Runtime {
                 return true;
             }
 
+            // An Integer key compares by value, whichever of the two immediate CLR types carries
+            // it. The narrowing funnels make an Int32 and an Int64 of the same value impossible,
+            // but a long straight out of a CLR method has not been through one.
             if (x is int) {
-                return y is int && (int)x == (int)y;
+                return y is int ? (int)x == (int)y : y is long && (int)x == (long)y;
             }
 
-            return RubyOps.IsTrue(_eqlSite.Target(_eqlSite, x, y));
+            if (x is long) {
+                return y is long ? (long)x == (long)y : y is int && (long)x == (int)y;
+            }
+
+            // Dictionary<,> calls this as Equals(storedKey, probeKey); Ruby dispatches eql? on the
+            // key being looked up, so the arguments are swapped here.
+            return RubyOps.IsTrue(_eqlSite.Target(_eqlSite, y, x));
         }
 
         int IEqualityComparer<object>.GetHashCode(object obj) {
             if (obj is int) {
-                return (int)obj;
+                return RubyUtils.GetFixnumHashCode((int)obj);
+            }
+
+            // MRI's any_hash hashes these core values itself and never dispatches #hash, so a
+            // redefined Integer#hash or String#hash does not affect Hash lookups. The values are
+            // the ones the built-in #hash methods answer. A String subclass still dispatches.
+            if (obj == null) {
+                return RubyUtils.NilObjectId;
+            }
+            if (obj is double) {
+                return RubyUtils.GetFloatHashCode((double)obj);
+            }
+            if (obj is long) {
+                return RubyUtils.GetIntegerHashCode((long)obj);
+            }
+            if (obj is BigInteger) {
+                return RubyUtils.GetIntegerHashCode((BigInteger)obj);
+            }
+            if (obj is bool || obj is RubySymbol || obj.GetType() == typeof(MutableString)) {
+                return obj.GetHashCode();
             }
 
             return Protocols.ToHashCode(_hashSite.Target(_hashSite, obj));

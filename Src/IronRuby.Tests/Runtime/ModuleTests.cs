@@ -13,8 +13,6 @@
  *
  * ***************************************************************************/
 
-using System.IO;
-using IronRuby.Runtime;
 
 namespace IronRuby.Tests {
     public partial class Tests {
@@ -41,10 +39,10 @@ BO
         }
 
         /// <summary>
-        /// TODO: Unqualified constant lookup doesn't fallback to Object on BasicObject and its subclasses.
+        /// Unqualified constant lookup doesn't fallback to Object on BasicObject and its subclasses.
         /// </summary>
         public void BasicObject2() {
-            XTestOutput(@"
+            TestOutput(@"
 module M
   R = 1
 end
@@ -227,7 +225,7 @@ end
 D = C.dup
 p D.instance_method(:foo)
 ", @"
-#<UnboundMethod: D#foo>
+#<UnboundMethod: D#foo() ClassDuplication7.rb:3>
 ");
         }
 
@@ -251,14 +249,14 @@ puts s.f(*[])
 puts s.f(*[1]) rescue p $!
 "
                 ), @"
-#<ArgumentError: wrong number of arguments (0 for 1)>
+#<ArgumentError: wrong number of arguments (given 0, expected 1)>
 3
-#<ArgumentError: wrong number of arguments (2 for 1)>
-#<ArgumentError: wrong number of arguments (0 for 1)>
+#<ArgumentError: wrong number of arguments (given 2, expected 1)>
+#<ArgumentError: wrong number of arguments (given 0, expected 1)>
 6
-#<ArgumentError: wrong number of arguments (2 for 1)>
+#<ArgumentError: wrong number of arguments (given 2, expected 1)>
 6
-#<ArgumentError: wrong number of arguments (1 for 0)>
+#<ArgumentError: wrong number of arguments (given 1, expected 0)>
 ");
         }
 
@@ -318,8 +316,6 @@ Meta
         /// Autoload removes the constant from the declaring module before it loads the target file.
         /// </summary>
         public void Autoload1() {
-            if (_driver.PartialTrust) return;
-
             var file = @"
 class D 
   p defined? X
@@ -345,10 +341,11 @@ nil
 
         /// <summary>
         /// Freezing and module initializers.
+        /// Prism: 'yaml' is psych 5.3.1's own Ruby code now, and the legacy parser stops at its
+        /// first keyword parameter ("syntax error, unexpected label") - the require failed that
+        /// way before it could touch the frozen Object. CRuby 4.0.6 prints the same three lines.
         /// </summary>
         public void ModuleFreezing1() {
-            if (_driver.PartialTrust) return;
-
             TestOutput(@"
 Float.freeze
 puts defined? Float::EPSILON         # this should work, Float is a builtin
@@ -363,7 +360,7 @@ end
 ", @"
 constant
 method
-#<RuntimeError: can't modify frozen class>
+#<FrozenError: can't modify frozen Class: Object>
 ");
         }
 
@@ -535,21 +532,21 @@ c.dreport
 ", @"
 3
 1
-#<NameError: instance variable `@c' not defined>
-#<NameError: instance variable `@a' not defined>
-#<NameError: instance variable `@w' not defined>
+#<NameError: instance variable @c not defined>
+#<NameError: instance variable @a not defined>
+#<NameError: instance variable @w not defined>
 nil
 nil
 nil
 ---
-nil
+
 instance-variable
 ---
-nil
+
 instance-variable
-nil
+
 instance-variable
-nil
+
 ");
         }
 
@@ -592,7 +589,7 @@ c.clone.dreport
         /// Subclasses of builtin types and CLR types.
         /// </summary>
         public void InstanceVariables5() {
-            XTestOutput(@"
+            TestOutput(@"
 class R < Range
   def foo
     @a = 1
@@ -629,9 +626,8 @@ s.foo
 t.foo
 u.foo
 
-u.instance_variable_get(:@d)
-#p r.instance_variable_get(:@a), s.instance_variable_get(:@b), t.instance_variable_get(:@c), u.instance_variable_get(:@d)
-#p r.instance_variable_get(:@aa), s.instance_variable_get(:@bb), t.instance_variable_get(:@cc), u.instance_variable_get(:@dd)
+puts r.instance_variable_get(:@a), s.instance_variable_get(:@b), t.instance_variable_get(:@c), u.instance_variable_get(:@d)
+puts r.instance_variable_get(:@aa), s.instance_variable_get(:@bb), t.instance_variable_get(:@cc), u.instance_variable_get(:@dd)
 ", @"
 1
 2
@@ -681,11 +677,13 @@ p a.foo(b)
 ");
         }
 
-        // Fixnum doesn't have identity in Ruby
+        // An Integer holds no state at all, so it is frozen and an instance variable
+        // cannot be set on it - IronRuby used to let one through, shared by every Integer
+        // of the same value.
         public void InstanceVariables10() {
             AssertOutput(delegate() {
                 CompilerTest(@"
-class Fixnum
+class Integer
   def foo= a
     @x = a
   end
@@ -694,23 +692,21 @@ class Fixnum
   end
 end
 
-a = 1
-b = 1
-c = 2
-
-a.foo = 1
-b.foo = 2
-c.foo = 3
-puts a.foo, b.foo, c.foo
+begin
+  1.foo = 1
+rescue => e
+  puts e.class, e.message
+end
+puts 1.foo.inspect
 ");
             },
             @"
-2
-2
-3");
+FrozenError
+can't modify frozen Integer: 1
+nil");
         }
 
-        // Float has an identity in Ruby
+        // Nor does a Float, for the same reason.
         public void InstanceVariables20() {
             TestOutput(@"
 class Float
@@ -722,15 +718,270 @@ class Float
   end
 end
 
-a = 1.0
-b = 1.0
-
-a.foo = 1
-b.foo = 2
-puts a.foo, b.foo
+begin
+  1.0.foo = 1
+rescue => e
+  puts e.class, e.message
+end
+puts 1.0.foo.inspect
 ", @"
+FrozenError
+can't modify frozen Float: 1.0
+nil
+");
+        }
+    
+        /// <summary>
+        /// instance_methods(false) lists what the module itself defines: not a prepended module's
+        /// methods, and for a singleton class not the methods of the class behind it.
+        /// </summary>
+        public void InstanceMethods_NotInherited1() {
+            TestOutput(@"
+module P; def pm; end; def cm; end; end
+class C; prepend P; def cm; end; def c2; end; end
+class D < C; def dm; end; end
+o = D.new
+def o.sing; end
+p C.instance_methods(false).sort, D.instance_methods(false), o.singleton_class.instance_methods(false)
+p C.singleton_class.instance_methods(false)
+class C; def self.cs; end; end
+p C.singleton_class.instance_methods(false), D.singleton_class.instance_methods(false)
+module M; def mm; end; private def mp; end; end
+o.extend(M)
+o.singleton_class.class_eval { private def spri; end; protected def spro; end }
+class D; private def dpri; end; protected def dpro; end; end
+p o.public_methods(false).sort, o.private_methods(false).sort, o.protected_methods(false).sort, o.methods(false).sort
+p D.new.public_methods(false), D.new.private_methods(false), D.new.methods(false)
+", @"
+[:c2, :cm]
+[:dm]
+[:sing]
+[]
+[:cs]
+[]
+[:dm, :mm, :sing]
+[:dpri, :mp, :spri]
+[:dpro, :spro]
+[:sing, :spro]
+[:dm]
+[:dpri]
+[]
+");
+        }
+
+        /// <summary>
+        /// The method lists come out as MRI's: the CLR members of a built-in's underlying type (Object.ReferenceEquals,
+        /// LocalJumpError#ExitValue, NilClass#GetType) and the __helpers__ a library defines are left out, though they
+        /// stay callable. A CLR type lists its members, and a program's own __foo__ is listed.
+        /// </summary>
+        public void MethodLists_Unlisted1() {
+            TestOutput(@"
+class A; end
+p A.singleton_methods, Object.singleton_methods(false)
+p LocalJumpError.instance_methods(false).sort, SystemExit.instance_methods(false).sort
+p Object.new.methods.grep(/\A[A-Z]/), nil.methods.grep(/\A[A-Z]/), A.methods.grep(/\A[A-Z]/)
+p Kernel.private_instance_methods.grep(/\A__ir/), Kernel.singleton_methods.grep(/\A__ir/)
+p Integer.singleton_methods.grep(/\A__/), Comparable.private_instance_methods.grep(/\A__/)
+class B; def __foo__; end; private def __bar__; end; end
+p B.instance_methods(false), B.private_instance_methods(false)
+p Object.new.GetHashCode.is_a?(Integer), nil.GetType.is_a?(System::Type), Object.ReferenceEquals(nil, nil)
+p System::Collections::ArrayList.instance_methods(false).include?(:add)
+", @"
+[]
+[]
+[:exit_value, :reason]
+[:status, :success?]
+[]
+[]
+[]
+[]
+[]
+[]
+[]
+[:__foo__]
+[:__bar__]
+true
+true
+true
+true
+");
+        }
+
+        /// <summary>
+        /// const_get and friends walk a scoped name as MRI does: a malformed path names the whole
+        /// path, a bad segment just that segment, each only once the segments before it resolve;
+        /// a segment after the first does not see Object's constants through the module's
+        /// ancestry (rb_const_get_from). private_constant and friends check frozen-ness first.
+        /// </summary>
+        public void ConstantPaths1() {
+            TestOutput(@"
+X = 1; class C; Q = 1; end; module M; end
+def t; yield; rescue => e; ""#{e.class}: #{e.message}""; end
+p t { Object.const_get(""C::b"") }, t { Object.const_get(""::b"") }, t { Object.const_get(""C::"") }, t { Object.const_get(""C:::D"") }
+p t { Object.const_get(""Zz::C:D"") }, t { Object.const_get(""X::Y"") }, t { Object.const_get("""") }, t { Object.const_get(:b) }
+p t { Object.const_get(""C::String"") }, t { Object.const_get(""C::Kernel"") }, t { Object.const_get(""M::String"") }, Object.const_get(""Object::String""), C.const_get(""String"")
+p Object.const_defined?(""C::String""), Object.const_defined?(""C::Q""), t { Object.const_defined?(""C::b"") }, Object.const_source_location(""C::String"")
+module N; R = 1; end; N.freeze
+p t { N.private_constant(:R) }, t { N.public_constant }, t { N.deprecate_constant(:R) }
+p t { C.private_constant(:q) }, t { C.deprecate_constant(:q) }
+", @"
+""NameError: wrong constant name b""
+""NameError: wrong constant name b""
+""NameError: wrong constant name C::""
+""NameError: wrong constant name C:::D""
+""NameError: uninitialized constant Zz""
+""TypeError: X::Y does not refer to class/module""
+""NameError: wrong constant name ""
+""NameError: wrong constant name b""
+""NameError: uninitialized constant C::String""
+""NameError: uninitialized constant C::Kernel""
+""NameError: uninitialized constant M::String""
+String
+String
+false
+true
+""NameError: wrong constant name b""
+nil
+""FrozenError: can't modify frozen Module: N""
+""FrozenError: can't modify frozen Module: N""
+""FrozenError: can't modify frozen Module: N""
+""NameError: constant C::q not defined""
+""NameError: constant C::q not defined""
+");
+        }
+
+        /// <summary>
+        /// Module#__hide_constant__ (IronRuby's own Ruby code keeps state MRI keeps in C in such constants): the
+        /// code nested in the module reads the constant by name, as it reads a private one, while constant
+        /// reflection - const_defined?, const_get, const_source_location, remove_const, the visibility setters,
+        /// a qualified reference - finds nothing there. The helper itself is left out of the method lists.
+        /// </summary>
+        public void HiddenConstants1() {
+            TestOutput(@"
+module M
+  A = 1; class K; end
+  __hide_constant__ :A, :K
+  def self.read = [A, K.name]
+  class Inner; def read = A; end
+end
+module N; include M; end
+def t; yield; rescue => e; ""#{e.class}: #{e.message}""; end
+p M.read, M::Inner.new.read, M.constants.sort
+p M.const_defined?(:A), M.const_defined?(:A, false), Object.const_defined?(""M::A""), N.const_defined?(:A)
+p t { M::A }, t { M.const_get(:A) }, t { M.const_get(:A, false) }, t { N.const_get(:A) }, M.const_source_location(:A)
+p t { M.send(:remove_const, :A) }, t { M.public_constant(:A) }, t { M.private_constant(:K) }, t { M.deprecate_constant(:A) }
+p defined?(M::A), M.send(:__hide_constant__, :A).equal?(M), M.read
+p M.private_methods.include?(:__hide_constant__), Module.private_instance_methods(false).include?(:__hide_constant__)
+", @"
+[1, ""M::K""]
+1
+[:Inner]
+false
+false
+false
+false
+""NameError: uninitialized constant M::A""
+""NameError: uninitialized constant M::A""
+""NameError: uninitialized constant M::A""
+""NameError: uninitialized constant N::A""
+nil
+""NameError: constant M::A not defined""
+""NameError: constant M::A not defined""
+""NameError: constant M::K not defined""
+""NameError: constant M::A not defined""
+nil
+true
+[1, ""M::K""]
+false
+false
+");
+        }
+
+        /// <summary>
+        /// What the prelude keeps for itself stays out of reflection, as MRI's C state does: its own constants
+        /// are hidden (Process::SPAWN_*, GC::LATEST_GC_INFO, Random::MT, IO::BOMS__, an Errno class's Message),
+        /// its instance variables use the hidden @__name__ form (Enumerator.new's generator, an
+        /// ArithmeticSequence, Set, Random, KeyError, SignalException, StopIteration, Fiber, WeakKeyMap), the
+        /// Enumerators without a block name their method (String#gsub, #upto, ObjectSpace.each_object), and
+        /// methods are owned where MRI owns them (Rational/Complex#dup and #clone are Numeric's, Float has its
+        /// #fdiv, #positive? and #negative?, Integer has Numeric's; nil, true and false have #===). Marshal
+        /// still writes a Set's table as "@hash" and a KeyError's receiver and key, as MRI does, and reads them back.
+        /// </summary>
+        public void PreludeHiddenState1() {
+            TestOutput(@"
+require 'ruby4'
+p Process.const_defined?(:SPAWN_DUP2), GC.const_defined?(:LATEST_GC_INFO), Enumerator.const_defined?(:SIZE_SAME_METHODS)
+p Random.const_defined?(:MT), IO.constants.include?(:BOMS__), String.constants, Binding.constants, Errno::ENOENT.constants
+p Errno::ENOENT.new.message, Class.new(Errno::EACCES).new('x').message
+p Enumerator.new {}.instance_variables, (1..10).step(2).instance_variables, 1.step(10, 3).instance_variables
+p Set[1].instance_variables, Set[1].dup.instance_variables, Random.new(1).instance_variables, Random.new(1).rand(100) == Random.new(1).rand(100)
+p KeyError.new('x', receiver: nil).instance_variables, KeyError.new('x', receiver: nil).receiver, (KeyError.new('x').key rescue $!)
+p SignalException.new('INT').instance_variables, SignalException.new('INT').signo, Interrupt.new.instance_variables
+p (begin; [].each.next; rescue StopIteration => e; e.instance_variables; end), Fiber.new {}.instance_variables
+p ObjectSpace::WeakKeyMap.new.instance_variables
+p 'abc'.gsub(/b/), 'abc'.gsub('b').each { 'X' }, 'a'.upto('c'), 'a'.upto('c', true), ObjectSpace.each_object(Class).inspect
+p Rational.instance_method(:dup).owner, Complex.instance_method(:clone).owner, (1r.clone(freeze: false) rescue $!), (1r.clone(freeze: 1) rescue $!)
+p Float.instance_method(:fdiv).owner, Float.instance_method(:positive?).owner, Integer.instance_method(:positive?).owner, 1.5.fdiv(2), -0.0.negative?
+p NilClass.instance_method(:===).owner, TrueClass.instance_method(:===).owner, nil === nil, false === nil, true === 1
+p (1..10).step(3).begin, 1.step(10, 3).end, ((1..10) % 3).inspect, ((1..10) % 3).to_a
+p Marshal.dump(Set[1]), Marshal.load(Marshal.dump(Set[1, 2])), Marshal.dump(KeyError.new('x', receiver: 1, key: 2))
+k = Marshal.load(Marshal.dump(KeyError.new('x', receiver: 1, key: 2))); p k.receiver, k.key, k.instance_variables
+", @"
+false
+false
+false
+false
+false
+[]
+[]
+[:Errno]
+""No such file or directory""
+""Permission denied - x""
+[]
+[]
+[]
+[]
+[]
+[]
+true
+[]
+nil
+#<ArgumentError: no key is available>
+[]
+2
+[]
+[]
+[]
+[]
+#<Enumerator: ""abc"":gsub(/b/)>
+""aXc""
+#<Enumerator: ""a"":upto(""c"")>
+#<Enumerator: ""a"":upto(""c"", true)>
+""#<Enumerator: ObjectSpace:each_object(Class)>""
+Numeric
+Numeric
+#<ArgumentError: can't unfreeze Rational>
+#<ArgumentError: unexpected value for freeze: Integer>
+Float
+Float
+Numeric
+0.75
+false
+NilClass
+TrueClass
+true
+false
+false
+1
+10
+""((1..10).%(3))""
+[1, 4, 7, 10]
+""\x04\bo:\bSet\x06:\n@hash}\x06i\x06TF""
+Set[1, 2]
+""\x04\bo:\rKeyError\t:\tmesgI\""\x06x\x06:\x06ET:\abt0:\rreceiveri\x06:\bkeyi\a""
 1
 2
+[]
 ");
         }
     }

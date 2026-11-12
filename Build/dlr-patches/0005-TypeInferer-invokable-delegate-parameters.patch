@@ -1,0 +1,79 @@
+diff --git a/src/core/Microsoft.Dynamic/Actions/Calls/TypeInferer.cs b/src/core/Microsoft.Dynamic/Actions/Calls/TypeInferer.cs
+index f03d3b9..9225cb6 100644
+--- a/src/core/Microsoft.Dynamic/Actions/Calls/TypeInferer.cs
++++ b/src/core/Microsoft.Dynamic/Actions/Calls/TypeInferer.cs
+@@ -361,8 +361,19 @@ namespace Microsoft.Scripting.Actions.Calls {
+ 
+             public Type GetBestType(OverloadResolver/*!*/ resolver, Dictionary<Type, Type>/*!*/ binding, Dictionary<DynamicMetaObject, BindingRestrictions>/*!*/ restrictions) {
+                 Type curType = null;
++                bool abstained = false;
+ 
+                 for (int i = 0; i < _parameterTypes.Count; i++) {
++                    // An invokable object passed for a delegate parameter whose own parameters mention the
++                    // generic parameter - a block for Where<T>(IEnumerable<T>, Func<T, bool>) - takes whatever
++                    // the delegate passes it, so it says nothing about T. Leave T to the other arguments (the
++                    // IEnumerable<int>), rather than widening it to the invokable's guess and failing to
++                    // convert those. Only if nothing else mentions T is the guess used.
++                    if (_inputs[i] is IInferableInvokable && DelegateParametersMention(_parameterTypes[i], _genericParam)) {
++                        abstained = true;
++                        continue;
++                    }
++
+                     Type nextType = GetInferedType(resolver, _genericParam, _parameterTypes[i], _inputs[i], binding, restrictions);
+ 
+                     if (nextType is null) {
+@@ -380,8 +391,54 @@ namespace Microsoft.Scripting.Actions.Calls {
+                     }
+                 }
+ 
++                if (curType is null && abstained) {
++                    // only invokables mention T: fall back to what they infer
++                    for (int i = 0; i < _parameterTypes.Count; i++) {
++                        Type nextType = GetInferedType(resolver, _genericParam, _parameterTypes[i], _inputs[i], binding, restrictions);
++                        if (nextType is null) {
++                            return null;
++                        }
++                        curType ??= nextType;
++                    }
++                }
++
+                 return curType;
+             }
++
++            private static bool DelegateParametersMention(Type/*!*/ parameterType, Type/*!*/ genericParameter) {
++                if (!parameterType.IsSubclassOf(typeof(Delegate))) {
++                    return false;
++                }
++
++                MethodInfo invoke = parameterType.GetMethod("Invoke");
++                if (invoke is null) {
++                    return false;
++                }
++
++                foreach (ParameterInfo parameter in invoke.GetParameters()) {
++                    if (Mentions(parameter.ParameterType, genericParameter)) {
++                        return true;
++                    }
++                }
++                return false;
++            }
++
++            private static bool Mentions(Type/*!*/ type, Type/*!*/ genericParameter) {
++                if (type == genericParameter) {
++                    return true;
++                }
++                if (type.HasElementType) {
++                    return Mentions(type.GetElementType(), genericParameter);
++                }
++                if (type.IsGenericType) {
++                    foreach (Type argument in type.GetGenericArguments()) {
++                        if (Mentions(argument, genericParameter)) {
++                            return true;
++                        }
++                    }
++                }
++                return false;
++            }
+         }
+ 
+         /// <summary>

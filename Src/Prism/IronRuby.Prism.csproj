@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>$(IronRubyTargetFrameworks)</TargetFrameworks>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>IronRuby.Prism</AssemblyName>
+    <RootNamespace>IronRuby.Prism</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Ruby\Ruby.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- built from ../../../prism with `ruby templates/template.rb && make shared`.
+         On Windows the same command under the RubyInstaller DevKit (`ridk exec make shared`)
+         produces build/libprism.dll instead; ship whichever ones are there, so a tree that
+         has both can publish for either platform.  PrismNative picks by RuntimeInformation. -->
+    <Content Include="$(MSBuildThisFileDirectory)..\..\..\prism\build\libprism.so" Condition="Exists('$(MSBuildThisFileDirectory)..\..\..\prism\build\libprism.so')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>libprism.so</Link>
+    </Content>
+    <Content Include="$(MSBuildThisFileDirectory)..\..\..\prism\build\libprism.dll" Condition="Exists('$(MSBuildThisFileDirectory)..\..\..\prism\build\libprism.dll')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>libprism.dll</Link>
+    </Content>
+    <Content Include="$(MSBuildThisFileDirectory)..\..\..\prism\build\libprism.dylib" Condition="Exists('$(MSBuildThisFileDirectory)..\..\..\prism\build\libprism.dylib')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>libprism.dylib</Link>
+    </Content>
+  </ItemGroup>
+</Project>

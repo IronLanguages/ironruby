@@ -13,17 +13,14 @@
  *
  * ***************************************************************************/
 
-#if FEATURE_CORE_DLR
 using MSA = System.Linq.Expressions;
-#else
-using MSA = Microsoft.Scripting.Ast;
-#endif
 
-using System.Dynamic;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
+using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Compiler.Ast {
+    using Ast = MSA.Expression;
 
     public partial class AttributeAccess : LeftValue {
         // qualifier::name =
@@ -59,9 +56,23 @@ namespace IronRuby.Compiler.Ast {
             throw Assert.Unreachable;
         }
 
+        /// <summary>
+        /// `recv&amp;.name = value` as a target (rescue =&gt; recv&amp;.name, for recv&amp;.name in ...):
+        /// nothing is assigned when recv is nil.
+        /// </summary>
+        public bool IsSafeNavigation { get; set; }
+
         internal override MSA.Expression/*!*/ TransformWrite(AstGenerator/*!*/ gen, MSA.Expression/*!*/ targetValue, MSA.Expression/*!*/ rightValue) {
             Assert.NotNull(gen, targetValue, rightValue);
-            return MethodCall.TransformRead(this, gen, _qualifier.NodeType == NodeTypes.SelfReference, _name, targetValue, null, null, null, rightValue);
+            if (IsSafeNavigation) {
+                var target = gen.CurrentScope.DefineHiddenVariable("#safe-target", typeof(object));
+                return Ast.Condition(
+                    Ast.Equal(Ast.Assign(target, AstUtils.Box(targetValue)), AstUtils.Constant(null)),
+                    AstUtils.Constant(null, typeof(object)),
+                    AstUtils.Box(MethodCall.TransformRead(this, gen, false, _name, target, null, null, null, rightValue))
+                );
+            }
+            return MethodCall.TransformRead(this, gen, _qualifier is SelfReference, _name, targetValue, null, null, null, rightValue);
         }
     }
 }
