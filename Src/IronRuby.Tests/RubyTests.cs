@@ -1307,6 +1307,7 @@ namespace IronRuby.Tests {
                 Time_NewDstStdZone1,
                 Kernel_CloneSpecialConstants1,
                 Struct_InspectMemberNames1,
+                Integer_BitwiseCoerce1,
             };
         }
     }

@@ -551,17 +551,18 @@ namespace IronRuby.Runtime {
         public static object CoerceAndApplyBitwise(BinaryOpStorage/*!*/ coercionStorage,
             BinaryOpStorage/*!*/ binaryOpStorage, string/*!*/ binaryOp, object self, object other) {
 
+            // MRI's rb_num_coerce_bit: the pair #coerce answered is used whatever it holds, provided its first
+            // element has the operator (rb_check_funcall); a Float, which has no #&, is the TypeError about the
+            // original operands. An object coercing itself into its own class does its own bitwise operation.
             IList pair;
-            if (!TryCoerce(coercionStorage, self, other, out pair) || !IsIntegerValue(pair[0]) || !IsIntegerValue(pair[1])) {
-                throw RubyExceptions.MakeCoercionError(coercionStorage.Context, other, self);
+            var context = coercionStorage.Context;
+            if (!TryCoerce(coercionStorage, self, other, out pair) ||
+                !context.ResolveMethod(pair[0], binaryOp, VisibilityContext.AllVisible).Found) {
+                throw RubyExceptions.MakeCoercionError(context, other, self);
             }
 
             var opSite = binaryOpStorage.GetCallSite(binaryOp);
             return opSite.Target(opSite, pair[0], pair[1]);
-        }
-
-        private static bool IsIntegerValue(object value) {
-            return value is int || value is long || value is BigInteger;
         }
 
         private static bool TryCoerceAndApply(
