@@ -33,7 +33,13 @@ namespace IronRuby.Runtime {
         /// </summary>
         public static T RunOnFreshStack<T>(Func<T>/*!*/ action) {
             if ((OperatingSystem.IsBrowser() || OperatingSystem.IsWasi())) {
-                // browser-wasm has one thread and cannot start another: carry on on this stack
+                // browser-wasm has one thread and cannot start another. The caller is here because this stack is
+                // nearly used up, and its action asks again before anything else: run on this stack it came
+                // straight back, level after level, until the stack overflowed - which ends the whole runtime
+                // in a browser, where this is a SystemStackError the page can show.
+                if (!IsSufficient) {
+                    throw new InsufficientExecutionStackException();
+                }
                 return action();
             }
             T result = default(T);

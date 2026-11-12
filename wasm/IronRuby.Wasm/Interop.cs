@@ -39,6 +39,10 @@ namespace IronRuby.Wasm {
         public static string Boot(byte[] stdlibZip, string options) {
             var total = Stopwatch.StartNew();
             var timings = new List<KeyValuePair<string, double>>();
+            // The session is published (the fields set) only once it has booted: after a boot that failed in the
+            // prelude or in boot.rb, Run found an engine with no kernel, and a second boot that failed had already
+            // replaced the streams the first one's runtime writes to.
+            OutputStream stdout = null, stderr = null;
             try {
                 bool jit = true, osr = true, prelude = true, legacyParser = false;
                 var languageOptions = new Dictionary<string, object>();
@@ -111,13 +115,13 @@ namespace IronRuby.Wasm {
                 setup.LanguageSetups.Add(ruby);
                 setup.Options["InterpretedMode"] = false;
 
-                _stdout = new OutputStream(1);
-                _stderr = new OutputStream(2);
-                _runtime = Ruby.CreateRuntime(setup);
-                _runtime.IO.SetOutput(_stdout, new UTF8Encoding(false));
-                _runtime.IO.SetErrorOutput(_stderr, new UTF8Encoding(false));
-                _runtime.IO.SetInput(new MemoryStream(), new UTF8Encoding(false));
-                _engine = Ruby.GetEngine(_runtime);
+                stdout = new OutputStream(1);
+                stderr = new OutputStream(2);
+                var runtime = Ruby.CreateRuntime(setup);
+                runtime.IO.SetOutput(stdout, new UTF8Encoding(false));
+                runtime.IO.SetErrorOutput(stderr, new UTF8Encoding(false));
+                runtime.IO.SetInput(new MemoryStream(), new UTF8Encoding(false));
+                var engine = Ruby.GetEngine(runtime);
                 timings.Add(new("runtime", sw.Elapsed.TotalMilliseconds));
 
                 sw.Restart();
@@ -128,13 +132,22 @@ namespace IronRuby.Wasm {
                 }
                 string bootPath = Root + "/boot.rb";
                 File.WriteAllText(bootPath, bootRb);
-                _engine.CreateScriptSourceFromFile(bootPath, Encoding.UTF8, SourceCodeKind.File).ExecuteProgram();
-                _kernel = _engine.Execute("IronRubyWasm");
+                // what boot.rb's reset loads for a fresh top-level binding (IronRubyWasm::SESSION_FILE)
+                File.WriteAllText(Root + "/session.rb", "IronRubyWasm.session = binding\n");
+                engine.CreateScriptSourceFromFile(bootPath, Encoding.UTF8, SourceCodeKind.File).ExecuteProgram();
+                object kernel = engine.Execute("IronRubyWasm");
+                string version = engine.Execute("RUBY_DESCRIPTION").ToString();
                 timings.Add(new("prelude", sw.Elapsed.TotalMilliseconds));
+
+                _runtime = runtime;
+                _engine = engine;
+                _kernel = kernel;
+                _stdout = stdout;
+                _stderr = stderr;
 
                 return Json(w => {
                     w.WriteBoolean("ok", true);
-                    w.WriteString("version", _engine.Execute("RUBY_DESCRIPTION").ToString());
+                    w.WriteString("version", version);
                     w.WriteNumber("ms", total.Elapsed.TotalMilliseconds);
                     w.WriteStartObject("timings");
                     foreach (var t in timings) w.WriteNumber(t.Key, Math.Round(t.Value, 1));
@@ -146,8 +159,8 @@ namespace IronRuby.Wasm {
                 return Json(w => {
                     w.WriteBoolean("ok", false);
                     w.WriteString("error", e.ToString());
-                    w.WriteString("stdout", _stdout?.Take() ?? "");
-                    w.WriteString("stderr", _stderr?.Take() ?? "");
+                    w.WriteString("stdout", stdout?.Take() ?? "");
+                    w.WriteString("stderr", stderr?.Take() ?? "");
                 });
             }
         }

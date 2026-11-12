@@ -148,22 +148,21 @@ namespace IronRuby.Runtime {
                 if (methodName == InterpretedCallSiteName || !TryParseRubyMethodName(ref methodName, ref file, ref line)) {
                     continue;
                 }
-                if (!_keepInternalFrames && IsInternalFile(file)) {
-                    if (IsInternalMethodFrame(methodName)) {
-                        _deferredMethodNames.Add(methodName);
-                    }
+                // the rules of the CLR stack's walk: "<internal:...>" files too, and no frame for a helper method
+                if (!_keepInternalFrames && IsInternalFrameFile(file)) {
+                    AddInternalFrame(methodName);
                     continue;
                 }
                 foreach (var deferred in _deferredMethodNames) {
                     if (skipFrames == 0) {
-                        _trace.Add(MutableString.Create(FormatFrame(file, line, deferred), _encoding));
+                        _trace.Add(CreateFrame(FormatFrame(file, line, deferred)));
                     } else {
                         skipFrames--;
                     }
                 }
                 _deferredMethodNames.Clear();
                 if (skipFrames == 0) {
-                    _trace.Add(MutableString.Create(FormatFrame(file, line, methodName), _encoding));
+                    _trace.Add(CreateFrame(FormatFrame(file, line, methodName)));
                 } else {
                     skipFrames--;
                 }

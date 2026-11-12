@@ -1,17 +1,16 @@
 # The kernel of the browser host (Interop.cs runs this file as the main program, so the core
 # prelude ruby4.rb is loaded first, exactly as for `ir --disable-gems`).
 
-# The binding of a session after a reset: a method body on main, so it has self and the constants
-# of the top level and no local variables at all (see IronRubyWasm.reset).
-def __ironruby_wasm_session__ = binding
-private :__ironruby_wasm_session__
-
 module IronRubyWasm
   BOOT_FILE = __FILE__
-  SESSION_FRAME = "in 'Object#__ironruby_wasm_session__'"
+  # The binding of a session after a reset is the top level of this file, loaded anew each time
+  # (see IronRubyWasm.reset). The host writes it next to this one: `IronRubyWasm.session = binding`.
+  SESSION_FILE = File.join(File.dirname(__FILE__), "session.rb")
+  SESSION_FRAME = "in '<top (required)>'"
 
   class << self
     attr_reader :count
+    attr_writer :session
 
     # A fresh top-level binding: locals defined by one run stay visible to the next, like the
     # cells of a notebook or the lines of irb. reset starts over (methods and constants stay).
@@ -20,9 +19,15 @@ module IronRubyWasm
       # The first session runs in TOPLEVEL_BINDING itself (frames read "<main>"); a reset gets a
       # binding of its own with no locals, so the old ones are gone but methods and constants stay.
       # Not a block's binding inside TOPLEVEL_BINDING: a block sees the locals around it, and `x`
-      # of the first session was still there after a reset. (A `def` after a reset makes a public
-      # method where the top level makes a private one.)
-      @binding = @binding ? TOPLEVEL_BINDING.receiver.__send__(:__ironruby_wasm_session__) : TOPLEVEL_BINDING
+      # of the first session was still there after a reset. Nor a method body's on main: a `def`
+      # there makes a public method, which every object then answers to, where the top level makes
+      # a private one. A loaded file's top level has main, no locals and private definitions.
+      if @binding
+        load SESSION_FILE
+        @binding = @session
+      else
+        @binding = TOPLEVEL_BINDING
+      end
       nil
     end
 

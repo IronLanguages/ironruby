@@ -20,6 +20,15 @@ namespace IronRuby.Wasm {
         public OutputStream(int fd) { _fd = fd; }
 
         public string Take() {
+            // A run ends here, and so does a character it left unfinished: flushed, it is U+FFFD in this run's
+            // output; kept in the decoder, it joined the first bytes of the next run into a character neither wrote.
+            int n = _decoder.GetChars(Array.Empty<byte>(), 0, 0, _chars, 0, true);
+            if (n > 0) {
+                _captured.Append(_chars, 0, n);
+                if (Streaming) {
+                    try { JsWrite(_fd, new string(_chars, 0, n)); } catch (Exception) { Streaming = false; }
+                }
+            }
             string s = _captured.ToString();
             _captured.Clear();
             return s;

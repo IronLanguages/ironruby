@@ -141,25 +141,31 @@ shapes.first(2).sum(&:area).round(3)`);
   });
   check('worker loads a NuGet assembly', wl[0].ok && wl[1].ok && wl[1].result.includes('<em>hi</em>'), wl);
   console.log(`worker run: ${Date.now() - t2} ms`);
-  const wt = await wpage.evaluate(async () => {
+  // evaluate() has no timeout of its own: were terminate() to leave the call pending, this script would
+  // wait for the job's time limit instead of reporting the failure
+  const within = (ms, what, promise) => Promise.race([promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`${what}: no answer in ${ms} ms`)), ms).unref())]);
+  const wt = await within(30000, 'terminate()', wpage.evaluate(async () => {
     const looping = window.ir.run('loop { }').then(() => 'finished', e => e.message);
     await new Promise(r => setTimeout(r, 300));
     window.ir.terminate();
     return looping;
-  });
+  }));
   check('worker: endless loop stopped by terminate()', wt === 'terminated', wt);
 
   // reset: the locals of the session before are gone (they used to stay visible, as the new binding was a
   // block's inside the old one), methods and constants stay, and a frame still reads <main>
   await run('x = 20; def kept = :kept; KEPT = 1');
   await page.evaluate(() => window.ir.reset());
+  r = await run('def after_reset = 1; [after_reset, Object.new.respond_to?(:after_reset), Object.private_method_defined?(:after_reset)]');
+  check('a def after reset is private, as at the top level', r.ok && r.result === '[1, false, true]', r);
   r = await run('[defined?(x), kept, KEPT]');
   check('reset drops locals, keeps methods and constants', r.ok && r.result === '[nil, :kept, 1]', r);
   r = await run('y = 1; raise "after reset"');
   check('no frame after reset names the session method', !r.ok && r.error.message === 'after reset' && !/__ironruby_wasm_session__/.test(JSON.stringify(r)), r);
 
   // a call after terminate() is refused at once (it used to wait for an answer that never comes)
-  const late = await wpage.evaluate(() => window.ir.run('1').then(() => 'finished', e => e.message));
+  const late = await within(30000, 'a call after terminate()', wpage.evaluate(() => window.ir.run('1').then(() => 'finished', e => e.message)));
   check('worker: a call after terminate() is rejected', late === 'terminated', late);
 } catch (e) {
   failures++;
