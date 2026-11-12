@@ -1317,16 +1317,37 @@ namespace IronRuby.Builtins {
                 return MutableString.CreateBinary(data, RubyEncoding.Binary);
             }
 
-            // Set while ReadInstanced reads a Regexp whose "I" wrapper follows with its encoding.
+            // Set while ReadInstanced reads a Regexp whose "I" wrapper follows with its instance variables.
             private bool _regexHasIVars;
+
+            // The instance variables of that wrapper, which ReadRegex has to read itself (below); ReadInstanced
+            // assigns them once the Regexp exists.
+            private List<KeyValuePair<string, object>> _regexIVars;
 
             private RubyRegex/*!*/ ReadRegex() {
                 MutableString pattern = ReadString();
-                if (!_regexHasIVars) {
-                    pattern = RemoveUndefinedEscapes(pattern);
-                }
+                bool wrapped = _regexHasIVars;
                 _regexHasIVars = false;
                 int raw = _reader.ReadByte();
+
+                // MRI's r_object reads the wrapper's instance variables before it looks at the pattern, and takes a
+                // record for a Ruby 1.8 one unless an encoding is among them: an "I" wrapper that only carries
+                // other instance variables (@note) does not make it a 1.9 record.
+                bool hasEncoding = false;
+                if (wrapped) {
+                    var ivars = new List<KeyValuePair<string, object>>();
+                    int count = ReadInt32();
+                    for (int i = 0; i < count; i++) {
+                        string name = ReadIdentifier();
+                        object value = ReadAnObject(false);
+                        hasEncoding |= ParseEncodingIVar(name, value) != null;
+                        ivars.Add(new KeyValuePair<string, object>(name, value));
+                    }
+                    _regexIVars = ivars;
+                }
+                if (!hasEncoding) {
+                    pattern = RemoveUndefinedEscapes(pattern);
+                }
                 var flags = (RubyRegexOptions)(raw & (int)(RubyRegexOptions.IgnoreCase | RubyRegexOptions.Extended | RubyRegexOptions.Multiline | RubyRegexOptions.FIXED));
 
                 // The bit MRI writes at 0x10 means "this regexp's encoding is fixed", which is
@@ -1808,9 +1829,19 @@ namespace IronRuby.Builtins {
 
                 // a Regexp, or a Regexp subclass's instance ('C')
                 _regexHasIVars = (typeFlag == '/' || typeFlag == 'C');
+                _regexIVars = null;
                 object obj = ReadAnObject(typeFlag, objectRef);
                 _regexHasIVars = false;
-                ReadIVars(obj);
+                var read = _regexIVars;
+                _regexIVars = null;
+                if (read != null) {
+                    // ReadRegex has read them already
+                    foreach (var ivar in read) {
+                        SetIVar(obj, ivar.Key, ivar.Value);
+                    }
+                } else {
+                    ReadIVars(obj);
+                }
                 return obj;
             }
 
@@ -1819,12 +1850,16 @@ namespace IronRuby.Builtins {
                 for (int i = 0; i < count; i++) {
                     string name = ReadIdentifier();
                     object value = ReadAnObject(false);
-                    RubyEncoding encoding = ParseEncodingIVar(name, value);
-                    if (encoding != null) {
-                        ForceMarshalEncoding(obj, encoding);
-                    } else {
-                        Context.SetInstanceVariable(obj, name, value);
-                    }
+                    SetIVar(obj, name, value);
+                }
+            }
+
+            private void SetIVar(object obj, string/*!*/ name, object value) {
+                RubyEncoding encoding = ParseEncodingIVar(name, value);
+                if (encoding != null) {
+                    ForceMarshalEncoding(obj, encoding);
+                } else {
+                    Context.SetInstanceVariable(obj, name, value);
                 }
             }
 
