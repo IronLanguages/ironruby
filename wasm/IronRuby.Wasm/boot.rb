@@ -66,8 +66,14 @@ module IronRubyWasm
     def clean_backtrace(e)
       # leave out the kernel's own frames and the host's CLR frames (":0:in 'Run'", ...)
       # and a session after a reset reads "<main>" like the first one
-      (e.backtrace || []).reject { |line| line.start_with?(BOOT_FILE) || line.start_with?(":0:") }
-        .map { |line| line.sub(SESSION_FRAME, "in '<main>'") }
+      lines = (e.backtrace || []).reject { |line| line.start_with?(BOOT_FILE) || line.start_with?(":0:") }
+      # The session's own frame is the outermost one with that label; a file the code required has
+      # the same label further in and keeps it. (The first session's frame is <main> already.)
+      unless @binding.equal?(TOPLEVEL_BINDING)
+        i = lines.rindex { |line| line.include?(SESSION_FRAME) }
+        lines[i] = lines[i].sub(SESSION_FRAME, "in '<main>'") if i
+      end
+      lines
     end
   end
 

@@ -141,6 +141,7 @@ namespace IronRuby.Runtime {
             if (frames == null) {
                 return;
             }
+            bool skippedAny = false;
             foreach (var info in frames) {
                 string methodName = info.MethodName;
                 string file = info.DebugInfo != null ? info.DebugInfo.FileName : null;
@@ -150,7 +151,11 @@ namespace IronRuby.Runtime {
                 }
                 // the rules of the CLR stack's walk: "<internal:...>" files too, and no frame for a helper method
                 if (!_keepInternalFrames && IsInternalFrameFile(file)) {
-                    AddInternalFrame(methodName);
+                    // and the frames it drops still count for caller(n), as in AddBacktrace
+                    int dropped = AddInternalFrame(methodName);
+                    if (_trace.Count == 0 && !skippedAny) {
+                        skipFrames = Math.Max(0, skipFrames - dropped);
+                    }
                     continue;
                 }
                 foreach (var deferred in _deferredMethodNames) {
@@ -158,6 +163,7 @@ namespace IronRuby.Runtime {
                         _trace.Add(CreateFrame(FormatFrame(file, line, deferred)));
                     } else {
                         skipFrames--;
+                        skippedAny = true;
                     }
                 }
                 _deferredMethodNames.Clear();
@@ -165,6 +171,7 @@ namespace IronRuby.Runtime {
                     _trace.Add(CreateFrame(FormatFrame(file, line, methodName)));
                 } else {
                     skipFrames--;
+                    skippedAny = true;
                 }
             }
         }
