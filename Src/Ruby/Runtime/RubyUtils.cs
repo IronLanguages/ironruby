@@ -93,7 +93,9 @@ namespace IronRuby.Runtime {
             if (value >= Int32.MinValue && value <= Int32.MaxValue) {
                 return GetFixnumHashCode((int)value);
             }
-            return MixHash(unchecked((uint)value ^ (uint)(value >> 32)) + 0x7feb352d);
+            // The low half is keyed before the high half is added: folded together first, every (n << 32) + n
+            // had the same hash under any key.
+            return MixHash(unchecked((uint)MixHash((uint)value) + (uint)(value >> 32) + 0x7feb352d));
         }
 
         public static int GetIntegerHashCode(BigInteger value) {

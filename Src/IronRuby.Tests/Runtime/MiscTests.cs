@@ -7009,6 +7009,7 @@ t(""resp"") { 1 ^ z }
 w = Object.new; def w.coerce(x) = [self, x]; def w.respond_to_missing?(m, p = false) = m == :&
 t(""rtm no mm"") { 1 & w }
 t(""float"") { 1 & 1.5 }
+t(""int64 hash"") { [(2**32 + 1).hash == (2**33 + 2).hash, (2**40).hash == (2**40).hash, {2**40 => 1}[2**40], Rational(2**32 + 1, 1).hash == Rational(2**33 + 2, 1).hash] }
 t(""rat hash"") { [Rational(1, 2).hash == Rational(2, 4).hash, Rational(2**70, 3).hash == Rational(2**70, 3).hash, Complex(1, 2).hash == Complex(1, 2).hash, Complex(1.5, 2).hash == Complex(1.5, 2).hash, (2**70).hash == (2**70).hash, (2**64).hash == (2**64 + 2**32).hash, {2**80 => 1}[2**80], {Rational(1, 3) => 2}[Rational(2, 6)], {Complex(1, 2**70) => 3}[Complex(1, 2**70)]] }
 ", @"
 load raise: TA
@@ -7023,6 +7024,7 @@ mm no rtm: :called
 resp: :viaresp
 rtm no mm: ""TypeError: Object can't be coerced into Integer""
 float: ""TypeError: 1.5 can't be coerced into Integer""
+int64 hash: [false, true, 1, false]
 rat hash: [true, true, true, true, true, false, 1, 2, 3]
 ");
         }
