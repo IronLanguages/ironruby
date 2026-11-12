@@ -32,11 +32,13 @@ class Continuation
     # the block finishes.
     private def __ir_callcc__
       cont = __ir_allocate__
-      cont.__send__(:__ir_set_hidden_ivar__, :@__state__, [Thread.current, Fiber.current, true])
+      # set once, and changed in place afterwards: the block may freeze the continuation
+      state = [Thread.current, Fiber.current, true]
+      cont.__send__(:__ir_set_hidden_ivar__, :@__state__, state)
       begin
         catch(cont) { yield cont }
       ensure
-        cont.__send__(:__ir_set_hidden_ivar__, :@__state__, [Thread.current, Fiber.current, false])
+        state[2] = false
       end
     end
   end

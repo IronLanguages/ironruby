@@ -1703,7 +1703,12 @@ class String
     capacity = opts[:capacity]
     unless capacity.nil?
       capacity = ::Math.__send__(:__int__, capacity)
-      capacity = ::Integer.try_convert(opts[:capacity]) unless ::Integer === capacity
+      unless ::Integer === capacity
+        # the one #to_int call's answer decides: asking again could get a different one
+        name = __ir_type_name__(opts[:capacity])
+        ::Kernel.raise(::TypeError,
+          "can't convert #{name} to Integer (#{name}#to_int gives #{capacity.class})")
+      end
       unless capacity >= -0x8000_0000_0000_0000 && capacity <= 0x7fff_ffff_ffff_ffff
         ::Kernel.raise(::RangeError, "bignum too big to convert into 'long'")
       end
