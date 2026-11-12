@@ -2888,7 +2888,7 @@ namespace IronRuby.Prism {
                 new SimpleAssignmentExpression(listVar, list, null, span),
                 new UnlessExpression(
                     new MethodCall(listVar, "empty?", null, span),
-                    new Statements(new MethodCall(KernelModule(span), "raise", new Arguments(new Expression[] {
+                    new Statements(new MethodCall(KernelModule(span), "__ir_raise__", new Arguments(new Expression[] {
                         new ConstantVariable(null, "ArgumentError", span), message
                     }), span)),
                     null, span)), span);
@@ -2917,13 +2917,14 @@ namespace IronRuby.Prism {
         /// `::Kernel`, the receiver of the raises this lowering emits. An implicit-self `raise` would run a
         /// `raise` the surrounding class defines itself (Fiber#raise, Thread#raise, a user's own), and a bare
         /// `ArgumentError` a constant of that name in the lexical scope.
+        /// The method called on it is Kernel.__ir_raise__, Kernel.raise under a name a program does not redefine.
         /// </summary>
         private static Expression/*!*/ KernelModule(SourceSpan span) {
             return new ConstantVariable(null, "Kernel", span);
         }
 
         private Expression/*!*/ RaiseError(string/*!*/ className, string/*!*/ message, SourceSpan span) {
-            return new MethodCall(KernelModule(span), "raise", new Arguments(new Expression[] {
+            return new MethodCall(KernelModule(span), "__ir_raise__", new Arguments(new Expression[] {
                 new ConstantVariable(null, className, span),
                 new StringLiteral(message, _encoding, span)
             }), span);
@@ -2973,7 +2974,7 @@ namespace IronRuby.Prism {
                 ? new MethodCall(subject, "inspect", null, span)
                 : new MethodCall(new ConstantVariable(null, "NoMatchingPatternError", span), "__message__",
                     new Arguments(new Expression[] { subject, _patternFailure }), span);
-            Expression result = new MethodCall(KernelModule(span), "raise", new Arguments(new Expression[] {
+            Expression result = new MethodCall(KernelModule(span), "__ir_raise__", new Arguments(new Expression[] {
                 new ConstantVariable(null, "NoMatchingPatternError", span),
                 message
             }), span);
@@ -2982,7 +2983,7 @@ namespace IronRuby.Prism {
                 result = new ConditionalExpression(
                     new MethodCall(_patternMissingKey, "nil?", null, span),
                     result,
-                    new MethodCall(KernelModule(span), "raise", new Arguments(
+                    new MethodCall(KernelModule(span), "__ir_raise__", new Arguments(
                         new MethodCall(new ConstantVariable(null, "NoMatchingPatternKeyError", span), "__missing_key__",
                             new Arguments(new Expression[] { subject, _patternMissingKey }), span)
                     ), span),

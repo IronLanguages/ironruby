@@ -670,8 +670,11 @@ namespace IronRuby.Builtins {
             if (site != null && operatorName == "+" && i < list.Count && IListOps.IsBuiltinMethod(scope.RubyContext.IntegerClass, "+")) {
                 // the first addition through the call site, which refuses a #+ made private
                 result = site.Target(site, scope, result, list[i++]);
-                for (; i < list.Count && result is int && list[i] is int; i++) {
-                    result = ClrInteger.Add((int)result, (int)list[i]);
+                // that call ran Ruby code if the first element is not an Integer, and it may have redefined Integer#+
+                if (IListOps.IsBuiltinMethod(scope.RubyContext.IntegerClass, "+")) {
+                    for (; i < list.Count && result is int && list[i] is int; i++) {
+                        result = ClrInteger.Add((int)result, (int)list[i]);
+                    }
                 }
             }
 

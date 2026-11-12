@@ -1235,6 +1235,52 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// A <see cref="RecursionTracker"/> for operations on two objects (==, eql?), MRI's rb_exec_recursive_paired:
+        /// the operation has recursed only when it comes back to the same two operands in the same order. Tracking each
+        /// operand by itself would call `a == d' a repeat inside `a == b' and `c == d', though that pair was never compared.
+        /// </summary>
+        public class PairRecursionTracker {
+            private sealed class PairComparer : IEqualityComparer<KeyValuePair<object, object>> {
+                public bool Equals(KeyValuePair<object, object> x, KeyValuePair<object, object> y) {
+                    return ReferenceEquals(x.Key, y.Key) && ReferenceEquals(x.Value, y.Value);
+                }
+
+                public int GetHashCode(KeyValuePair<object, object> pair) {
+                    return unchecked(RuntimeHelpers.GetHashCode(pair.Key) * 31 + RuntimeHelpers.GetHashCode(pair.Value));
+                }
+            }
+
+            // per thread, as in RecursionTracker
+            private readonly System.Threading.ThreadLocal<HashSet<KeyValuePair<object, object>>>/*!*/ _pairs =
+                new System.Threading.ThreadLocal<HashSet<KeyValuePair<object, object>>>(
+                    () => new HashSet<KeyValuePair<object, object>>(new PairComparer()));
+
+            /// <summary>
+            /// Marks the pair as being inside the operation on this thread until the result is disposed.
+            /// Null if it already is.
+            /// </summary>
+            public IDisposable TrackPair(object first, object second) {
+                var pairs = _pairs.Value;
+                var pair = new KeyValuePair<object, object>(first, second);
+                return pairs.Add(pair) ? new PairHandle(pairs, pair) : null;
+            }
+
+            private sealed class PairHandle : IDisposable {
+                private readonly HashSet<KeyValuePair<object, object>>/*!*/ _pairs;
+                private readonly KeyValuePair<object, object> _pair;
+
+                internal PairHandle(HashSet<KeyValuePair<object, object>>/*!*/ pairs, KeyValuePair<object, object> pair) {
+                    _pairs = pairs;
+                    _pair = pair;
+                }
+
+                public void Dispose() {
+                    _pairs.Remove(_pair);
+                }
+            }
+        }
+
         [MultiRuntimeAware]
         private static readonly RecursionTracker _infiniteInspectTracker = new RecursionTracker();
 

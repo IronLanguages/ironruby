@@ -5279,6 +5279,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.BlockParam, System.Object, System.Double, System.Double, System.Double, System.Double, System.Object>(IronRuby.Builtins.KernelOps.FloatStep)
             );
             
+            DefineLibraryMethod(module, "__ir_raise__", 0x61, 
+                0x80000000U, 
+                new Action<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.CallSiteStorage<Action<System.Runtime.CompilerServices.CallSite, System.Exception, System.Object>>, IronRuby.Runtime.RubyScope, System.Object, System.Object[]>(IronRuby.Builtins.KernelOps.RaiseException)
+            );
+            
             DefineLibraryMethod(module, "__method__", 0x61, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyScope, System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetCurrentMethodName)

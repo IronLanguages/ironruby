@@ -288,8 +288,8 @@ namespace IronRuby.Builtins {
             // A comparison that comes back to the same two ranges answers true there, as MRI's
             // (rb_exec_recursive_paired in range_eq): ranges that contain themselves used to
             // overflow the stack.
-            using (IDisposable handleSelf = _EqualsTracker.TrackObject(self), handleOther = _EqualsTracker.TrackObject(other)) {
-                if (handleSelf == null && handleOther == null) {
+            using (IDisposable handle = _EqualsTracker.TrackPair(self, other)) {
+                if (handle == null) {
                     return true;
                 }
                 return Protocols.IsEqual(equals, self.Begin, other.Begin)
@@ -299,10 +299,10 @@ namespace IronRuby.Builtins {
         }
 
         [MultiRuntimeAware]
-        private static readonly RubyUtils.RecursionTracker _EqualsTracker = new RubyUtils.RecursionTracker();
+        private static readonly RubyUtils.PairRecursionTracker _EqualsTracker = new RubyUtils.PairRecursionTracker();
 
         [MultiRuntimeAware]
-        private static readonly RubyUtils.RecursionTracker _EqlTracker = new RubyUtils.RecursionTracker();
+        private static readonly RubyUtils.PairRecursionTracker _EqlTracker = new RubyUtils.PairRecursionTracker();
 
         /// <summary>
         /// Returns true only if self is a Range, has equivalent beginning and end items (by comparing them with eql?),
@@ -320,8 +320,8 @@ namespace IronRuby.Builtins {
                 return true;
             }
 
-            using (IDisposable handleSelf = _EqlTracker.TrackObject(self), handleOther = _EqlTracker.TrackObject(other)) {
-                if (handleSelf == null && handleOther == null) {
+            using (IDisposable handle = _EqlTracker.TrackPair(self, other)) {
+                if (handle == null) {
                     return true;
                 }
                 var site = equalsStorage.GetCallSite("eql?");

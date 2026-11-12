@@ -561,8 +561,29 @@ namespace IronRuby.Runtime {
                 throw RubyExceptions.MakeCoercionError(context, other, self);
             }
 
-            var opSite = binaryOpStorage.GetCallSite(binaryOp);
-            return opSite.Target(opSite, pair[0], pair[1]);
+            // rb_exec_recursive_paired around the call (num_funcall_bit_1): a #coerce that hands the Integer back
+            // as the receiver - [1, other] for `1 & other' - would come straight back here, and kept doing so until
+            // the stack overflowed and took the process with it. MRI raises a NameError that shows the operation.
+            using (IDisposable handle = _BitwiseCoercionTracker.TrackPair(pair[0], pair[1])) {
+                if (handle == null) {
+                    // NameError#name is the operator; there is no receiver
+                    var error = RubyExceptions.CreateNameError("{0}{1}{2}", BitwiseOperand(context, pair[0]), binaryOp, BitwiseOperand(context, pair[1]));
+                    RubyExceptionData.GetInstance(error).Name = context.CreateSymbol(binaryOp, RubyEncoding.UTF8);
+                    throw error;
+                }
+                var opSite = binaryOpStorage.GetCallSite(binaryOp);
+                return opSite.Target(opSite, pair[0], pair[1]);
+            }
+        }
+
+        [Microsoft.Scripting.MultiRuntimeAware]
+        private static readonly RubyUtils.PairRecursionTracker _BitwiseCoercionTracker = new RubyUtils.PairRecursionTracker();
+
+        private static string/*!*/ BitwiseOperand(RubyContext/*!*/ context, object obj) {
+            // the operand's #to_s, as the %PRIsVALUE of MRI's message
+            var site = context.GetClassOf(obj).ToStringSite;
+            var str = site.Target(site, obj) as MutableString;
+            return (str ?? RubyUtils.ObjectToMutableString(context, obj)).ToString();
         }
 
         private static bool TryCoerceAndApply(

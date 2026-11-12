@@ -6856,6 +6856,61 @@ NoMatchingPatternError: 2: 1 === 2 does not return true
         }
 
         /// <summary>
+        /// Review findings on #212, each checked against CRuby 4.0.9, whose output this is: String#initialize with
+        /// keywords converts as it does without, checks the capacity and only empties for one; a `def Kernel.raise'
+        /// does not swallow an unknown keyword; inject(:+) sees an Integer#+ redefined by its first call; a #coerce
+        /// that hands the Integer back is a NameError, not a stack overflow; Range#== guards pairs of ranges;
+        /// Rational#hash keys its parts; a peeked Enumerator is not advanced from another thread.
+        /// </summary>
+        public void Review212_1() {
+            TestOutput(@"
+require 'ruby4'
+$VERBOSE = nil
+def t(name); r = begin; yield; rescue Exception => e; ""#{e.class}: #{e.message}""; end; puts ""#{name}: #{r.inspect}""; end
+bo = Class.new(BasicObject) { def to_str = ""bo"" }.new
+pv = Class.new { private def to_str = ""pv"" }.new
+t(""str bo"") { String.new(bo, capacity: 10) }
+t(""str pv"") { String.new(pv, capacity: 10) }
+t(""cap big"") { String.new(capacity: 2**70) }
+t(""cap to_int"") { String.new(capacity: Class.new { def to_int = ""x"" }.new).size rescue $!.class }
+t(""enc only"") { s = +""abc""; s.send(:initialize, encoding: Encoding::BINARY); [s, s.encoding] }
+t(""cap only"") { s = +""abc""; s.send(:initialize, capacity: 5); s }
+t(""cap nil"") { s = +""abc""; s.send(:initialize, capacity: nil); s }
+t(""kraise"") { m = Kernel.method(:raise); Kernel.define_singleton_method(:raise) { |*| nil }
+  begin; def f(k: 0) = :ran; f(bad: 1)
+  ensure; Kernel.define_singleton_method(:raise, m); end }
+t(""inject"") { h = Object.new; def h.+(o); Integer.class_eval { alias_method :__p, :+; def +(o) = 100 }; 1; end
+  begin; [h, 1, 2].inject(:+); ensure; Integer.class_eval { alias_method :+, :__p }; end }
+t(""bit rec"") { o = Object.new; def o.coerce(x) = [x, self]; def o.to_s = ""OBJ""; 1 & o }
+t(""bit rec2"") { o = Object.new; def o.coerce(x) = [1, self]; def o.to_s = ""OBJ""; (1 | o) rescue [$!.class, $!.message, $!.name] }
+t(""bit ok"") { o = Object.new; def o.coerce(x) = [6, 3]; [1 & o, 1 | o, 1 ^ o] }
+class P; include Comparable; attr_accessor :o; def <=>(x) = 0; def ==(x) = (o ? o.call : true); end
+t(""range pair"") { p1, p2, p3 = P.new, P.new, P.new; a = (p1..1); b = (p2..1); c = (p3..1); d = (P.new..2)
+  p3.o = -> { a == d }; p1.o = -> { c == d }; [a == b, a.eql?(a.dup)] }
+t(""range self"") { r = Class.new(Range).allocate; r.send(:initialize, 1, 2); x = [r]; [r == r, x == x] }
+t(""rat hash"") { [Rational(2, 4).hash == Rational(1, 2).hash, Complex(1, 2).hash == Complex(1, 2).hash, {Rational(1,3) => 1}[Rational(2,6)], Rational(1, 62).hash == Rational(2, 31).hash] }
+t(""enum next"") { e = [1, 2, 3].each; e.peek; [e.next, Thread.new { e.next rescue $!.class }.value, e.next] }
+", @"
+str bo: ""bo""
+str pv: ""pv""
+cap big: ""RangeError: bignum too big to convert into 'long'""
+cap to_int: TypeError
+enc only: [""abc"", #<Encoding:BINARY (ASCII-8BIT)>]
+cap only: """"
+cap nil: ""abc""
+kraise: ""ArgumentError: unknown keyword: :bad""
+inject: 100
+bit rec: ""NameError: 1&OBJ""
+bit rec2: [NameError, ""1|OBJ"", :|]
+bit ok: [2, 7, 5]
+range pair: [false, true]
+range self: [true, true]
+rat hash: [true, true, 1, false]
+enum next: [1, FiberError, 2]
+");
+        }
+
+        /// <summary>
         /// `defined?' in a condition makes no call to #freeze, as in CRuby: only whether the answer is nil counts, also for an
         /// operand of &amp;&amp; or || in a condition. Expected output is CRuby 4.0's.
         /// </summary>

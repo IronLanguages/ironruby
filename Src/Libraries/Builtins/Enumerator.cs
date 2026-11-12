@@ -764,14 +764,22 @@ namespace IronRuby.Builtins {
         /// or raises StopIteration at the end; <paramref name="consume"/> takes them out as well.
         /// Ends with the cursor's lock released: everything that can raise happens outside it.
         /// </summary>
-        private static object CursorStep(RubyContext/*!*/ context, Enumerator/*!*/ self, ExternalCursor/*!*/ cursor, bool consume) {
+        private static object CursorStep(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slowStorage,
+            Enumerator/*!*/ self, ExternalCursor/*!*/ cursor, bool consume) {
+
+            RubyContext context = slowStorage.Context;
             StopIteration stop = null;
-            bool first = false;
+            bool first = false, acrossThreads = false;
             object value;
             using (new RubyUtils.UninterruptedLock(cursor)) {
                 if (!cursor.Peeked) {
                     if (cursor.Done) {
                         stop = cursor.StopException;
+                    } else if (cursor.Thread != RubyUtils.CurrentRubyThread) {
+                        // GetCursor let this thread in because a value was peeked, and the owner has taken
+                        // it since: producing the next one here would run the iteration on a thread that
+                        // does not own it. Decided under the lock that the owner consumes under.
+                        acrossThreads = true;
                     } else {
                         // the suspended yield returns (next_ii), taking the fed value with it
                         if (cursor.Started) {
@@ -793,7 +801,7 @@ namespace IronRuby.Builtins {
                     }
                 }
 
-                if (stop == null) {
+                if (stop == null && !acrossThreads) {
                     value = cursor.PeekValue;
                     if (consume) {
                         cursor.Peeked = false;
@@ -801,6 +809,11 @@ namespace IronRuby.Builtins {
                     }
                     return value;
                 }
+            }
+
+            if (acrossThreads) {
+                // raises FiberError
+                SlowStep(slowStorage, self, SlowAcrossThreads);
             }
 
             // get_next_values: the end is raised once as such, and from then on as a new StopIteration
@@ -846,7 +859,7 @@ namespace IronRuby.Builtins {
             if (cursor == null) {
                 return ValuesToValue(SlowStep(slowStorage, self, SlowAdvance), false);
             }
-            return CursorStep(slowStorage.Context, self, cursor, true);
+            return CursorStep(slowStorage, self, cursor, true);
         }
 
         [RubyMethod("peek")]
@@ -855,7 +868,7 @@ namespace IronRuby.Builtins {
             if (cursor == null) {
                 return ValuesToValue(SlowStep(slowStorage, self, SlowPeek), true);
             }
-            object value = CursorStep(slowStorage.Context, self, cursor, false);
+            object value = CursorStep(slowStorage, self, cursor, false);
             return cursor.Multiple ? new RubyArray((RubyArray)value) : value;
         }
 
@@ -865,7 +878,7 @@ namespace IronRuby.Builtins {
             if (cursor == null) {
                 return SlowStep(slowStorage, self, SlowAdvance);
             }
-            return CursorValues(cursor, CursorStep(slowStorage.Context, self, cursor, true), false);
+            return CursorValues(cursor, CursorStep(slowStorage, self, cursor, true), false);
         }
 
         [RubyMethod("peek_values")]
@@ -874,7 +887,7 @@ namespace IronRuby.Builtins {
             if (cursor == null) {
                 return new RubyArray(SlowStep(slowStorage, self, SlowPeek));
             }
-            return CursorValues(cursor, CursorStep(slowStorage.Context, self, cursor, false), true);
+            return CursorValues(cursor, CursorStep(slowStorage, self, cursor, false), true);
         }
 
         /// <summary>
