@@ -6951,6 +6951,34 @@ frozen cont: :ok
         }
 
         /// <summary>
+        /// Marshal.load and the "I" wrapper of a Regexp: it belongs to the Regexp right under it, not to a Regexp
+        /// that is an element of a wrapped Array or Hash subclass; an instance variable that refers to the Regexp
+        /// being read is MRI's "bad link", and to a Regexp subclass's instance the object. CRuby 4.0.9's output.
+        /// </summary>
+        public void Marshal_RegexpWrapper1() {
+            TestOutput(@"
+require 'ruby4'
+def t; r = begin; yield; rescue Exception => e; ""#{e.class}: #{e.message[0,70]}""; end; p r; end
+class MyArr < Array; end
+class MyHash < Hash; end
+class RX < Regexp; end
+t { r = Regexp.new(""ab""); r.instance_variable_set(:@self, r); r.instance_variable_set(:@list, [r, ""x""]); l = Marshal.load(Marshal.dump(r)); [l.source, l.instance_variable_get(:@self).equal?(l), l.instance_variable_get(:@list)[0].equal?(l)] }
+t { a = MyArr.new; a << Regexp.new(""a"", Regexp::NOENCODING) << ""s"" << /b/; a.instance_variable_set(:@n, 5); l = Marshal.load(Marshal.dump(a)); [l.class, l.map(&:class), l[0].source, l[0].encoding, l[1], l.instance_variable_get(:@n)] }
+t { h = MyHash.new; h[Regexp.new(""a"", Regexp::NOENCODING)] = /c/n; h.instance_variable_set(:@n, 6); l = Marshal.load(Marshal.dump(h)); [l.class, l.keys[0].source, l.values[0].source, l.instance_variable_get(:@n)] }
+t { r = RX.new(""q\\d""); r.instance_variable_set(:@me, r); l = Marshal.load(Marshal.dump(r)); [l.class, l.source, l.instance_variable_get(:@me).equal?(l)] }
+t { r = Regexp.new(""x""); s = ""str""; r.instance_variable_set(:@s, s); l = Marshal.load(Marshal.dump([s, r, s])); [l[1].instance_variable_get(:@s).equal?(l[0]), l[2].equal?(l[0])] }
+t { b = Regexp.new(""\xff"".b, Regexp::NOENCODING); a = MyArr.new; a << b << ""s""; a.instance_variable_set(:@n, 5); d = Marshal.dump(a); l = Marshal.load(d); [d.count(""I""), b.encoding, l.class, l[0].source.bytes, l[0].encoding, l[1], l.instance_variable_get(:@n)] }
+", @"
+""ArgumentError: dump format error (bad link)""
+[MyArr, [Regexp, String, Regexp], ""a"", #<Encoding:US-ASCII>, ""s"", 5]
+[MyHash, ""a"", ""c"", 6]
+[RX, ""q\\d"", true]
+[true, true]
+[2, #<Encoding:BINARY (ASCII-8BIT)>, MyArr, [255], #<Encoding:BINARY (ASCII-8BIT)>, ""s"", 5]
+");
+        }
+
+        /// <summary>
         /// `defined?' in a condition makes no call to #freeze, as in CRuby: only whether the answer is nil counts, also for an
         /// operand of &amp;&amp; or || in a condition. Expected output is CRuby 4.0's.
         /// </summary>

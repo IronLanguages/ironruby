@@ -1320,6 +1320,13 @@ namespace IronRuby.Builtins {
             // Set while ReadInstanced reads a Regexp whose "I" wrapper follows with its instance variables.
             private bool _regexHasIVars;
 
+            // The link id of the Regexp ReadInstanced is about to read, and of the one whose instance variables are
+            // being read (-1: none), which a link among them cannot refer to yet.
+            private int _regexRef = -1, _regexBeingRead = -1;
+
+            // Set while ReadInstanced reads a 'C' record under an "I" wrapper, until ReadUserClass has read its type.
+            private bool _userClassHasIVars;
+
             // The instance variables of that wrapper, which ReadRegex has to read itself (below); ReadInstanced
             // assigns them once the Regexp exists.
             private List<KeyValuePair<string, object>> _regexIVars;
@@ -1337,11 +1344,17 @@ namespace IronRuby.Builtins {
                 if (wrapped) {
                     var ivars = new List<KeyValuePair<string, object>>();
                     int count = ReadInt32();
-                    for (int i = 0; i < count; i++) {
-                        string name = ReadIdentifier();
-                        object value = ReadAnObject(false);
-                        hasEncoding |= ParseEncodingIVar(name, value) != null;
-                        ivars.Add(new KeyValuePair<string, object>(name, value));
+                    int outer = _regexBeingRead;
+                    _regexBeingRead = _regexRef;
+                    try {
+                        for (int i = 0; i < count; i++) {
+                            string name = ReadIdentifier();
+                            object value = ReadAnObject(false);
+                            hasEncoding |= ParseEncodingIVar(name, value) != null;
+                            ivars.Add(new KeyValuePair<string, object>(name, value));
+                        }
+                    } finally {
+                        _regexBeingRead = outer;
                     }
                     _regexIVars = ivars;
                 }
@@ -1828,10 +1841,18 @@ namespace IronRuby.Builtins {
                 }
 
                 // a Regexp, or a Regexp subclass's instance ('C')
-                _regexHasIVars = (typeFlag == '/' || typeFlag == 'C');
+                // The wrapper belongs to the object right under it: a Regexp, or a Regexp subclass's instance ('C',
+                // where ReadUserClass hands it on once it has seen what the subclass wraps). Left set for every 'C',
+                // it reached a Regexp that was an element of an Array subclass, which then took the bytes after
+                // it for instance variables of its own.
+                _regexHasIVars = (typeFlag == '/');
+                // (a Regexp subclass's instance exists before its record is read, and can be linked to)
+                _regexRef = (typeFlag == '/') ? objectRef : -1;
+                _userClassHasIVars = (typeFlag == 'C');
                 _regexIVars = null;
                 object obj = ReadAnObject(typeFlag, objectRef);
                 _regexHasIVars = false;
+                _userClassHasIVars = false;
                 var read = _regexIVars;
                 _regexIVars = null;
                 if (read != null) {
@@ -1889,6 +1910,9 @@ namespace IronRuby.Builtins {
                 }
                 bool loaded = false;
                 int typeFlag = _reader.ReadByte();
+                // see ReadInstanced
+                _regexHasIVars = _userClassHasIVars && typeFlag == '/';
+                _userClassHasIVars = false;
                 switch (typeFlag) {
                     case '"':
                         MutableString msc = (obj as MutableString);
@@ -2010,6 +2034,12 @@ namespace IronRuby.Builtins {
                         int link = ReadInt32();
                         if (!_objects.TryGetValue(link, out obj)) {
                             throw RubyExceptions.CreateArgumentError("dump format error (unlinked)");
+                        }
+                        // A Regexp's instance variables are read before the Regexp exists (ReadRegex): one of them
+                        // that refers to it is MRI's "bad link" (r_object's link to an entry that is still Qundef).
+                        // Not any empty slot: a _load that answers nil fills its slot with nil.
+                        if (link == _regexBeingRead) {
+                            throw RubyExceptions.CreateArgumentError("dump format error (bad link)");
                         }
                         // MRI runs the proc over a back-reference too - the proc sees each place
                         // an object appears in the dump, not each object - but only once the
