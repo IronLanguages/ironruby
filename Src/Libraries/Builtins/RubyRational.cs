@@ -421,7 +421,9 @@ namespace IronRuby.Builtins {
         public static int Hash(RubyRational/*!*/ self) {
             int h1 = Big(self._numerator).GetHashCode();
             int h2 = Big(self._denominator).GetHashCode();
-            return RubyUtils.GetFixnumHashCode(unchecked((h1 * 31 + h2) * 31 + 0x52617469));
+            // The first part is keyed before the second is added: keying only the sum would leave every pair
+            // with the same h1 * 31 + h2 colliding under any key (Rational(n, 1000003 - 31 * n)).
+            return RubyUtils.GetFixnumHashCode(unchecked((RubyUtils.GetFixnumHashCode(h1) * 31 + h2) * 31 + 0x52617469));
         }
 
         #endregion
