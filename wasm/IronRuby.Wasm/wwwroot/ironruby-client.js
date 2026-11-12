@@ -19,7 +19,10 @@ export async function createIronRubyWorker(opts = {}) {
     msg.ok ? p.resolve(msg.value) : p.reject(new Error(msg.error));
   };
   worker.onerror = (e) => { for (const p of pending.values()) p.reject(new Error(e.message || 'worker error')); pending.clear(); };
+  // after terminate() the worker answers nothing: a call made then is refused, not left waiting for ever
+  let terminated = false;
   const call = (type, fields = {}, transfer = []) => new Promise((resolve, reject) => {
+    if (terminated) { reject(new Error('terminated')); return; }
     const id = nextId++;
     pending.set(id, { resolve, reject });
     worker.postMessage(Object.assign({ id, type }, fields), transfer);
@@ -34,6 +37,6 @@ export async function createIronRubyWorker(opts = {}) {
     loadAssembly: (bytes, fileName) => call('loadAssembly', { bytes, fileName }),
     loadAssemblyFromUrl: (url, fileName) => call('loadAssemblyFromUrl', { url: String(new URL(url, location.href)), fileName }),
     writeFile: (path, data) => call('writeFile', { path, data }),
-    terminate: () => { worker.terminate(); for (const p of pending.values()) p.reject(new Error('terminated')); pending.clear(); },
+    terminate: () => { terminated = true; worker.terminate(); for (const p of pending.values()) p.reject(new Error('terminated')); pending.clear(); },
   };
 }

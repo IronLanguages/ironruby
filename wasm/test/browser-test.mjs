@@ -148,6 +148,19 @@ shapes.first(2).sum(&:area).round(3)`);
     return looping;
   });
   check('worker: endless loop stopped by terminate()', wt === 'terminated', wt);
+
+  // reset: the locals of the session before are gone (they used to stay visible, as the new binding was a
+  // block's inside the old one), methods and constants stay, and a frame still reads <main>
+  await run('x = 20; def kept = :kept; KEPT = 1');
+  await page.evaluate(() => window.ir.reset());
+  r = await run('[defined?(x), kept, KEPT]');
+  check('reset drops locals, keeps methods and constants', r.ok && r.result === '[nil, :kept, 1]', r);
+  r = await run('y = 1; raise "after reset"');
+  check('no frame after reset names the session method', !r.ok && r.error.message === 'after reset' && !/__ironruby_wasm_session__/.test(JSON.stringify(r)), r);
+
+  // a call after terminate() is refused at once (it used to wait for an answer that never comes)
+  const late = await wpage.evaluate(() => window.ir.run('1').then(() => 'finished', e => e.message));
+  check('worker: a call after terminate() is rejected', late === 'terminated', late);
 } catch (e) {
   failures++;
   console.log('FAIL exception: ' + (e.stack || e));
