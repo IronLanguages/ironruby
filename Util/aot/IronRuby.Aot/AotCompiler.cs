@@ -303,6 +303,7 @@ namespace IronRuby.Aot {
             for (int i = 0; i < block.Expressions.Count; i++) {
                 var e = block.Expressions[i];
                 var outside = JumpFinder.TargetsOutside(e);
+                bool returns = false;
                 if (outside.Count > 0) {
                     if (returnLabel == null || returnLabel.Type == typeof(void) || outside.Any(t => t != returnLabel)) {
                         Count("top-level statements that jump out, left in place (SplitTopLevel)");
@@ -312,9 +313,13 @@ namespace IronRuby.Aot {
                     }
                     returned ??= Expression.Variable(typeof(bool), "#returned");
                     returnValue ??= Expression.Variable(returnLabel.Type, "#returnValue");
-                    chunkReturns = true;
+                    returns = true;
                 }
                 if (chunkSize > 0 && chunkSize + sizes[i] > SplitChunkNodes) Flush();
+                // Only now, for the chunk the statement goes into: set before the Flush above, the flag went to the chunk
+                // that Flush closed and was cleared with it, and a returning statement that started a chunk kept its jump
+                // to the top level's label, which the chunk's lambda does not define (LabelTargetUndefined).
+                chunkReturns |= returns;
                 chunk.Add(e);
                 chunkSize += sizes[i];
             }
