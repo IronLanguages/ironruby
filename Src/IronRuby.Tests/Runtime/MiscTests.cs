@@ -7152,5 +7152,26 @@ true
 #<ArgumentError: unexpected value for freeze: Integer>
 ");
         }
+
+        /// <summary>
+        /// Struct#inspect and Data#inspect write a member that is not a local or constant name as its Symbol, as MRI's
+        /// rb_struct_inspect does (#&lt;struct :@a=1&gt;); and a Struct member writer reports its parameter as `_`.
+        /// </summary>
+        public void Struct_InspectMemberNames1() {
+            TestOutput(@"
+require 'ruby4'
+k = Struct.new(:@a, :b, :c?, :E, :""f g"")
+p k.new(1, 2, 3, 4, 5)
+d = Data.define(:@a, :b)
+p d.new(1, 2)
+s = Struct.new(:a)
+p s.instance_method(:a=).parameters, s.instance_method(:a).parameters
+", @"
+#<struct :@a=1, b=2, :c?=3, E=4, :""f g""=5>
+#<data :@a=1, b=2>
+[[:req, :_]]
+[]
+");
+        }
     }
 }

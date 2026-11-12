@@ -1306,6 +1306,7 @@ namespace IronRuby.Tests {
                 Marshal_LoadedClasses1,
                 Time_NewDstStdZone1,
                 Kernel_CloneSpecialConstants1,
+                Struct_InspectMemberNames1,
             };
         }
     }

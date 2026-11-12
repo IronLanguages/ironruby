@@ -21,6 +21,7 @@ using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
+using IronRuby.Compiler;
 using System.Runtime.CompilerServices;
 
 namespace IronRuby.Builtins {
@@ -314,7 +315,13 @@ namespace IronRuby.Builtins {
                         result.Append(", ");
                     }
                     // TODO (encoding):
-                    result.Append(members[i]);
+                    // MRI's rb_struct_inspect writes a member that is not a local or constant name as its
+                    // Symbol: #<struct :@a=1, :c?=2>.
+                    if (Tokenizer.IsVariableName(members[i])) {
+                        result.Append(members[i]);
+                    } else {
+                        result.Append(context.Inspect(context.EncodeIdentifier(members[i])));
+                    }
                     result.Append('=');
                     result.Append(context.Inspect(data[i]));
                 }

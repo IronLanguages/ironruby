@@ -7157,11 +7157,13 @@ class Data
     return "#<data #{path}:...>" if stack.any? { |seen| seen.equal?(self) }
     stack.push(self)
     begin
-      out = "#<data "
+      out = +"#<data "
       out << path if named
       __data_members__.each_with_index do |name, i|
         out << (i > 0 ? ", " : (named ? " " : ""))
-        out << "#{name}=#{__data_value__(name).inspect}"
+        # a member that is not a local or constant name shows as its Symbol (:@a=1), as in MRI
+        label = name.to_s.match?(/\A[[:alpha:]_][[:alnum:]_]*\z/) ? name.to_s : name.to_sym.inspect
+        out << "#{label}=#{__data_value__(name).inspect}"
       end
       out << ">"
     ensure
