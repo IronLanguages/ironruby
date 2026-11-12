@@ -101,7 +101,22 @@ namespace IronRuby.Runtime {
             if (value.AsInt64(out small)) {
                 return GetIntegerHashCode(small);
             }
-            return value.GetHashCode();
+            // A bignum's words go through the keyed mix one by one: BigInteger.GetHashCode is not keyed, so
+            // bignums that collide in it could be computed ahead of time (CVE-2011-4815 again), and they are what
+            // Rational#hash and Complex#hash are made of.
+            byte[] bytes = value.ToByteArray();
+            uint h = 0x7feb352d;
+            unchecked {
+                int i = 0;
+                for (; i + 4 <= bytes.Length; i += 4) {
+                    h = (uint)MixHash(h + BitConverter.ToUInt32(bytes, i));
+                }
+                uint tail = 0;
+                for (int shift = 0; i < bytes.Length; i++, shift += 8) {
+                    tail |= (uint)bytes[i] << shift;
+                }
+                return MixHash(h + tail + (uint)bytes.Length);
+            }
         }
 
         public static int GetFloatHashCode(double value) {

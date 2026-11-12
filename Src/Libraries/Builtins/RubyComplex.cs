@@ -291,19 +291,20 @@ namespace IronRuby.Builtins {
         [RubyMethod("hash")]
         public static object Hash(CallSiteStorage<Func<CallSite, object, object>>/*!*/ slow, RubyComplex/*!*/ self) {
             if (self.HasSimpleParts) {
-                // the real part is keyed before the imaginary one is added, as in Rational#hash
+                // each part's hash is keyed before the two are combined, as in Rational#hash
                 return ScriptingRuntimeHelpers.Int32ToObject(RubyUtils.GetFixnumHashCode(
-                    unchecked((RubyUtils.GetFixnumHashCode(PartHash(self._real)) * 31 + PartHash(self._imaginary)) * 31 + 0x436f6d70)));
+                    unchecked((PartHash(self._real) * 31 + PartHash(self._imaginary)) * 31 + 0x436f6d70)));
             }
             var site = slow.GetCallSite("__ir_hash_slow__", 0);
             return site.Target(site, self);
         }
 
         private static int PartHash(object x) {
-            if (x is double) { return ((double)x).GetHashCode() ^ 0x5a5a5a5a; }
+            // Float#hash and Integer#hash, both keyed; they differ for 1.0 and 1, which #eql? tells apart
+            if (x is double) { return RubyUtils.GetFloatHashCode((double)x); }
             long v;
             TryLong(x, out v);
-            return v.GetHashCode();
+            return RubyUtils.GetIntegerHashCode(v);
         }
 
         // rb_complex_abs

@@ -419,11 +419,12 @@ namespace IronRuby.Builtins {
         // keyed, so colliding Rational keys cannot be computed ahead of time).
         [RubyMethod("hash")]
         public static int Hash(RubyRational/*!*/ self) {
-            int h1 = Big(self._numerator).GetHashCode();
-            int h2 = Big(self._denominator).GetHashCode();
-            // The first part is keyed before the second is added: keying only the sum would leave every pair
-            // with the same h1 * 31 + h2 colliding under any key (Rational(n, 1000003 - 31 * n)).
-            return RubyUtils.GetFixnumHashCode(unchecked((RubyUtils.GetFixnumHashCode(h1) * 31 + h2) * 31 + 0x52617469));
+            // Each part's hash is Integer#hash, which is keyed for bignums as well: keying only the sum would
+            // leave every pair with the same h1 * 31 + h2 colliding under any key (Rational(n, 1000003 - 31 * n)),
+            // and an unkeyed part hash every pair of parts that collide in it.
+            int h1 = RubyUtils.GetIntegerHashCode(Big(self._numerator));
+            int h2 = RubyUtils.GetIntegerHashCode(Big(self._denominator));
+            return RubyUtils.GetFixnumHashCode(unchecked((h1 * 31 + h2) * 31 + 0x52617469));
         }
 
         #endregion
