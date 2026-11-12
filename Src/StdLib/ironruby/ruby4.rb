@@ -5337,7 +5337,9 @@ class Enumerator
     begin
       begin
         fiber.kill if fiber && fiber.alive?
-      rescue ::StandardError
+      rescue ::Exception => e
+        # whatever its class (a ScriptError, a direct subclass of Exception); a signal is this thread's own
+        ::Kernel.raise if ::SignalException === e
       end
       receiver.__send__(:rewind) if receiver && receiver.respond_to?(:rewind, true)
     ensure

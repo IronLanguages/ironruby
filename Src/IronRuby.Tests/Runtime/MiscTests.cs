@@ -7069,10 +7069,19 @@ end
 s = Src2.new; e = s.to_enum; e.next
 r = begin; e.rewind; :ok; rescue => x; x.message; end
 p r, s.rew, (e.next rescue $!.class)
+[NotImplementedError, Class.new(Exception), SystemExit].each do |k|
+  c = Class.new(Src2) { define_method(:each) { |&b| begin; @items.each(&b); ensure; raise k, ""x""; end } }
+  s = c.new; e = s.to_enum; e.next
+  r = begin; e.rewind; :ok; rescue Exception => x; x.class; end
+  p [r, s.rew, (e.next rescue $!.class)]
+end
 ", @"
 :ok
 1
 1
+[:ok, 1, 1]
+[:ok, 1, 1]
+[:ok, 1, 1]
 ");
         }
 
