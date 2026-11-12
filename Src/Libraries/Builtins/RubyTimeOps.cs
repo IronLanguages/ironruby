@@ -249,7 +249,8 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateArgumentError("string contains null byte");
             }
 
-            if (s == "UTC") {
+            // MRI's utc_offset_arg compares "UTC" ignoring case (STRNCASECMP); "Z" has to be upper case.
+            if (String.Equals(s, "UTC", StringComparison.OrdinalIgnoreCase)) {
                 isUtc = true;
                 return true;
             }
@@ -553,6 +554,15 @@ namespace IronRuby.Builtins {
             }
             object zone = (args.Length == 7) ? args[6] : inZone;
 
+            // MRI's time_init_args takes :dst and :std for the zone (vtm.isdst): a local time, the symbol saying
+            // which of the two readings an hour the clocks go back over is.
+            bool preferDst = false;
+            var zoneSymbol = (args.Length == 7) ? zone as RubySymbol : null;
+            if (zoneSymbol != null && (zoneSymbol.ToString() == "dst" || zoneSymbol.ToString() == "std")) {
+                preferDst = zoneSymbol.ToString() == "dst";
+                zone = null;
+            }
+
             ExactNum offset;
             object zoneObject;
             RubyTimeZoneKind kind = ResolveZone(context, owner, zone, out offset, out zoneObject);
@@ -564,7 +574,7 @@ namespace IronRuby.Builtins {
             int minute = (args.Length > 4 && args[4] != null) ? ToIntComponent(context, args[4]) : 0;
             ExactNum second = (args.Length > 5 && args[5] != null) ? ToExactComponent(context, args[5]) : ExactNum.Zero;
 
-            return AssembleTime(context, year, month, day, hour, minute, second, kind, offset, zoneObject, true);
+            return AssembleTime(context, year, month, day, hour, minute, second, kind, offset, zoneObject, true, preferDst);
         }
 
         /// <summary>
@@ -1204,9 +1214,10 @@ namespace IronRuby.Builtins {
                 uint microseconds = dword2;
                 var subsec = ((microseconds == 0) ? ExactNum.Zero : ExactNum.Make(microseconds, RubyTime.MicrosecondsPerSecond))
                     + extraSubsec;
-                return CopyExtraIVars(context, time,
+                // an instance of the class _load was called on, as MRI's time_mload allocates it: MyTime stays MyTime
+                return CopyExtraIVars(context, time, Subclass(context, self,
                     WithLoadedZone(context, self, new RubyTime(secondsSinceEpoch, subsec, RubyTimeZoneKind.Local, ExactNum.Zero),
-                        hasOffset, offsetSeconds, zoneName));
+                        hasOffset, offsetSeconds, zoneName)));
             } else {
                 bool isUtc = (data[3] & 0x40) != 0;
                 int year = 1900 + (int)((dword1 >> 14) & 0xffff);
@@ -1234,8 +1245,8 @@ namespace IronRuby.Builtins {
                     throw RubyExceptions.CreateTypeError("marshaled time format differ");
                 }
 
-                return CopyExtraIVars(context, time,
-                    isUtc ? instant : WithLoadedZone(context, self, instant, hasOffset, offsetSeconds, zoneName));
+                return CopyExtraIVars(context, time, Subclass(context, self,
+                    isUtc ? instant : WithLoadedZone(context, self, instant, hasOffset, offsetSeconds, zoneName)));
             }
         }
 

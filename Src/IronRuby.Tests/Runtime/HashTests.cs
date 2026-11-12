@@ -447,5 +447,140 @@ true
 :a
 ");
         }
+
+        /// <summary>
+        /// delete_if, keep_if, reject!, select! and filter! delete each condemned pair once the block has spoken,
+        /// after a frozen check (MRI's delete_if_i), and update/merge! store a pair the block decided after one: a
+        /// block that froze the hash got its deletions or updates through. The block of update and transform_values!
+        /// runs while the receiver is being iterated, so #rehash or a new key in it is an error.
+        /// </summary>
+        public void Hash_MutateInBlock1() {
+            TestOutput(@"
+require 'ruby4'
+h = {a: 1, b: 2, c: 3}
+p((h.delete_if { |k, _| h.freeze if k == :b; true } rescue $!.class), h)
+h = {a: 1, b: 2, c: 3}
+p((h.keep_if { h.freeze; false } rescue $!.class), h)
+h = {a: 1, b: 2, c: 3}
+p((h.update({a: 10, b: 20}) { |key, _, v2| key == :b && h.freeze; v2 } rescue $!.class), h)
+a = {1 => 1}
+p((a.update({1 => 2}) { a.rehash } rescue $!))
+p((a.update({1 => 2}) { a[3] = 3 } rescue $!))
+x = {a: 1, b: 2, c: 3}
+p((x.transform_values! { |v| x.freeze if v == 2; v.succ } rescue $!.class), x)
+y = {a: 1}
+p((y.transform_values! { y.rehash } rescue $!))
+h = {a: 1, b: 2}
+p h.reject! { |k, _| h.delete(:b) if k == :a; false }, h
+p({a: 1}.reject! { false }, {a: 1}.select! { true })
+", @"
+FrozenError
+{b: 2, c: 3}
+FrozenError
+{a: 1, b: 2, c: 3}
+FrozenError
+{a: 10, b: 2, c: 3}
+#<RuntimeError: rehash during iteration>
+#<RuntimeError: can't add a new key into hash during iteration>
+FrozenError
+{a: 2, b: 2, c: 3}
+#<RuntimeError: rehash during iteration>
+{a: 1}
+{a: 1}
+nil
+nil
+");
+        }
+
+        /// <summary>
+        /// Hash#fetch and #fetch_values cut the key's inspect in the KeyError message to 65 characters, the last three
+        /// "..." (MRI's rb_str_ellipsize).
+        /// </summary>
+        public void Hash_FetchErrorEllipsis1() {
+            TestOutput(@"
+require 'ruby4'
+begin; {}.fetch('gumby' * 20); rescue KeyError => e; puts e.message; end
+begin; {}.fetch_values('g' * 70); rescue KeyError => e; puts e.message; end
+begin; {}.fetch('g' * 63); rescue KeyError => e; puts e.message; end
+begin; {}.fetch(:a); rescue KeyError => e; puts e.message; end
+", @"
+key not found: ""gumbygumbygumbygumbygumbygumbygumbygumbygumbygumbygumbygumbyg...
+key not found: ""ggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg...
+key not found: ""ggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg""
+key not found: :a
+");
+        }
+
+        /// <summary>
+        /// Hash#initialize_copy is #replace (rb_hash_replace): copying a hash onto itself keeps its pairs, and a copy
+        /// takes the compare_by_identity flag, which the #dup or #merge of a subclass's identity hash lost.
+        /// </summary>
+        public void Hash_InitializeCopyIsReplace1() {
+            TestOutput(@"
+class SubH < Hash; end
+s = SubH[1 => 2].compare_by_identity
+p s.dup.compare_by_identity?, s.merge({}).compare_by_identity?, s.dup.class
+h = {1 => 2}
+h.instance_eval { initialize_copy(h) }
+p h
+h.instance_eval { initialize_copy({}) }
+p h
+", @"
+true
+true
+SubH
+{1 => 2}
+{}
+");
+        }
+
+        /// <summary>
+        /// Hash#update and #merge store a String key as a frozen copy, as Hash#[]= does: a key taken from an identity
+        /// hash stayed the caller's string, and changing that string lost the entry.
+        /// </summary>
+        public void Hash_UpdateStringKey1() {
+            TestOutput(@"
+key = +'a'
+i = {}.compare_by_identity
+i[key] = 0
+h = {}.update(i)
+m = {}.merge(i) { }
+key.upcase!
+p h.fetch('a'), m['a'], h.keys[0].frozen?, i.keys[0].frozen?
+", @"
+0
+0
+true
+false
+");
+        }
+
+        /// <summary>
+        /// Hash#eql? asks an object that converts to a Hash the question the other way round (rb_hash_eql); an empty
+        /// Hash does not hash to 0 ([Bug #9231]); and #rehash builds the new table before it lets go of the old one
+        /// (rb_hash_rehash), so a hash that is its own key is still found after it.
+        /// </summary>
+        public void Hash_EqlHashRehash1() {
+            TestOutput(@"
+require 'ruby4'
+o = Object.new
+def o.to_hash; {}; end
+def o.eql?(x); true; end
+p({}.eql?(o), {}.eql?(Object.new), {} == o)
+p({}.hash != 0, {}.hash == {}.hash)
+h = {}
+h[h] = :foo
+h.rehash
+p h[h], h.size
+", @"
+true
+false
+false
+true
+true
+:foo
+1
+");
+        }
     }
 }

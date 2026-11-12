@@ -7094,5 +7094,229 @@ false
 true
 ");
         }
+
+        /// <summary>
+        /// RbConfig::CONFIG["EXECUTABLE_EXTS"] was missing, and CRuby's tool/lib/find_executable.rb splits it, which
+        /// stopped test_rubyoptions before its first test. configure sets it on Windows only.
+        /// </summary>
+        public void RbConfig_ExecutableExts1() {
+            TestOutput(@"
+require 'rbconfig'
+p RbConfig::CONFIG['EXECUTABLE_EXTS'].split | [RbConfig::CONFIG['EXEEXT']]
+", Environment.OSVersion.Platform == PlatformID.Win32NT ? @"["".exe"", "".com"", "".cmd"", "".bat""]" : @"[""""]");
+        }
+
+        /// <summary>
+        /// all?, any?, none? and one? given a pattern and a block warn "given block not used" at the line that called
+        /// them, as MRI does. The prelude asked for the location two frames up, past the end of a top-level script's
+        /// backtrace, so the warning had none there, and named the wrong line inside a method.
+        /// </summary>
+        public void Enumerable_PatternUnusedBlockWarning1() {
+            TestOutput(@"
+require 'ruby4'
+err = Object.new
+def err.write(*s) = (($w ||= +'') << s.join; 0)
+$stderr = err
+[1, 2].all?(1) { }
+def m
+  [1].none?(1) { }
+end
+m
+(1..2).one?(1) { }
+$stderr = STDERR
+puts $w.gsub(/^.*?:(\d+): /, 'line \1: ')
+", @"
+line 6: warning: given block not used
+line 8: warning: given block not used
+line 11: warning: given block not used
+");
+        }
+
+        /// <summary>
+        /// Enumerable#tally given a BasicObject to count into raises MRI's TypeError: the prelude asked it #nil? and
+        /// #is_a?, which a BasicObject does not answer, and raised NoMethodError.
+        /// </summary>
+        public void Enumerable_TallyBasicObject1() {
+            TestOutput(@"
+require 'ruby4'
+p(([1].tally(BasicObject.new) rescue $!), ((1..2).tally(BasicObject.new) rescue $!), ([1].tally(Object.new) rescue $!))
+p [1, 1].tally({1 => 1}), (1..2).tally
+", @"
+#<TypeError: no implicit conversion of BasicObject into Hash>
+#<TypeError: no implicit conversion of BasicObject into Hash>
+#<TypeError: no implicit conversion of Object into Hash>
+{1 => 3}
+{1 => 1, 2 => 1}
+");
+        }
+
+        /// <summary>
+        /// inject(:op) calls the operator publicly, as MRI's rb_funcallv_public does since [Bug #13592]: a private #+
+        /// is a NoMethodError, for an Array's fast path too.
+        /// </summary>
+        public void Enumerable_InjectPrivateOp1() {
+            TestOutput(@"
+require 'ruby4'
+k = Class.new { include Enumerable; def each; yield 1; yield 2; yield 3; end }
+%i[+ *].each do |op|
+  begin
+    Integer.class_eval { private op }
+    p((k.new.inject(op) rescue $!), ([1, 2, 3].inject(op) rescue $!), ((1..3).inject(op) rescue $!))
+  ensure
+    Integer.class_eval { public op }
+  end
+end
+p k.new.inject(:+), [1, 2, 3].inject(:+), [1, 2, 3].inject(10, :*)
+", @"
+#<NoMethodError: private method '+' called for an instance of Integer>
+#<NoMethodError: private method '+' called for an instance of Integer>
+#<NoMethodError: private method '+' called for an instance of Integer>
+#<NoMethodError: private method '*' called for an instance of Integer>
+#<NoMethodError: private method '*' called for an instance of Integer>
+#<NoMethodError: private method '*' called for an instance of Integer>
+6
+6
+60
+");
+        }
+
+        /// <summary>
+        /// A Range is an 'o' record of excl, begin and end, and a subclass's instance variables go in an "I" wrapper
+        /// around it, as MRI writes them; they were written into the record and lost on loading. The range is in the
+        /// link table before its ends are read (range_loader), so one that is its own begin and end comes back as one.
+        /// </summary>
+        public void Marshal_RangeRecord1() {
+            TestOutput(@"
+class MyRange < Range; def initialize(v, *args) super(*args); @v = v; end end
+d = Marshal.dump(MyRange.new(4, 5, 8, false))
+p d
+r = Marshal.load(d)
+p r.class, r.instance_variables, r, r.frozen?, Marshal.load(Marshal.dump(1..2)).frozen?
+p Marshal.load(""\x04\bo:\fMyRange\t:\texclF:\nbegini\n:\bendi\r:\a@vi\t"").instance_variables
+class CyclicRange < Range; def <=>(o); true; end; end
+c = CyclicRange.allocate
+c.instance_eval { initialize(c, c) }
+l = Marshal.load(Marshal.dump(c))
+p l.class, l.begin.equal?(l), l.end.equal?(l)
+", @"
+""\x04\bIo:\fMyRange\b:\texclF:\nbegini\n:\bendi\r\x06:\a@vi\t""
+MyRange
+[:@v]
+5..8
+false
+true
+[]
+CyclicRange
+true
+true
+");
+        }
+
+        /// <summary>
+        /// Marshal.load of a Time subclass's dump answers an instance of the subclass (MRI's time_mload allocates the
+        /// receiver of _load); a Regexp record without an encoding is a Ruby 1.8 one, whose escapes of letters 1.8 did
+        /// not define lose their backslash; and a class defined in a singleton class, whose path starts with "#", is
+        /// anonymous to Marshal.dump.
+        /// </summary>
+        public void Marshal_LoadedClasses1() {
+            TestOutput(@"
+class MyTime < Time; def initialize(v, *args) super(*args); @v = v; end end
+t = Marshal.load(Marshal.dump(MyTime.new(10)))
+p t.class, t.instance_variables
+r = Marshal.load(""\004\b/\fa\\u3042\000"")
+p r.source, Marshal.load(Marshal.dump(/a\\u3042/)) == /a\\u3042/
+o = Object.new
+c = class << o; class C; self; end; end
+p((Marshal.dump(c) rescue $!.class), (Marshal.dump(c.new) rescue $!.class))
+", @"
+MyTime
+[:@v]
+""au3042""
+true
+TypeError
+TypeError
+");
+        }
+
+        /// <summary>
+        /// Time.new takes :dst and :std for the zone, as MRI's time_init_args does: a local time, the symbol choosing
+        /// between the two readings of an hour the clocks go back over. They were "can't convert Symbol into an exact
+        /// number", which failed 47 of CRuby's test_time_tz tests.
+        /// </summary>
+        public void Time_NewDstStdZone1() {
+            TestOutput(@"
+local = Time.new(2000, 1, 1, 12, 0, 0)
+p Time.new(2000, 1, 1, 12, 0, 0, :std) == local, Time.new(2000, 1, 1, 12, 0, 0, :dst) == local
+p Time.new(2000, 1, 1, 12, 0, 0, :std).utc?, Time.new(2000, 7, 1, 12, 0, 0, :dst).utc_offset == Time.new(2000, 7, 1, 12, 0, 0).utc_offset
+p((Time.new(2000, 1, 1, 0, 0, 0, :foo) rescue $!))
+p Time.new(2019, 1, 1, 0, 0, 0, 'utc').utc?, Time.new(2019, 1, 1, 0, 0, 0, 'Utc').utc?, (Time.new(2019, 1, 1, 0, 0, 0, 'z') rescue $!.class)
+", @"
+true
+true
+false
+true
+#<TypeError: can't convert Symbol into an exact number>
+true
+true
+ArgumentError
+");
+        }
+
+        /// <summary>
+        /// nil, true and false cannot be cloned unfrozen, as MRI's special_object_p says of them: clone(freeze: false)
+        /// is "can't unfreeze NilClass" and the like, as for an Integer or a Symbol.
+        /// </summary>
+        public void Kernel_CloneSpecialConstants1() {
+            TestOutput(@"
+require 'ruby4'
+p((true.clone(freeze: false) rescue $!), (nil.clone(freeze: false) rescue $!), (false.clone(freeze: false) rescue $!))
+p nil.clone, true.clone(freeze: true), (nil.clone(freeze: 1) rescue $!)
+", @"
+#<ArgumentError: can't unfreeze TrueClass>
+#<ArgumentError: can't unfreeze NilClass>
+#<ArgumentError: can't unfreeze FalseClass>
+nil
+true
+#<ArgumentError: unexpected value for freeze: Integer>
+");
+        }
+
+        /// <summary>
+        /// Struct#inspect and Data#inspect write a member that is not a local or constant name as its Symbol, as MRI's
+        /// rb_struct_inspect does (#&lt;struct :@a=1&gt;); and a Struct member writer reports its parameter as `_`.
+        /// </summary>
+        public void Struct_InspectMemberNames1() {
+            TestOutput(@"
+require 'ruby4'
+k = Struct.new(:@a, :b, :c?, :E, :""f g"")
+p k.new(1, 2, 3, 4, 5)
+d = Data.define(:@a, :b)
+p d.new(1, 2)
+s = Struct.new(:a)
+p s.instance_method(:a=).parameters, s.instance_method(:a).parameters
+", @"
+#<struct :@a=1, b=2, :c?=3, E=4, :""f g""=5>
+#<data :@a=1, b=2>
+[[:req, :_]]
+[]
+");
+        }
+
+        /// <summary>
+        /// "comparison of X with Y failed" names an anonymous class by its #to_s, as MRI's rb_cmperr does (PRIsVALUE):
+        /// a class that says what it is (EnvUtil.labeled_class) is named so, not #&lt;Class:0x...&gt;.
+        /// </summary>
+        public void Comparison_AnonymousClassName1() {
+            TestOutput(@"
+e = Class.new { singleton_class.class_eval { define_method(:to_s) { 'Labeled' }; alias inspect to_s } }
+begin; 1.0 < e.new; rescue => x; puts x.message; end
+begin; 1 < e.new; rescue => x; puts x.message; end
+begin; 1 < nil; rescue => x; puts x.message; end
+", @"
+comparison of Float with Labeled failed
+comparison of Integer with Labeled failed
+comparison of Integer with nil failed
+");
+        }
     }
 }

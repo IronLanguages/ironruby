@@ -454,5 +454,75 @@ stop_iteration: [[1, 1], [2, nil]] []
 suspended: [[1, 1]] []
 ");
         }
+
+        /// <summary>
+        /// Array#cycle is MRI's rb_ary_cycle, which reads the array afresh on every pass: Enumerable#cycle, which
+        /// Array used, cycles over what the first pass saw, so `a.cycle { a.clear }` never ended.
+        /// </summary>
+        public void Array_Cycle1() {
+            TestOutput(@"
+require 'ruby4'
+a = [0, 1, 2]
+p(a.cycle { a.clear }, a)
+a = [1, 2]
+r = []
+a.cycle { |x| r << x; a << 3 if r.size == 1; break if r.size == 6 }
+p r
+r = []
+[1, 2].cycle(2.7) { |x| r << x }
+p r, [1].cycle(0) { }, [1].cycle(-1) { }
+p [1].method(:cycle).owner, [1].cycle.inspect, [1].cycle(nil).inspect, [1, 2].cycle(2).to_a
+p [1, 2].cycle.size, [].cycle.size, [1, 2].cycle(3).size
+p(([1].cycle('x') { } rescue $!), ([1].cycle(1, 2) { } rescue $!))
+o = Object.new
+def o.to_int = '2'
+p(([1].cycle(o) { } rescue $!))
+", @"
+nil
+[]
+[1, 2, 3, 1, 2, 3]
+[1, 2, 1, 2]
+nil
+nil
+Array
+""#<Enumerator: [1]:cycle>""
+""#<Enumerator: [1]:cycle(nil)>""
+[1, 2, 1, 2]
+Infinity
+0
+6
+#<TypeError: no implicit conversion of String into Integer>
+#<ArgumentError: wrong number of arguments (given 2, expected 0..1)>
+#<TypeError: can't convert Object to Integer (Object#to_int gives String)>
+");
+        }
+
+        /// <summary>
+        /// Array#join marks the element it is inside, as MRI's ary_join_1_ary does: an element whose to_ary answers
+        /// a new [self] each time recursed through ever new arrays until the stack overflowed (CRuby's
+        /// TestArray#test_join2 killed the process).
+        /// </summary>
+        public void Array_JoinRecursive1() {
+            TestOutput(@"
+a = []
+a << a
+p((a.join rescue $!))
+def (o = Object.new).to_ary
+  [self]
+end
+p(([o].join rescue $!))
+b = [1]
+c = [b, 2]
+b << c
+p((c.join('-') rescue $!))
+x = [3]
+p [1, [2, [x, x], 5]].join
+", @"
+#<ArgumentError: recursive array join>
+#<ArgumentError: recursive array join>
+#<ArgumentError: recursive array join>
+""12335""
+");
+        }
     }
 }

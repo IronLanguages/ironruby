@@ -1020,15 +1020,6 @@ namespace IronRuby.Builtins {
             return Protocols.Normalize(self | other);
         }
 
-        /// <summary>
-        /// Performs bitwise or between self and other, where other is not Fixnum or Bignum. 
-        /// </summary>
-        /// <remarks>other is dynamically converted to an Integer by other.to_int then | is invoked dynamically. E.g. self | (index.to_int)</remarks>
-        [RubyMethod("|")]
-        public static object/*!*/ BitwiseOr(RubyContext/*!*/ context, BigInteger/*!*/ self, [DefaultProtocol]IntegerValue other) {
-            return other.IsFixnum ? BitwiseOr(self, other.Fixnum) : BitwiseOr(self, other.Bignum);
-        }
-
         #endregion
 
         #region &
@@ -1043,15 +1034,6 @@ namespace IronRuby.Builtins {
             return Protocols.Normalize(self & other);
         }
 
-        /// <summary>
-        /// Performs bitwise and between self and other, where other is not Fixnum or Bignum. 
-        /// </summary>
-        /// <remarks>other is dynamically converted to an Integer by other.to_int then "&amp;" is invoked dynamically. E.g. self &amp; (index.to_int)</remarks>
-        [RubyMethod("&")]
-        public static object/*!*/ And(RubyContext/*!*/ context, BigInteger/*!*/ self, [DefaultProtocol]IntegerValue other) {
-            return other.IsFixnum ? And(self, other.Fixnum) : And(self, other.Bignum);
-        }
-
         #endregion
 
         #region ^
@@ -1064,15 +1046,6 @@ namespace IronRuby.Builtins {
         [RubyMethod("^")]
         public static object/*!*/ Xor(BigInteger/*!*/ self, [NotNull]BigInteger/*!*/ other) {
             return Protocols.Normalize(self ^ other);
-        }
-
-        /// <summary>
-        /// Performs bitwise xor between self and other, where other is not Fixnum or Bignum. 
-        /// </summary>
-        /// <remarks>other is dynamically converted to an Integer by other.to_int then ^ is invoked dynamically. E.g. self ^ (index.to_int)</remarks>
-        [RubyMethod("^")]
-        public static object/*!*/ Xor(RubyContext/*!*/ context, BigInteger/*!*/ self, [DefaultProtocol]IntegerValue other) {
-            return other.IsFixnum ? Xor(self, other.Fixnum) : Xor(self, other.Bignum);
         }
 
         #endregion

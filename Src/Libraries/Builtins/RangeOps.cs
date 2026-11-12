@@ -15,6 +15,7 @@
 
 using System;
 using System.Numerics;
+using Microsoft.Scripting;
 using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
 using System.Reflection;
@@ -284,10 +285,24 @@ namespace IronRuby.Builtins {
             if (self == other) {
                 return true;
             }
-            return Protocols.IsEqual(equals, self.Begin, other.Begin)
-                && Protocols.IsEqual(equals, self.End, other.End)
-                && self.ExcludeEnd == other.ExcludeEnd;
+            // A comparison that comes back to the same two ranges answers true there, as MRI's
+            // (rb_exec_recursive_paired in range_eq): ranges that contain themselves used to
+            // overflow the stack.
+            using (IDisposable handleSelf = _EqualsTracker.TrackObject(self), handleOther = _EqualsTracker.TrackObject(other)) {
+                if (handleSelf == null && handleOther == null) {
+                    return true;
+                }
+                return Protocols.IsEqual(equals, self.Begin, other.Begin)
+                    && Protocols.IsEqual(equals, self.End, other.End)
+                    && self.ExcludeEnd == other.ExcludeEnd;
+            }
         }
+
+        [MultiRuntimeAware]
+        private static readonly RubyUtils.RecursionTracker _EqualsTracker = new RubyUtils.RecursionTracker();
+
+        [MultiRuntimeAware]
+        private static readonly RubyUtils.RecursionTracker _EqlTracker = new RubyUtils.RecursionTracker();
 
         /// <summary>
         /// Returns true only if self is a Range, has equivalent beginning and end items (by comparing them with eql?),
@@ -305,10 +320,15 @@ namespace IronRuby.Builtins {
                 return true;
             }
 
-            var site = equalsStorage.GetCallSite("eql?");
-            return Protocols.IsTrue(site.Target(site, self.Begin, other.Begin))
-                && Protocols.IsTrue(site.Target(site, self.End, other.End))
-                && self.ExcludeEnd == other.ExcludeEnd;
+            using (IDisposable handleSelf = _EqlTracker.TrackObject(self), handleOther = _EqlTracker.TrackObject(other)) {
+                if (handleSelf == null && handleOther == null) {
+                    return true;
+                }
+                var site = equalsStorage.GetCallSite("eql?");
+                return Protocols.IsTrue(site.Target(site, self.Begin, other.Begin))
+                    && Protocols.IsTrue(site.Target(site, self.End, other.End))
+                    && self.ExcludeEnd == other.ExcludeEnd;
+            }
         }
 
         #endregion

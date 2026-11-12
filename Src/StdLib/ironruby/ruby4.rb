@@ -237,15 +237,17 @@ module Enumerable
   # The optional Hash counts into it instead of into a fresh one, which also
   # means the frozen check happens before the first element is looked at.
   def tally(counts = nil)
-    if counts.nil?
+    # ::NilClass === and ::Hash ===, not #nil? and #is_a?: a BasicObject answers neither,
+    # and has to be the TypeError MRI's rb_to_hash_type makes of it.
+    if ::NilClass === counts
       return __list_tally__ if __plain_list__?
       result = {}
       each { |*values| item = __enum_item__(values); __tally_store__(result, item, (result[item] || 0) + 1) }
       return result
     end
 
-    hash = counts.is_a?(Hash) ? counts : Hash.try_convert(counts)
-    raise TypeError, "no implicit conversion of #{counts.class} into Hash" if hash.nil?
+    hash = ::Hash === counts ? counts : Hash.try_convert(counts)
+    raise TypeError, "no implicit conversion of #{__ir_class_of__(counts)} into Hash" if hash.nil?
     raise FrozenError.new("can't modify frozen Hash: #{hash.inspect}", receiver: hash) if hash.frozen?
     each do |*values|
       item = __enum_item__(values)
@@ -368,9 +370,12 @@ module Enumerable
         raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
       end
       # The pattern wins and the block is never called, which is worth saying out loud.
-      # MRI names the line that called #all? and friends: this helper, then the method, then it.
+      # MRI names the line that called #all? and friends. The prelude's frames stand in a
+      # backtrace as a C method's do, at their caller's line, and this helper's not at all:
+      # #all? is the first frame above #warn and its caller the second. (uplevel 2 went past
+      # the end of a top-level script's backtrace, and the warning had no location.)
       if block && !args.empty? && !$VERBOSE.nil?
-        warn "given block not used", uplevel: 2
+        warn "given block not used", uplevel: 1
       end
     end
     private :__check_pattern_args__
@@ -1595,7 +1600,9 @@ class Hash
   def transform_values!(&block)
     return to_enum(:transform_values!) { size } unless block
     raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
-    keys.each { |k| self[k] = block.call(self[k]) }
+    # Over the hash itself, as MRI's rb_hash_stlike_foreach_with_replace is: the block runs
+    # while the hash is being iterated, so #rehash in it is an error.
+    each_key { |k| self[k] = block.call(self[k]) }
     self
   end unless method_defined?(:transform_values!)
 
@@ -1672,6 +1679,40 @@ class Hash
 end
 
 class String
+  # The library String#initialize takes the string to copy and no keywords; String.new's
+  # encoding: and capacity: are the constructor's. MRI's rb_str_init takes them in
+  # #initialize too, as a subclass's super or a call through #send does: the keywords and
+  # the argument are checked first, then a frozen receiver is a FrozenError, and the string
+  # is emptied when there is nothing to copy (capacity is only a size hint).
+  alias_method :__ir_initialize__, :initialize
+  private :__ir_initialize__
+
+  def initialize(*args, **opts)
+    return __ir_initialize__(*args) if opts.empty?
+    if args.size > 1
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
+    end
+    unknown = opts.keys - [:encoding, :capacity]
+    unless unknown.empty?
+      ::Kernel.raise(::ArgumentError,
+        "unknown keyword#{unknown.size > 1 ? 's' : ''}: #{unknown.map(&:inspect).join(', ')}")
+    end
+    encoding = opts[:encoding]
+    encoding = ::Encoding.find(encoding) unless encoding.nil? || encoding.is_a?(::Encoding)
+    ::Math.__send__(:__int__, opts[:capacity]) unless opts[:capacity].nil?
+    unless args.empty? || args[0].is_a?(::String)
+      converted = args[0].respond_to?(:to_str) ? args[0].to_str : nil
+      unless converted.is_a?(::String)
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_type_name__(args[0])} into String")
+      end
+      args = [converted]
+    end
+    ::Kernel.raise(::FrozenError.new("can't modify frozen String: #{inspect}", receiver: self)) if frozen?
+    args.empty? ? clear : __ir_initialize__(args[0])
+    force_encoding(encoding) if encoding
+    self
+  end
+
   # Both take a String or something with #to_str, and both answer a copy when
   # there is nothing to remove - including for an empty affix, where
   # "self[0...-0]" would otherwise answer "".
@@ -2990,6 +3031,20 @@ class Numeric
   end
 end
 
+# nil, true and false are special objects too (MRI's special_object_p): they cannot be
+# cloned unfrozen either. The library #clone answered them for freeze: false.
+[::NilClass, ::TrueClass, ::FalseClass].each do |klass|
+  klass.class_eval do
+    def clone(freeze: nil)
+      unless freeze.nil? || freeze == true || freeze == false
+        ::Kernel.raise(::ArgumentError, "unexpected value for freeze: #{freeze.class}")
+      end
+      ::Kernel.raise(::ArgumentError, "can't unfreeze #{self.class}") if freeze == false
+      self
+    end
+  end
+end
+
 module Kernel
   # The built-in warn takes exactly one message and no keywords; 2.5 added
   # multiple messages plus uplevel:, and 3.0 added category:.
@@ -3437,6 +3492,7 @@ class String
     end
     out = +""
     unicode_escape = false
+    hex_escape = false # a \x escape of a non-ASCII byte
     i = 0
     while i < body.length
       c = body[i]
@@ -3463,9 +3519,14 @@ class String
         when "x"
           hex = body[(i + 1), 2]
           ::Kernel.raise(::RuntimeError, "invalid hex escape") unless hex =~ /\A[0-9a-fA-F]{2}\z/
+          if hex.to_i(16) > 0x7f
+            ::Kernel.raise(::RuntimeError, "hex escape and Unicode escape are mixed") if unicode_escape
+            hex_escape = true
+          end
           out << hex.to_i(16).chr
           i += 2
         when "u"
+          ::Kernel.raise(::RuntimeError, "hex escape and Unicode escape are mixed") if hex_escape
           unicode_escape = true
           if body[i + 1] == "{"
             close = body.index("}", i + 1)
@@ -3493,9 +3554,10 @@ class String
       ::Kernel.raise(::RuntimeError, "dumped string contained Unicode escape but used force_encoding")
     end
     # Without a .force_encoding(...) suffix the answer carries the receiver's
-    # own encoding, not UTF-8.
+    # own encoding - or UTF-8 once a \u escape has been read, as MRI's
+    # undump_after_backslash switches it to.
     if out.respond_to?(:force_encoding)
-      out.force_encoding(forced || encoding)
+      out.force_encoding(forced || (unicode_escape ? ::Encoding::UTF_8 : encoding))
     end
     out
   end unless method_defined?(:undump)
@@ -4348,6 +4410,39 @@ class Array
     end
   end
   private :__repeat__
+
+  # MRI's rb_ary_cycle walks the array as it is on each pass, where Enumerable#cycle
+  # yields what the first pass saw: `a.cycle { a.clear }` stops after one element
+  # instead of cycling forever over a copy.
+  def cycle(*args)
+    unless block_given?
+      enum = super(*args)
+      return to_enum(:cycle, *args) { enum.size }
+    end
+    if args.size > 1
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
+    end
+    n = args[0]
+    if n.nil?
+      n = -1
+    else
+      count = n
+      n = ::Math.__send__(:__int__, count)
+      unless n.is_a?(::Integer)
+        ::Kernel.raise(::TypeError,
+          "can't convert #{count.class} to Integer (#{count.class}#to_int gives #{__ir_conversion_result_name__(n)})")
+      end
+      return nil if n <= 0
+    end
+    while size > 0 && (n < 0 || (n -= 1) >= 0)
+      i = 0
+      while i < size
+        yield self[i]
+        i += 1
+      end
+    end
+    nil
+  end
 
   def to_h
     result = {}
@@ -6080,11 +6175,9 @@ class String
 
     return empty? ? [] : [__ir_chomp_line__(__ir_each_line_all__(nil), nil, chomp)] if separator.nil?
 
-    if separator.empty?
-      lines = __ir_paragraphs__(__ir_each_line_all__(newline), newline)
-    else
-      lines = __ir_each_line_all__(separator)
-    end
+    # paragraph mode chomps as it splits
+    return __ir_paragraphs__(__ir_each_line_all__(newline), newline, chomp) if separator.empty?
+    lines = __ir_each_line_all__(separator)
     return lines unless chomp
     lines.map { |line| __ir_chomp_line__(line, separator, chomp) }
   end
@@ -6100,8 +6193,10 @@ class String
 
   # Paragraph mode: a paragraph ends at the first blank line after some
   # content, that blank line is kept, and every further blank line of the run
-  # is dropped.
-  def __ir_paragraphs__(physical, newline)
+  # is dropped. With chomp: a paragraph that ended so loses its last newline and
+  # the blank line, and the last paragraph, which no blank line ended, is left as
+  # it is, trailing newline and all (rb_str_enumerate_lines' chomp_rslen).
+  def __ir_paragraphs__(physical, newline, chomp = false)
     result = []
     buffer = nil
     skipping = false
@@ -6113,7 +6208,11 @@ class String
         skipping = false
       end
       if blank && buffer
-        result << (buffer + line)
+        if chomp
+          result << buffer[0, buffer.length - (buffer.end_with?(crlf) ? crlf.length : newline.length)]
+        else
+          result << (buffer + line)
+        end
         buffer = nil
         skipping = true
       elsif buffer
@@ -6487,15 +6586,21 @@ class String
       return self
     end
 
-    return self if length > stop.length || (length == stop.length && self > stop)
-
-    current = self
-    loop do
-      break if exclusive && current == stop
+    # MRI's str_upto_each: the block gets a copy of the receiver and then each
+    # #succ, and the next string is worked out before the block runs, so a block that
+    # changes the string it was given changes neither the receiver nor the walk. The
+    # walk ends at stop.succ, or once a string is longer than stop in bytes.
+    n = self <=> stop
+    return self if n > 0 || (exclusive && n == 0)
+    after_end = stop.succ
+    current = ::String.new(self)
+    until current == after_end
+      following = (exclusive || current != stop) ? current.succ : nil
       block.call(current)
-      break if current == stop
-      current = current.succ
-      break if current.bytesize > stop.bytesize
+      break if following.nil?
+      current = following
+      break if exclusive && current == stop
+      break if current.bytesize > stop.bytesize || current.bytesize == 0
     end
     self
   end
@@ -7033,11 +7138,13 @@ class Data
     return "#<data #{path}:...>" if stack.any? { |seen| seen.equal?(self) }
     stack.push(self)
     begin
-      out = "#<data "
+      out = +"#<data "
       out << path if named
       __data_members__.each_with_index do |name, i|
         out << (i > 0 ? ", " : (named ? " " : ""))
-        out << "#{name}=#{__data_value__(name).inspect}"
+        # a member that is not a local or constant name shows as its Symbol (:@a=1), as in MRI
+        label = name.to_s.match?(/\A[[:alpha:]_][[:alnum:]_]*\z/) ? name.to_s : name.to_sym.inspect
+        out << "#{label}=#{__data_value__(name).inspect}"
       end
       out << ">"
     ensure
@@ -9179,6 +9286,28 @@ class IO
 
     # MRI names nil/true/false by value rather than by class in the TypeErrors
     # rb_builtin_class_name produces.
+    # MRI warns the first time a buffer is allocated in the process, and only
+    # then: the experimental category is read at that moment and not again
+    # (io_buffer_experimental), so code that allocates one with the category off
+    # silences the warning for good. Every allocation goes through new or
+    # allocate here.
+    EXPERIMENTAL_WARNED__ = [false]
+    __hide_constant__ :EXPERIMENTAL_WARNED__
+
+    def self.__experimental__
+      return if EXPERIMENTAL_WARNED__[0]
+      EXPERIMENTAL_WARNED__[0] = true
+      return unless ::Warning[:experimental]
+      loc = caller_locations(1).find { |l| l.path != __FILE__ }
+      ::Kernel.warn("#{"#{loc.path}:#{loc.lineno}: " if loc}warning: IO::Buffer is experimental and both the Ruby and C interface may change in the future!",
+                    category: :experimental)
+    end
+
+    def self.allocate
+      __experimental__
+      super
+    end
+
     def self.__class_name__(value)
       case value
       when nil then "nil"
@@ -9306,6 +9435,7 @@ class IO
     end
 
     def initialize(size = DEFAULT_SIZE, *flags)
+      self.class.__experimental__
       size = self.class.__integer_arg__(size)
       ::Kernel.raise(::ArgumentError, "Size can't be negative!") if size < 0
 
@@ -10899,7 +11029,11 @@ class Hash
   # mutually recursive hashes terminate.
   def eql?(other)
     return true if equal?(other)
-    return false unless other.is_a?(Hash)
+    unless other.is_a?(Hash)
+      # rb_hash_eql hands an object that converts to a Hash the question the other way round
+      return false unless other.respond_to?(:to_hash)
+      return other.eql?(self) ? true : false
+    end
     return false if size != other.size
     # two non-empty hashes of different kinds (one compares by identity) are never eql
     return false if size != 0 && compare_by_identity? != other.compare_by_identity?
@@ -10968,7 +11102,9 @@ class Hash
       elsif block
         block.call(k)
       else
-        raise KeyError.new("key not found: #{k.inspect}", receiver: self, key: k)
+        desc = k.inspect
+        desc = "#{desc[0, 62]}..." if desc.length > 65 # rb_hash_fetch's rb_str_ellipsize
+        raise KeyError.new("key not found: #{desc}", receiver: self, key: k)
       end
     end
   end
