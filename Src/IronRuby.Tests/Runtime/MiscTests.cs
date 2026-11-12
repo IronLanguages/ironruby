@@ -6911,6 +6911,46 @@ enum next: [1, FiberError, 2]
         }
 
         /// <summary>
+        /// The second round of review findings on #212, with CRuby 4.0.9's output: the pair guard knows an Integer that
+        /// was boxed again; Range#hash of a range that contains itself; Enumerator#rewind unwinds the abandoned
+        /// iteration before the receiver's #rewind; a Regexp in an "I" wrapper without an encoding is a 1.8 record;
+        /// capacity: asks #to_int once; a continuation frozen inside callcc.
+        /// </summary>
+        public void Review212_2() {
+            TestOutput(@"
+require 'ruby4'
+$VERBOSE = nil
+def t(name); r = begin; yield; rescue Exception => e; ""#{e.class}: #{e.message.gsub(/0x\h+/, 'XX')}""; end; puts ""#{name}: #{r.inspect}""; end
+o = Object.new; def o.coerce(x) = [x, self]; def o.to_s = ""OBJ""
+t(""bit big"") { 100000 & o }
+t(""bit bignum"") { (2**70) | o }
+t(""range hash"") { r = Marshal.load(""\x04\bo:\nRange\b:\texclF:\nbegin@\x00:\bend0""); [r.begin.equal?(r), r.hash.class, r.hash == r.hash] }
+class Src
+  def initialize; @items = [1, 2, 3]; end
+  attr_reader :items
+  def each; @items.each { |x| yield x }; ensure; @items = []; end
+  def rewind; @items = [7, 8]; end
+end
+t(""rewind"") { s = Src.new; e = s.to_enum; a = e.next; e.rewind; [a, s.items, e.next] }
+t(""marshal 1.8 regexp"") { r = Marshal.load(""\x04\bI/\x07\\u\x00\x06:\n@notei\x06""); [r.source, r.instance_variable_get(:@note)] }
+t(""marshal regexps"") { a = Marshal.load(Marshal.dump([/a\u3042b/i, /a/n])); [a[0].source, a[0].options, a[1].encoding] }
+c = Class.new { def to_int = (@n = @n.to_i + 1) == 1 ? ""x"" : 3 }
+t(""capacity once"") { String.new(capacity: c.new) }
+require 'continuation'
+t(""frozen cont"") { callcc { |k| k.freeze; k.call(:ok) } }
+", @"
+bit big: ""NameError: 100000&OBJ""
+bit bignum: ""NameError: 1180591620717411303424|OBJ""
+range hash: [true, Integer, true]
+rewind: [1, [7, 8], 7]
+marshal 1.8 regexp: [""u"", 1]
+marshal regexps: [""a\\u3042b"", 17, #<Encoding:US-ASCII>]
+capacity once: ""TypeError: can't convert #<Class:XX> to Integer (#<Class:XX>#to_int gives String)""
+frozen cont: :ok
+");
+        }
+
+        /// <summary>
         /// `defined?' in a condition makes no call to #freeze, as in CRuby: only whether the answer is nil counts, also for an
         /// operand of &amp;&amp; or || in a condition. Expected output is CRuby 4.0's.
         /// </summary>

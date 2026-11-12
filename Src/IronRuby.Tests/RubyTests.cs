@@ -1075,6 +1075,7 @@ namespace IronRuby.Tests {
                 Block_OptionalBeforeRest1,
                 LoweredRaise_IgnoresOwnRaise1,
                 Review212_1,
+                Review212_2,
                 Method_LightFrameBlockGuard1,
                 BigDecimal_Ruby4_1,
                 BigDecimal_Engine1,
