@@ -5331,10 +5331,14 @@ class Enumerator
     # Unwind the abandoned fiber, so that its thread exits. That runs the ensure clauses of the
     # receiver's #each, which MRI never runs (it only forgets the fiber): before the receiver's
     # #rewind, so that an ensure cannot undo what #rewind sets up. The price is that the iteration
-    # is forgotten even when #rewind raises, where MRI's would go on.
+    # is forgotten even when #rewind raises, where MRI's would go on. An error one of those ensure
+    # clauses raises is dropped: it comes from code MRI does not run, and #rewind has to go ahead.
     fiber = @__fiber__
     begin
-      fiber.kill if fiber && fiber.alive?
+      begin
+        fiber.kill if fiber && fiber.alive?
+      rescue ::StandardError
+      end
       receiver.__send__(:rewind) if receiver && receiver.respond_to?(:rewind, true)
     ensure
       __iter_forget__

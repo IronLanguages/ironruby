@@ -1078,6 +1078,7 @@ namespace IronRuby.Tests {
                 Review212_2,
                 Review212_3,
                 Review212_4,
+                Enumerator_RewindEnsureRaises1,
                 Marshal_RegexpWrapper1,
                 Method_LightFrameBlockGuard1,
                 BigDecimal_Ruby4_1,

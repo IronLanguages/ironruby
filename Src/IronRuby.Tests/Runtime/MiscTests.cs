@@ -7054,6 +7054,29 @@ mixed: [[:viaresp, [3]], TypeError, [:viaresp, [4]], 3]
         }
 
         /// <summary>
+        /// Enumerator#rewind when an ensure clause of the abandoned iteration raises: the receiver's #rewind still
+        /// runs and #rewind answers (MRI runs no such clause at all). CRuby 4.0.9's output.
+        /// </summary>
+        public void Enumerator_RewindEnsureRaises1() {
+            TestOutput(@"
+require 'ruby4'
+class Src2
+  def initialize; @items = [1, 2, 3]; @rew = 0; end
+  attr_reader :items, :rew
+  def each; @items.each { |x| yield x }; ensure; raise ""boom in ensure""; end
+  def rewind; @rew += 1; end
+end
+s = Src2.new; e = s.to_enum; e.next
+r = begin; e.rewind; :ok; rescue => x; x.message; end
+p r, s.rew, (e.next rescue $!.class)
+", @"
+:ok
+1
+1
+");
+        }
+
+        /// <summary>
         /// `defined?' in a condition makes no call to #freeze, as in CRuby: only whether the answer is nil counts, also for an
         /// operand of &amp;&amp; or || in a condition. Expected output is CRuby 4.0's.
         /// </summary>
