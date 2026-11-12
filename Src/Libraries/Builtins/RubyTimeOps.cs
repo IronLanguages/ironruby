@@ -50,7 +50,6 @@ namespace IronRuby.Builtins {
         private static CallSite<Func<CallSite, object, object, object>> _greaterSite;
         private static CallSite<Func<CallSite, object, object, object>> _lessSite;
         private static CallSite<Func<CallSite, object, object, object>> _findTimezoneSite;
-        private static CallSite<Func<CallSite, object, object>> _allocateSite;
         private static CallSite<Func<CallSite, object, object, object>> _abbrSite;
         private static CallSite<Func<CallSite, object, object>> _nameSite;
 
@@ -483,17 +482,15 @@ namespace IronRuby.Builtins {
             if (self == null || self.GetUnderlyingSystemType() == typeof(RubyTime)) {
                 return value;
             }
-            try {
-                var site = RubyUtils.GetCallSite(ref _allocateSite, context, "allocate", 0);
-                RubyTime result = site.Target(site, self) as RubyTime;
-                if (result != null) {
-                    result.CopyFrom(value);
-                    return result;
-                }
-            } catch (Exception) {
-                // fall through: a subclass that cannot be allocated gets the base instance
+            // The class's own allocator, as MRI's time_s_alloc: not its `allocate' method, which a subclass may
+            // have redefined to raise or to answer something else. That used to give a plain Time, also from
+            // Time._load, where Marshal then loaded a MyTime as a Time.
+            RubyTime result = RubyUtils.CreateObject(self) as RubyTime;
+            if (result == null) {
+                return value;
             }
-            return value;
+            result.CopyFrom(value);
+            return result;
         }
 
         [RubyConstructor]
