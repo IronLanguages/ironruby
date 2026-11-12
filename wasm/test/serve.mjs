@@ -13,7 +13,13 @@ export function serve(root, port = 0) {
   const mounts = typeof root === 'string' ? { '/': root } : root;
   const prefixes = Object.keys(mounts).sort((a, b) => b.length - a.length);
   const server = http.createServer((req, res) => {
-    let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+    // a path that does not decode (`/%`) is that request's error, not the server's: uncaught, it ends the process
+    let p;
+    try {
+      p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+    } catch {
+      res.writeHead(400); res.end('bad request'); return;
+    }
     if (p.endsWith('/')) p += 'index.html';
     const prefix = prefixes.find(x => p.startsWith(x));
     const dir = path.resolve(mounts[prefix]);

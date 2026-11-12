@@ -28,7 +28,17 @@ export async function createIronRubyWorker(opts = {}) {
     worker.postMessage(Object.assign({ id, type }, fields), transfer);
   });
   const { onOutput, workerUrl: _w, ...bootOpts } = opts;
-  const bootInfo = await call('boot', { opts: bootOpts });
+  // A boot that fails (stdlib.zip not found, the runtime not starting) leaves nobody with a handle
+  // to the worker: stop it here, or every retry adds another one.
+  let bootInfo;
+  try {
+    bootInfo = await call('boot', { opts: bootOpts });
+  } catch (e) {
+    terminated = true;
+    worker.terminate();
+    pending.clear();
+    throw e;
+  }
   return {
     bootInfo,
     worker,
