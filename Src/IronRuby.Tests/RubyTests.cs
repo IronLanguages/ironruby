@@ -1308,6 +1308,7 @@ namespace IronRuby.Tests {
                 Kernel_CloneSpecialConstants1,
                 Struct_InspectMemberNames1,
                 Integer_BitwiseCoerce1,
+                Comparison_AnonymousClassName1,
             };
         }
     }

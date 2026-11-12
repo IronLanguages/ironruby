@@ -7173,5 +7173,22 @@ p s.instance_method(:a=).parameters, s.instance_method(:a).parameters
 []
 ");
         }
+
+        /// <summary>
+        /// "comparison of X with Y failed" names an anonymous class by its #to_s, as MRI's rb_cmperr does (PRIsVALUE):
+        /// a class that says what it is (EnvUtil.labeled_class) is named so, not #&lt;Class:0x...&gt;.
+        /// </summary>
+        public void Comparison_AnonymousClassName1() {
+            TestOutput(@"
+e = Class.new { singleton_class.class_eval { define_method(:to_s) { 'Labeled' }; alias inspect to_s } }
+begin; 1.0 < e.new; rescue => x; puts x.message; end
+begin; 1 < e.new; rescue => x; puts x.message; end
+begin; 1 < nil; rescue => x; puts x.message; end
+", @"
+comparison of Float with Labeled failed
+comparison of Integer with Labeled failed
+comparison of Integer with nil failed
+");
+        }
     }
 }
