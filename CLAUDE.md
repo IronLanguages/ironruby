@@ -94,7 +94,7 @@ rebuild, a `.cs` change does.
 
 ## Tests
 
-**IronRuby.Tests** (`Src/IronRuby.Tests`), about 1,090 tests, run on every CI job:
+**IronRuby.Tests** (`Src/IronRuby.Tests`), about 1,240 tests, run on every CI job:
 
 ```sh
 dotnet build Src/IronRuby.Tests/IronRuby.Tests.csproj -p:IronRubyTargetFrameworks=net10.0
