@@ -6979,6 +6979,55 @@ t { b = Regexp.new(""\xff"".b, Regexp::NOENCODING); a = MyArr.new; a << b << ""s
         }
 
         /// <summary>
+        /// The three review findings on #212 that were first left open, with CRuby 4.0.9's output: Time's factories and
+        /// Time._load allocate a subclass's instance whatever its `allocate' method does; a coerced operand that takes
+        /// &amp;, | or ^ through method_missing gets the call (rb_check_funcall); the hashes of bignums, Rationals and
+        /// Complexes are equal for equal values (they are keyed per process, so only that can be tested).
+        /// </summary>
+        public void Review212_3() {
+            TestOutput(@"
+require 'ruby4'
+$VERBOSE = nil
+def t(n); r = begin; yield; rescue Exception => e; ""#{e.class}: #{e.message.gsub(/0x\h+/, 'XX')[0, 80]}""; end; puts ""#{n}: #{r.inspect}""; end
+class TA < Time; end; class TB < Time; end; class TC < Time; end
+xa = Marshal.dump(TA.at(0)); xb = Marshal.dump(TB.at(0))
+TA.define_singleton_method(:allocate) { raise ""no"" }
+TB.define_singleton_method(:allocate) { 5 }
+t(""load raise"") { Marshal.load(xa).class }
+t(""load other"") { Marshal.load(xb).class }
+t(""at"") { [TA.at(0).class, TB.at(0).class, TA.now.class, TB.utc(2000).class, TA.local(2000).class, TB.new(2000).class] }
+t(""new"") { TA.new.class }
+t(""plain"") { [TC.at(5).class, TC.at(5).to_i, Marshal.load(Marshal.dump(TC.at(5))).class, TC.now.class, Time.at(1).class] }
+o = Object.new; def o.coerce(x) = [self, x]; def o.respond_to_missing?(m, p = false) = [:&, :|].include?(m); def o.method_missing(m, *a) = [:&, :|].include?(m) ? [m, a] : super
+t(""mm &"") { 1 & o }
+t(""mm |"") { (2**70) | o }
+t(""mm ^"") { 1 ^ o }
+q = Object.new; def q.coerce(x) = [self, x]; def q.method_missing(m, *a) = m == :& ? :called : super
+t(""mm no rtm"") { 1 & q }
+z = Object.new; def z.coerce(x) = [self, x]; def z.respond_to?(m, p = false) = m == :^ || super; def z.method_missing(m, *a) = m == :^ ? :viaresp : super
+t(""resp"") { 1 ^ z }
+w = Object.new; def w.coerce(x) = [self, x]; def w.respond_to_missing?(m, p = false) = m == :&
+t(""rtm no mm"") { 1 & w }
+t(""float"") { 1 & 1.5 }
+t(""rat hash"") { [Rational(1, 2).hash == Rational(2, 4).hash, Rational(2**70, 3).hash == Rational(2**70, 3).hash, Complex(1, 2).hash == Complex(1, 2).hash, Complex(1.5, 2).hash == Complex(1.5, 2).hash, (2**70).hash == (2**70).hash, (2**64).hash == (2**64 + 2**32).hash, {2**80 => 1}[2**80], {Rational(1, 3) => 2}[Rational(2, 6)], {Complex(1, 2**70) => 3}[Complex(1, 2**70)]] }
+", @"
+load raise: TA
+load other: TB
+at: [TA, TB, TA, TB, TA, TB]
+new: TA
+plain: [TC, 5, TC, TC, Time]
+mm &: [:&, [1]]
+mm |: [:|, [1180591620717411303424]]
+mm ^: ""TypeError: Object can't be coerced into Integer""
+mm no rtm: :called
+resp: :viaresp
+rtm no mm: ""TypeError: Object can't be coerced into Integer""
+float: ""TypeError: 1.5 can't be coerced into Integer""
+rat hash: [true, true, true, true, true, false, 1, 2, 3]
+");
+        }
+
+        /// <summary>
         /// `defined?' in a condition makes no call to #freeze, as in CRuby: only whether the answer is nil counts, also for an
         /// operand of &amp;&amp; or || in a condition. Expected output is CRuby 4.0's.
         /// </summary>
