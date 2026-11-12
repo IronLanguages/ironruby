@@ -14,6 +14,7 @@
  * ***************************************************************************/
 
 using System.Collections;
+using System.Collections.Generic;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;
 
@@ -121,17 +122,39 @@ namespace IronRuby.Builtins {
             }
 
             IList list = Protocols.TryCastToArray(tryToAry, val);
-            if (list != null) {
-                IEnumerable recEnum = IListOps.EnumerateRecursively(tryToAry, list, -1, (_) => MutableString.CreateAscii("[...]"));
-                foreach (object item in recEnum ?? list) {
-                    if (item == null) {
-                        PutsEmptyLine(writeStorage, self);
-                    } else {
-                        Puts(writeStorage, self, ToPrintedString(tosConversion, item));
-                    }
-                }
-            } else {
+            if (list == null) {
                 Puts(writeStorage, self, ToPrintedString(tosConversion, val));
+                return;
+            }
+
+            // MRI's rb_io_puts goes into an array with rb_exec_recursive on the object it was given, not on
+            // what its to_ary returned, and writes "[...]" when it meets that object again inside itself: an
+            // object whose to_ary answers a new [self] each time used to be followed forever. The descent
+            // keeps a stack of its own, so a deeply nested array does not take the machine stack.
+            var path = new HashSet<object>(ReferenceEqualityComparer.Instance) { val };
+            var stack = new Stack<(IList List, int Index, object Owner)>();
+            stack.Push((list, 0, val));
+            while (stack.Count > 0) {
+                var (current, index, owner) = stack.Pop();
+                if (index >= current.Count) {
+                    path.Remove(owner);
+                    continue;
+                }
+                stack.Push((current, index + 1, owner));
+
+                object item = current[index];
+                if (item == null) {
+                    PutsEmptyLine(writeStorage, self);
+                    continue;
+                }
+                IList nested = item is MutableString ? null : Protocols.TryCastToArray(tryToAry, item);
+                if (nested == null) {
+                    Puts(writeStorage, self, ToPrintedString(tosConversion, item));
+                } else if (path.Add(item)) {
+                    stack.Push((nested, 0, item));
+                } else {
+                    Puts(writeStorage, self, MutableString.CreateAscii("[...]"));
+                }
             }
         }
 

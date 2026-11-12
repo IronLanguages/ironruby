@@ -234,6 +234,7 @@ namespace IronRuby.Runtime {
         /// flow-control frame.
         /// </summary>
         [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static RuntimeFlowControl/*!*/ EnterLightMethod(Proc blockParameter) {
             RubyUtils.SafePoint();
             return CreateRfcForMethod(blockParameter);
@@ -244,6 +245,7 @@ namespace IronRuby.Runtime {
         /// scope; a light frame keeps it for the scope it may make). Taken either way, as CreateMethodScope does.
         /// </summary>
         [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static string TakePendingCallee(string/*!*/ definitionName) {
             if (_aliasCallSeen) {
                 string callee = _pendingCallee;
@@ -291,6 +293,7 @@ namespace IronRuby.Runtime {
         /// MethodYield of a light-frame method: the frame is the scope's if one was made, the call's otherwise.
         /// </summary>
         [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static bool LightMethodYield(RuntimeFlowControl/*!*/ rfc, RubyScope scope, BlockParam/*!*/ yieldedBlockFlowControl, object returnValue) {
             if (yieldedBlockFlowControl.ReturnReason == BlockReturnReason.Undefined) {
                 return false;
@@ -302,6 +305,7 @@ namespace IronRuby.Runtime {
         /// LeaveMethodFrame of a light-frame method: the call's frame, and the scope if one was made.
         /// </summary>
         [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static void LeaveLightMethodFrame(RuntimeFlowControl/*!*/ rfc, RubyScope scope) {
             LeaveMethodFrame(rfc);
             if (scope != null) {
@@ -374,6 +378,7 @@ namespace IronRuby.Runtime {
         /// TracePoint hook enabled later makes it then (<see cref="CreateBlockScopeLazy"/>).
         /// </summary>
         [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static RubyBlockScope CreateBlockScopeIfTraced(MutableTuple locals, string[] variableNames,
             BlockParam/*!*/ blockParam, object selfObject, InterpretedFrame interpretedFrame) {
 
@@ -385,6 +390,34 @@ namespace IronRuby.Runtime {
                 return scope;
             }
             return null;
+        }
+
+        /// <summary>
+        /// <see cref="CreateBlockScopeIfTraced"/> of a block that keeps its locals in CLR variables (ScopeBuilder.TryUseRegisterLocals),
+        /// whose tuple is made only with the scope: the safe point, and whether a TracePoint wants the call event, in which case the
+        /// block makes its scope and reports it (<see cref="TraceBlockCall"/>).
+        /// </summary>
+        [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        public static bool EnterScopeFreeBlock() {
+            RubyUtils.SafePoint();
+            RequireSufficientStack();
+            return (TracePoint.ActiveEvents & (int)(TraceEvents.BCall | TraceEvents.Call)) != 0;
+        }
+
+        [Emitted]
+        public static RubyBlockScope/*!*/ TraceBlockCall(RubyBlockScope/*!*/ scope) {
+            TracePoint.OnBlockCall(scope);
+            return scope;
+        }
+
+        /// <summary>
+        /// Whether a TracePoint wants the call event of a light-frame method, which then makes its scope (CreateMethodScopeIfTraced)
+        /// and, if it keeps its locals in CLR variables, their tuple first.
+        /// </summary>
+        [Emitted, MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool IsMethodCallTraced() {
+            return (TracePoint.ActiveEvents & (int)(TraceEvents.Call | TraceEvents.CCall)) != 0;
         }
 
         /// <summary>
@@ -654,10 +687,12 @@ namespace IronRuby.Runtime {
         #region Blocks
 
         [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static Proc InstantiateBlock(RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher) {
             return dispatcher.HasMethod ? new Proc(ProcKind.Block, self, scope, dispatcher) : null;
         }
         [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static Proc InstantiateLambda(RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher) {
             return dispatcher.HasMethod ? new Proc(ProcKind.Lambda, self, scope, dispatcher) : null;
         }
@@ -693,7 +728,14 @@ namespace IronRuby.Runtime {
 
         #region Yield: TODO: generate
 
+        // AggressiveOptimization, here and on the other helpers a yield, a Proc#call or a light-frame method goes through
+        // (block dispatchers, BlockParam and RuntimeFlowControl factories): they are called from compiled Ruby code from
+        // the first iteration on, but tiered compilation leaves them Tier-0 for the first second or two of a process -
+        // its call counting waits until no method has been jitted for 100 ms, which a program that keeps compiling Ruby
+        // code does not give it - so a short script ran its yields through unoptimized getters and casts. Steady state
+        // is the same either way (Util/bench, best of 6 after a warm-up); a short run is 5-15% faster.
         [Emitted] 
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static object Yield0(Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
@@ -780,6 +822,7 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static object Yield1(object arg1, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
@@ -797,6 +840,7 @@ namespace IronRuby.Runtime {
         }
 
         // YieldNoAutoSplat1 uses InvokeNoAutoSplat instead of Invoke (used by Call1)
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         internal static object YieldNoAutoSplat1(object arg1, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
@@ -810,6 +854,7 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static object Yield2(object arg1, object arg2, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
@@ -824,6 +869,7 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static object Yield3(object arg1, object arg2, object arg3, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
@@ -838,6 +884,7 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static object Yield4(object arg1, object arg2, object arg3, object arg4, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
@@ -852,6 +899,7 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static object YieldN(object[]/*!*/ args, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             Debug.Assert(args.Length > BlockDispatcher.MaxBlockArity);
 
@@ -2118,6 +2166,17 @@ namespace IronRuby.Runtime {
             return result;
         }
 
+        /// <summary>
+        /// The same default for a method without **rest: its prologue only reads the hash - whether it
+        /// is keyword arguments, whether it matches the declared keywords, the value of each - and an
+        /// empty one answers all of that without being made anew on every call. The runtime's one
+        /// shared, frozen hash (RubyContext.OmittedKeywordArguments); MRI allocates nothing here either.
+        /// </summary>
+        [Emitted]
+        public static Hash/*!*/ GetOmittedKeywordArguments(RubyScope/*!*/ scope) {
+            return scope.RubyContext.OmittedKeywordArguments;
+        }
+
         // `f(a: x)`, `f(a: x, b: y)` and `f(a: x, b: y, c: z)` with Symbol literals for keys, the
         // usual keyword call: no item array to allocate, and none of the conversions
         // SetHashElement applies to a String or nil key. A repeated key keeps the last value, as
@@ -3331,7 +3390,7 @@ namespace IronRuby.Runtime {
         /// </summary>
         [Emitted]
         public static bool CanRescue(RubyScope/*!*/ scope, Exception/*!*/ exception) {
-            return CanRescueCore(scope, exception, false, null);
+            return CanRescueCore(scope, exception, false, null, -1);
         }
 
         /// <summary>
@@ -3341,7 +3400,16 @@ namespace IronRuby.Runtime {
         /// Not so an ensure clause, which may end the exception with a jump and leave it in $!.
         /// </summary>
         public static bool CanRescueDeferTrace(RubyScope/*!*/ scope, Exception/*!*/ exception) {
-            return CanRescueCore(scope, exception, true, null);
+            return CanRescueCore(scope, exception, true, null, -1);
+        }
+
+        /// <summary>
+        /// CanRescueDeferTrace of a frame whose record in PrecompiledFrames has the index <paramref name="frameDepth"/>
+        /// (CompiledFrameDepthExpression; -1 if it has none): the frame's record is known to be the innermost one - the frame has
+        /// caught the exception - without reading the exception's CLR trace (see RubyExceptionData.TryDeferCatchSite).
+        /// </summary>
+        public static bool CanRescueDeferTrace(RubyScope/*!*/ scope, Exception/*!*/ exception, int frameDepth) {
+            return CanRescueCore(scope, exception, true, null, frameDepth);
         }
 
         /// <summary>
@@ -3352,7 +3420,7 @@ namespace IronRuby.Runtime {
         /// rescue class list that is not a class (`rescue 42').
         /// </summary>
         public static bool CanRescueAfterClauses(RubyScope/*!*/ scope, Exception/*!*/ exception, Exception handled) {
-            return CanRescueCore(scope, exception, false, handled);
+            return CanRescueCore(scope, exception, false, handled, -1);
         }
 
         /// <summary>
@@ -3388,7 +3456,7 @@ namespace IronRuby.Runtime {
             return false;
         }
 
-        private static bool CanRescueCore(RubyScope/*!*/ scope, Exception/*!*/ exception, bool deferTrace, Exception handled) {
+        private static bool CanRescueCore(RubyScope/*!*/ scope, Exception/*!*/ exception, bool deferTrace, Exception handled, int frameDepth) {
             // A CLR finally may replace the reclaim signal with an ordinary exception.
             // That still belongs to a discarded stack and must not enter a Ruby rescue.
             if (RubyUtils.IsReclaimingFiber) {
@@ -3402,6 +3470,10 @@ namespace IronRuby.Runtime {
             if (lje != null && lje.SkipFrame == scope.FlowControlScope) {
                 return false;
             }
+
+            // What ensure clauses the exception went through took of its backtrace (RubyExceptionData.EnterPassedEnsure), which this
+            // frame completes: taken over before $! - still the exception, which the clauses ran for - is read below.
+            var passed = RubyExceptionData.TryGetInstance(exception)?.TakePassedEnsureCapture();
 
             // Only an exception nothing can have kept: one Kernel#raise made itself. One C# threw may be kept by C# code that hands
             // it to Ruby later (Encoding::Converter#last_error), and so may a CLR exception thrown again.
@@ -3427,7 +3499,7 @@ namespace IronRuby.Runtime {
             }
 
             scope.RubyContext.CurrentException = exception;
-            data.CaptureExceptionTrace(scope, deferTrace);
+            data.CaptureExceptionTrace(scope, deferTrace, frameDepth, passed);
             return true;
         }
 
@@ -3456,8 +3528,17 @@ namespace IronRuby.Runtime {
         /// captured - its throw-site trace is not needed again, and a throw again would only start it over. The cause is decided
         /// here rather than in CanRescue, from the same $!: the ensure clauses that ran in between restore it. And there is room
         /// on the stack: a finally block runs on top of the frames the exception came out of, a catch below them (#128).
+        ///
+        /// An exception Kernel#raise made whose backtrace no frame has taken yet goes through as well, in a frame whose record in
+        /// PrecompiledFrames is known (<paramref name="frameDepth"/>) and in which nothing throws it again (EnsureJumpFinder): the
+        /// catch only took the backtrace, and that waits until the exception is caught or exposed (RubyExceptionData.EnterPassedEnsure).
+        /// The walk of the whole stack the catch took was most of what a raise through an ensure clause cost.
         /// </summary>
         public static Exception PassEnsure(RubyScope/*!*/ scope, Exception/*!*/ exception) {
+            return PassEnsure(scope, exception, -1);
+        }
+
+        public static Exception PassEnsure(RubyScope/*!*/ scope, Exception/*!*/ exception, int frameDepth) {
             // A stack overflow, or a stack thousands of frames deep: one CLR dispatch across thousands of frames with filters costs
             // more than a catch and a throw again per frame (SystemStackError through 10k ensure clauses: 2.5-4x slower than
             // the catch on net8.0).
@@ -3475,10 +3556,13 @@ namespace IronRuby.Runtime {
                 return PassEnsureWithoutCurrentException;
             }
 
+            // `raise ""message""' makes a RuntimeError that no #new has marked handled: CanRescue would only mark it (IsHandledInPlace)
             var data = RubyExceptionData.TryGetInstance(exception);
-            if (data == null || !data.Handled || !(data.HasBacktrace || data.RaiseBacktrace != null)) {
+            if (data == null || !(data.Handled || frameDepth >= 0 && RubyExceptionData.IsHandledInPlace(scope.RubyContext, exception)) ||
+                !(data.HasBacktrace || data.RaiseBacktrace != null || frameDepth >= 0 && data.CanPassUntraced(scope, frameDepth))) {
                 return null;
             }
+            data.Handled = true;
 
             data.TrySetCause(scope.RubyContext.CurrentException);
             // the ensure clause will run Ruby code before an outer frame's rescue clauses are matched (see RescuePassMayTest)
@@ -3491,11 +3575,22 @@ namespace IronRuby.Runtime {
         /// ensure clause sees it in $!, as it would had CanRescue caught it.
         /// </summary>
         public static void EnterPassedEnsure(RubyScope/*!*/ scope, Exception passing) {
+            EnterPassedEnsure(scope, passing, -1);
+        }
+
+        /// <param name="frameDepth">The index of the frame's record, as PassEnsure had it.</param>
+        public static void EnterPassedEnsure(RubyScope/*!*/ scope, Exception passing, int frameDepth) {
             if (passing != null && passing != PassEnsureWithoutCurrentException) {
                 scope.RubyContext.CurrentException = passing;
                 var data = RubyExceptionData.TryGetInstance(passing);
-                if (data != null && data.PendingPassedEnsures > 0) {
-                    data.PendingPassedEnsures--;
+                if (data != null) {
+                    if (data.PendingPassedEnsures > 0) {
+                        data.PendingPassedEnsures--;
+                    }
+                    if (frameDepth >= 0) {
+                        // the ensure clause may expose the exception: where its backtrace is still to be taken, it is this frame's
+                        data.EnterPassedEnsure(scope, frameDepth);
+                    }
                 }
             }
         }

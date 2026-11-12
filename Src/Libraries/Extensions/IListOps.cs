@@ -1941,8 +1941,10 @@ namespace IronRuby.Builtins {
 
                 IList listItem = conversions.ToAry.Target(conversions.ToAry, item);
                 if (listItem != null) {
-                    bool _;
-                    if (ReferenceEquals(listItem, list) || seen != null && seen.TryGetValue(listItem, out _)) {
+                    // MRI's ary_join_1_ary marks the element it is inside (rb_exec_recursive on the element, not
+                    // on what its to_ary returned): an object whose to_ary answers a new [self] each time recurs
+                    // through ever new arrays, which used to overflow the stack.
+                    if (ReferenceEquals(listItem, list) || seen != null && seen.ContainsKey(item)) {
                         throw RubyExceptions.CreateArgumentError("recursive array join");
                     }
 
@@ -1950,9 +1952,9 @@ namespace IronRuby.Builtins {
                         seen = new Dictionary<object, bool>(ReferenceEqualityComparer<object>.Instance);
                     }
 
-                    seen.Add(listItem, true);
+                    seen.Add(item, true);
                     JoinRecursive(conversions, listItem, parts, ref isBinary, ref seen);
-                    seen.Remove(listItem);
+                    seen.Remove(item);
                     continue;
                 }
 

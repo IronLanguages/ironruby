@@ -61,13 +61,13 @@ module BenchSuite
     # With budget, the process is stopped after that many seconds and that
     # is not a failure (AWFY is given more outer iterations than it needs).
     # Returns [:exit, status] / [:budget, nil] / [:timeout, nil].
-    def spawn_logged(cmd, log, timeout:, budget: nil, chdir: nil)
+    def spawn_logged(cmd, log, timeout:, budget: nil, chdir: nil, env: {})
       File.open(log, 'w') do |f|
         f.puts "# #{cmd.join(' ')}"
         f.flush
         o = { out: f, err: f, pgroup: true, in: File::NULL }
         o[:chdir] = chdir if chdir
-        pid = Process.spawn(ENV.to_h.merge('RUBYOPT' => nil), *cmd, **o)
+        pid = Process.spawn(ENV.to_h.merge('RUBYOPT' => nil).merge(env), *cmd, **o)
         limit = budget || timeout
         begin
           Timeout.timeout(limit) { Process.wait(pid) }
@@ -357,7 +357,10 @@ module BenchSuite
         log = File.join(@log_dir, "mri-#{safe(rel)}-#{key}-#{attempts}.log")
         cmd = [*interp, '-I', File.join(@cruby_src, 'tool/lib'), '-r', File.join(HERE, 'mri-prelude.rb'),
                file, '-v', '--seed=1', *excluded.map { |t| "-n!/\\A#{Regexp.escape(t)}\\z/" }]
-        how, st = spawn_logged(cmd, log, timeout: @o.mri_timeout, chdir: @cruby_src)
+        # RUBY is the host Ruby that run.sh runs this driver with, and test/unit's
+        # EnvUtil.rubybin takes it before RbConfig.ruby: every assert_separately and
+        # assert_in_out_err of an IronRuby run started CRuby, with IronRuby's load path.
+        how, st = spawn_logged(cmd, log, timeout: @o.mri_timeout, chdir: @cruby_src, env: { 'RUBY' => nil })
         text = File.binread(log).force_encoding('UTF-8').scrub
         summary = text[/^(\d+) tests, (\d+) assertions, (\d+) failures, (\d+) errors, (\d+) skips/]
         if summary

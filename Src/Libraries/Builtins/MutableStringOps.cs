@@ -894,7 +894,23 @@ namespace IronRuby.Builtins {
             try {
                 var site = comparisonStorage.GetCallSite("<=>");
                 object answer = site.Target(site, other, self);
-                return (answer == null) ? null : Integer.TryUnaryMinus(answer);
+                if (answer == null) {
+                    return null;
+                }
+                // rb_invcmp answers -rb_cmpint(answer): -1, 0 or 1 whatever number the other side gave
+                // (2**100 is -1, not -(2**100)), asking a non-Integer how it compares with 0.
+                if (answer is int) {
+                    int i = (int)answer;
+                    return ScriptingRuntimeHelpers.Int32ToObject(i > 0 ? -1 : (i < 0 ? 1 : 0));
+                }
+                var context = comparisonStorage.Context;
+                var greaterThan = context.GetOrCreateSendSite<Func<CallSite, object, object, object>>(">", RubyCallSignature.Simple(1));
+                if (RubyOps.IsTrue(greaterThan.Target(greaterThan, answer, ScriptingRuntimeHelpers.Int32ToObject(0)))) {
+                    return ScriptingRuntimeHelpers.Int32ToObject(-1);
+                }
+                var lessThan = context.GetOrCreateSendSite<Func<CallSite, object, object, object>>("<", RubyCallSignature.Simple(1));
+                return ScriptingRuntimeHelpers.Int32ToObject(
+                    RubyOps.IsTrue(lessThan.Target(lessThan, answer, ScriptingRuntimeHelpers.Int32ToObject(0))) ? 1 : 0);
             } finally {
                 pending.RemoveRange(pending.Count - 2, 2);
             }
@@ -2090,6 +2106,17 @@ namespace IronRuby.Builtins {
                 return MutableString.Create(quoted, RubyEncoding.Ascii);
             }
 
+            if (self.Encoding != RubyEncoding.UTF8 && !self.IsAscii()) {
+                // Outside UTF-8, rb_str_dump writes every non-ASCII byte as \xHH, a multibyte
+                // character as much as an invalid byte. The character representation, which a
+                // string switches to once it is read by character (#length, #inspect), wrote
+                // the character inspect's way ("\x{A4A2}") or, for an invalid byte, the byte
+                // itself.
+                var dumped = MutableString.AppendBinaryRepresentation(new StringBuilder().Append('"'), self.ToByteArray(),
+                    MutableString.Escape.Special | MutableString.Escape.NonAscii, '"').Append('"').ToString();
+                return self.CreateDerived().Append(dumped);
+            }
+
             return self.CreateDerived().Append(GetQuotedStringRepresentation(self, true, '"'));
         }
 
@@ -2132,8 +2159,26 @@ namespace IronRuby.Builtins {
 
             RubyEncoding encoding = self.Encoding;
             if (encoding.IsDummy) {
+                // rb_str_inspect still gives the C escapes of the control characters their short
+                // form ("\e", not "\x1B"); '"', '\\' and '#' are bytes like any other here.
                 foreach (byte b in self.ToByteArray()) {
-                    AppendByteEscape(result, b);
+                    char shortEscape;
+                    switch (b) {
+                        case (byte)'\n': shortEscape = 'n'; break;
+                        case (byte)'\r': shortEscape = 'r'; break;
+                        case (byte)'\t': shortEscape = 't'; break;
+                        case (byte)'\f': shortEscape = 'f'; break;
+                        case 0x0B: shortEscape = 'v'; break;
+                        case 0x08: shortEscape = 'b'; break;
+                        case 0x07: shortEscape = 'a'; break;
+                        case 0x1B: shortEscape = 'e'; break;
+                        default: shortEscape = '\0'; break;
+                    }
+                    if (shortEscape != '\0') {
+                        result.Append('\\').Append(shortEscape);
+                    } else {
+                        AppendByteEscape(result, b);
+                    }
                 }
             } else if (encoding.IsUnicodeEncoding) {
                 string str = self.ToString();
@@ -3900,6 +3945,11 @@ namespace IronRuby.Builtins {
                     if (match != null && match.Index == 0) {
                         return true;
                     }
+                    // MRI matches at the start only (rb_reg_start_with_p), so a match further on is no
+                    // match, and $~ is nil after it rather than that match.
+                    if (match != null) {
+                        scope.GetInnerMostClosureScope().CurrentMatch = null;
+                    }
                     continue;
                 }
 
@@ -4926,7 +4976,7 @@ namespace IronRuby.Builtins {
         }
         
         private static MutableString/*!*/ Strip(MutableString/*!*/ str, bool trimLeft, bool trimRight) {
-            RequireStrippable(str, trimLeft);
+            RequireStrippable(str, trimLeft, trimRight);
             int left, right;
             GetTrimRange(str, trimLeft, trimRight, out left, out right);
             return str.GetSlice(left, right - left);
@@ -4935,7 +4985,7 @@ namespace IronRuby.Builtins {
         public static MutableString StripInPlace(MutableString/*!*/ self, bool trimLeft, bool trimRight) {
             // MRI checks frozen-ness before it works out whether there is anything to trim.
             self.RequireNotFrozen();
-            RequireStrippable(self, trimLeft);
+            RequireStrippable(self, trimLeft, trimRight);
 
             int left, right;
             GetTrimRange(self, trimLeft, trimRight, out left, out right);
@@ -4960,16 +5010,35 @@ namespace IronRuby.Builtins {
         /// that as ArgumentError from the left-hand scan and Encoding::CompatibilityError from
         /// the right-hand one - #lstrip and #rstrip really do raise different classes.
         /// </summary>
-        private static void RequireStrippable(MutableString/*!*/ str, bool trimLeft) {
+        // MRI's lstrip_offset reads characters from the left only as far as the whitespace goes, and an
+        // invalid one among them is an ArgumentError; rstrip_offset refuses a dummy encoding and any
+        // string with an invalid byte in it, with Encoding::CompatibilityError. #strip does the left first.
+        private static void RequireStrippable(MutableString/*!*/ str, bool trimLeft, bool trimRight) {
+            if (trimRight && str.Encoding.IsDummy) {
+                throw new EncodingCompatibilityError(
+                    String.Format("incompatible encoding with this operation: {0}", str.Encoding.Name)
+                );
+            }
             if (!str.ContainsInvalidCharacters()) {
                 return;
             }
             if (trimLeft) {
-                throw RubyExceptions.CreateArgumentError("invalid byte sequence in {0}", str.Encoding.Name);
+                var characters = str.GetCharacters();
+                while (characters.MoveNext()) {
+                    if (!characters.Current.IsValid) {
+                        throw RubyExceptions.CreateArgumentError("invalid byte sequence in {0}", str.Encoding.Name);
+                    }
+                    int c = characters.Current.Codepoint;
+                    if (c >= 0x80 || !IsStrippedCharacter((char)c)) {
+                        break;
+                    }
+                }
             }
-            throw new EncodingCompatibilityError(
-                String.Format("invalid byte sequence in {0}", str.Encoding.Name)
-            );
+            if (trimRight) {
+                throw new EncodingCompatibilityError(
+                    String.Format("invalid byte sequence in {0}", str.Encoding.Name)
+                );
+            }
         }
 
         // MRI strips ASCII whitespace and NUL, on both sides; it does not strip the
@@ -5215,17 +5284,31 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("to_i")]
         public static object/*!*/ ToInteger(MutableString/*!*/ self, [DefaultProtocol, DefaultParameterValue(10)]int @base) {
+            if (@base >= 0) {
+                RequireAsciiCompatibleDigits(self);
+            }
             return ClrString.ToInteger(self.ConvertToString(), @base);
         }
 
         [RubyMethod("hex")]
         public static object/*!*/ ToIntegerHex(MutableString/*!*/ self) {
+            RequireAsciiCompatibleDigits(self);
             return ClrString.ToIntegerHex(self.ConvertToString());
         }
 
         [RubyMethod("oct")]
         public static object/*!*/ ToIntegerOctal(MutableString/*!*/ self) {
+            RequireAsciiCompatibleDigits(self);
             return ClrString.ToIntegerOctal(self.ConvertToString());
+        }
+
+        // MRI's rb_str_to_inum reads the digits as ASCII bytes and refuses an encoding that does not
+        // write them so (rb_must_asciicompat): "0".encode("UTF-32LE").to_i is an error, not 0.
+        private static void RequireAsciiCompatibleDigits(MutableString/*!*/ self) {
+            RubyEncoding encoding = self.Encoding;
+            if (!encoding.IsAsciiIdentity || encoding.IsDummy) {
+                throw new EncodingCompatibilityError(String.Format("ASCII incompatible encoding: {0}", encoding.Name));
+            }
         }
 
         #endregion

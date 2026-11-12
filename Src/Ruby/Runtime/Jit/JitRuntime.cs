@@ -402,6 +402,40 @@ namespace IronRuby.Runtime.Jit {
             return obj != null ? obj.ImmediateClass : context.GetImmediateClassOf(self);
         }
 
+        // ---- global variables without a scope --------------------------------------------
+
+        /// <summary>
+        /// `$x' in a compiled body (JitCompiler.EmitGlobalRead): the site's cached variable, when it is
+        /// an ordinary global, which is what RubyOps.ReadCachedGlobalVariable reads without its scope.
+        /// Anything else - a special variable, one not defined (the generic code warns), a non-main
+        /// Ractor's isolation - deopts, and the generic code reads it as it always does.
+        /// </summary>
+        public static object GetGlobal(RubyContext/*!*/ context, GlobalVariableSite/*!*/ site, object variable) {
+            return GetOrdinaryGlobal(context, site, variable).Value;
+        }
+
+        /// <summary>
+        /// `$x = v' in a compiled body (JitCompiler.EmitGlobalWrite): an ordinary global nobody traces is assigned in
+        /// place, as RubyOps.SetCachedGlobalVariable assigns it. Anything else deopts before storing anything.
+        /// </summary>
+        public static object SetGlobal(RubyContext/*!*/ context, GlobalVariableSite/*!*/ site, object variable, object value) {
+            var plain = GetOrdinaryGlobal(context, site, variable);
+            if (context.AnyGlobalVariableTraced) {
+                throw Deopt();
+            }
+            plain.Assign(value);
+            return value;
+        }
+
+        // The variable the body was compiled for, which the name still denotes: an alias made since (or the
+        // variable removed) gives the name another variable, and the body may then be reading one it writes.
+        private static GlobalVariableInfo/*!*/ GetOrdinaryGlobal(RubyContext/*!*/ context, GlobalVariableSite/*!*/ site, object variable) {
+            if ((context.RactorsStarted && RactorIsolation.IsNonMain(context)) || (object)site.GetVariable(context) != variable) {
+                throw Deopt();
+            }
+            return (GlobalVariableInfo)variable;
+        }
+
         // ---- instance variables without a scope ------------------------------------------
 
         // Each `@x` in a compiled body has an inline cache of its own: the same shape-checked fast

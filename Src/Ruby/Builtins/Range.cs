@@ -13,6 +13,7 @@
  *
  * ***************************************************************************/
 
+using System;
 using System.Runtime.Serialization;
 using IronRuby.Runtime;
 using System.Text;
@@ -60,6 +61,21 @@ namespace IronRuby.Builtins {
             _excludeEnd = other._excludeEnd;
             _initialized = true;
             // a copy is not frozen: (1..3).dup.frozen? is false in MRI
+        }
+
+        /// <summary>
+        /// Marshal.load's range_loader: the range is allocated, and in the table of loaded objects, before its
+        /// ends are read, so a range that is its own begin or end comes back as one. Like MRI's, a loaded Range is
+        /// frozen and an instance of a subclass is not.
+        /// </summary>
+        public void InitializeLoaded(object begin, object end, bool excludeEnd, bool freeze) {
+            _begin = begin;
+            _end = end;
+            _excludeEnd = excludeEnd;
+            _initialized = true;
+            if (freeze) {
+                _flags |= FrozenFlag;
+            }
         }
 
         public void GetObjectData(SerializationInfo info, StreamingContext context) {
@@ -184,6 +200,17 @@ namespace IronRuby.Builtins {
         // MRI's inspect_range: an endless range drops its end and a beginless one drops
         // its begin, but (nil..nil) prints both so that it is not just "..".
         public MutableString/*!*/ Inspect(RubyContext/*!*/ context) {
+            // A range that contains itself inspects as "(... .. ...)" where it recurs, as MRI's
+            // (rb_exec_recursive): it used to overflow the stack.
+            using (IDisposable handle = RubyUtils.InfiniteInspectTracker.TrackObject(this)) {
+                if (handle == null) {
+                    return MutableString.CreateAscii(_excludeEnd ? "(... ... ...)" : "(... .. ...)");
+                }
+                return InspectEndpoints(context);
+            }
+        }
+
+        private MutableString/*!*/ InspectEndpoints(RubyContext/*!*/ context) {
             // The result takes the encoding of the first endpoint's inspect, as MRI's does:
             // US-ASCII for (1..3), UTF-8 for ("a".."c").
             MutableString first = (_begin != null || _end == null) ? context.Inspect(_begin) : null;

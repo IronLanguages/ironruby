@@ -725,5 +725,53 @@ end
 [Errno::ELOOP, ""Too many levels of symbolic links - l1""]
 ");
         }
+
+        /// <summary>
+        /// MRI warns the first time an IO::Buffer is allocated, by new or any other way, and decides then and only
+        /// then (io_buffer_experimental): CRuby's test_io_buffer allocates one with the experimental category off to
+        /// keep the warning out of its output.
+        /// </summary>
+        public void IOBuffer_ExperimentalWarning1() {
+            TestOutput(@"
+require 'ruby4'
+err = Object.new
+def err.write(*s) = (($w ||= +'') << s.join; 0)
+$stderr = err
+IO::Buffer.new(4)
+IO::Buffer.for('x')
+$stderr = STDERR
+puts $w.sub(/\A.*:(\d+): /, 'line \\1: ')
+", @"
+line 6: warning: IO::Buffer is experimental and both the Ruby and C interface may change in the future!
+");
+        }
+
+        /// <summary>
+        /// IO#puts goes into an array with rb_exec_recursive on the object it was given, as MRI's rb_io_puts does, and
+        /// writes "[...]" when it meets that object again: an object whose to_ary answers a new [self] each time was
+        /// followed until the process died (CRuby's TestIO#test_puts_recursive_ary).
+        /// </summary>
+        public void IO_PutsRecursiveToAry1() {
+            TestOutput(@"
+o = Object.new
+def o.to_ary
+  [self]
+end
+puts [o, 1]
+a = [1]
+a << a
+puts a
+puts [[], nil, [2, [3]]], 'x'
+", @"
+[...]
+1
+1
+[...]
+
+2
+3
+x
+");
+        }
     }
 }

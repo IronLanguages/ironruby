@@ -274,7 +274,7 @@ Measured on 2026-11-06 with [ruby/spec](https://github.com/ruby/spec) `dda28d04`
 | `spec/security` | 34 | **0** |
 | `spec/library` | 6011 | **0** |
 | `spec/core` | 23130 | **44** — 20 `ObjectSpace.each_object`, 24 error wording (below) |
-| IronRuby's own C# test suite | ~1000 | **0** |
+| IronRuby's own C# test suite | ~1240 | **0** |
 
 What the failing examples are:
 
@@ -449,14 +449,18 @@ guess:
   is what reaches a hot loop inside a block that is only ever entered once, which no
   invocation-counting JIT can see. If the types change, the copy is rebuilt.
 
-`Util/bench/run.sh` (50 benchmarks, Release, ratio to CRuby 4.0.6 — lower is better):
+`Util/bench/run.sh` (67 benchmarks, Release on .NET 10, ratio to CRuby 4.0.9, lower is better;
+measured 2026-11-12):
 
 | | ratio |
 |---|---|
-| `float_arith`, `cmp_branch`, `int_arith`, `mandelbrot`, `fib`, `while_loop` | **0.27 – 0.74** (faster than CRuby) |
-| calls, ivars, string and array work | 2 – 4 |
-| geomean over all 50 | **3.25** |
-| `raise_rescue`, `fiber_switch` | 150+ (backtrace construction; a CLR thread per Fiber) |
+| `cmp_branch`, `float_arith`, `upto_loop`, `times_loop`, `mandelbrot`, `case_when`, `int_arith`, `each_loop`, `fib`, `while_loop` | **0.29 – 0.80** (faster than CRuby) |
+| `map`/`select`/`any?` loops, constants, array and hash lookups, global variables | 0.9 – 1.8 |
+| calls, ivars, string work, `Enumerator#next` over an Array | 1.6 – 3.4 |
+| `yield`, `Proc#call`, `super`, `method_missing` | 4 – 6 |
+| geomean over all 67 | **2.30** |
+| `call_kw_omitted`, `raise_rescue`, `fiber_new` | 10 – 14 (keyword defaults; backtrace construction; starting a Fiber's thread) |
+| `enum_next_gen`, `fiber_switch` | 33 – 49 (a Fiber is a CLR thread, a switch a thread handoff) |
 
 Build with `-c Release` and run with `IR_CONFIG=Release ./ir.sh`: the optimized build is
 ~1.8x faster than the default Debug build across the whole suite. See

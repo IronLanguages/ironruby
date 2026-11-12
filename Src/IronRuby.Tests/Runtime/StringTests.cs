@@ -463,5 +463,228 @@ p [""xyz"".count(""x""), """".count(""x""), ""x"".squeeze, ""xx"".squeeze, ""あ
 [1, 0, ""x"", ""x"", ""あ"", 2, 2]
 ");
         }
+
+        /// <summary>
+        /// String#dump writes a non-ASCII byte of a string outside UTF-8 as \xHH, as MRI's rb_str_dump does. A string
+        /// that had been read by character (#length, #inspect) wrote its characters inspect's way ("\x{A4A2}"), or an
+        /// invalid byte as the byte itself, which made CRuby's test_m17n_comb fail on its own descriptions.
+        /// </summary>
+        public void String_DumpNonUnicode1() {
+            TestOutput(@"
+s = ""\xA4\xA2"".dup.force_encoding('EUC-JP')
+s.length
+puts s.dump
+t = ""\xA1"".dup.force_encoding('EUC-JP')
+t.inspect
+puts t.dump
+u = ""\x82\xA0#{'#'}{\""\\"".dup.force_encoding('Shift_JIS')
+u.size
+puts u.dump
+", @"
+""\xA4\xA2""
+""\xA1""
+""\x82\xA0\#{\""\\""
+");
+        }
+
+        /// <summary>
+        /// String#&lt;=&gt; with an object that cannot be a String asks it the other way round and answers -rb_cmpint of its
+        /// answer, as MRI's rb_invcmp does: -1, 0 or 1, whatever number came back. 2**100 came back as -(2**100).
+        /// </summary>
+        public void String_CompareInverse1() {
+            TestOutput(@"
+def cmp(answer)
+  o = Object.new
+  o.define_singleton_method(:<=>) { |_| answer }
+  'foo' <=> o
+rescue => e
+  e
+end
+p cmp(2**100), cmp(-(2**100)), cmp(1.5), cmp(0), cmp(nil), cmp('x')
+", @"
+-1
+1
+-1
+0
+nil
+#<ArgumentError: comparison of String with 0 failed>
+");
+        }
+
+        /// <summary>
+        /// each_line('', chomp: true) takes the newline and the blank line off a paragraph a blank line ended, and leaves
+        /// the last paragraph, which none ended, as it is, trailing newline and all (rb_str_enumerate_lines).
+        /// </summary>
+        public void String_EachLineParagraphChomp1() {
+            TestOutput(@"
+require 'ruby4'
+p ""hello\n\n\nworld\n"".each_line('', chomp: true).to_a
+p ""a\n\n\nb\n\n"".lines('', chomp: true), ""a\r\n\r\nb\r\n"".lines('', chomp: true), ""\n\na\n\n"".lines('', chomp: true)
+p ""a\n\n\nb\n"".lines(''), ""a\nb\n\nc"".lines('', chomp: true)
+", @"
+[""hello"", ""world\n""]
+[""a"", ""b""]
+[""a"", ""b\r\n""]
+["""", ""a""]
+[""a\n\n"", ""b\n""]
+[""a\nb"", ""c""]
+");
+        }
+
+        /// <summary>
+        /// String#upto (MRI's str_upto_each) yields a copy of the receiver and works out the next string before the
+        /// block runs, so a block that changes the string it got changes neither the receiver nor the walk; and the walk
+        /// starts whenever the receiver sorts before the end, a longer receiver included.
+        /// </summary>
+        public void String_UptoCopies1() {
+            TestOutput(@"
+require 'ruby4'
+first = +""ぁ""
+count = 0
+r = first.upto(""ん"") { |s| count += 1; s.replace(""ん"") }
+p r.equal?(first), first == ""\u3041"", count
+def t(a, b, *x) = (r = []; a.upto(b, *x) { |s| r << s }; r)
+p t('aa', 'b'), t('b', 'aa'), t('az', 'bb', true), t('y', 'ab'), t('a', 'a', true)
+", @"
+true
+true
+83
+[""aa""]
+[]
+[""az"", ""ba""]
+[]
+[]
+");
+        }
+
+        /// <summary>
+        /// start_with?(regexp) matches at the start only (rb_reg_start_with_p): a match further on is no match, and leaves
+        /// $~ nil rather than set to it.
+        /// </summary>
+        public void String_StartWithRegexpLastMatch1() {
+            TestOutput(@"
+p 'hello'.start_with?(/hel/), $&
+p 'hello'.start_with?(/el/), $~
+p 'hello'.start_with?(/x/), $~
+", @"
+true
+""hel""
+false
+nil
+false
+nil
+");
+        }
+
+        /// <summary>
+        /// A string in a dummy encoding (ISO-2022-JP) inspects byte by byte, but the control characters with a C escape keep
+        /// its short form, as in MRI's rb_str_inspect: "\e", not "\x1B".
+        /// </summary>
+        public void String_InspectDummyControl1() {
+            TestOutput(@"
+puts ""\n\r\t\f\v\b\a\e\""\\#a\x7f"".dup.force_encoding('ISO-2022-JP').inspect
+", @"
+""\n\r\t\f\v\b\a\e\x22\x5C\x23\x61\x7F""
+");
+        }
+
+        /// <summary>
+        /// MRI's lstrip reads characters only as far as the leading whitespace goes, and an invalid one there is an
+        /// ArgumentError; rstrip refuses any string with an invalid byte, and a dummy encoding, with
+        /// Encoding::CompatibilityError; strip does the left side first. IronRuby raised ArgumentError for any invalid
+        /// string lstrip or strip met, and stripped a dummy-encoded string from the right.
+        /// </summary>
+        public void String_StripInvalid1() {
+            TestOutput(@"
+def u(s) = s.dup.force_encoding('UTF-8')
+[u(""a\x80""), u("" \x80""), u(""  a \x80 "")].each do |s|
+  p [:lstrip, :rstrip, :strip, :lstrip!, :rstrip!, :strip!].map { |m| (s.dup.send(m) rescue $!.class) }
+end
+j = "" ab "".dup.force_encoding('ISO-2022-JP')
+p((j.rstrip rescue $!), (j.strip rescue $!), j.lstrip.bytes)
+", @"
+[""a\x80"", Encoding::CompatibilityError, Encoding::CompatibilityError, nil, Encoding::CompatibilityError, Encoding::CompatibilityError]
+[ArgumentError, Encoding::CompatibilityError, ArgumentError, ArgumentError, Encoding::CompatibilityError, ArgumentError]
+[""a \x80 "", Encoding::CompatibilityError, Encoding::CompatibilityError, ""a \x80 "", Encoding::CompatibilityError, Encoding::CompatibilityError]
+#<Encoding::CompatibilityError: incompatible encoding with this operation: ISO-2022-JP>
+#<Encoding::CompatibilityError: incompatible encoding with this operation: ISO-2022-JP>
+[97, 98, 32]
+");
+        }
+
+        /// <summary>
+        /// String#initialize takes encoding: and capacity:, as MRI's rb_str_init does, so a subclass's super and a call
+        /// through #send can give them: the keywords and the argument are checked first, then a frozen receiver is a
+        /// FrozenError, and the string is emptied when there is nothing to copy. They were "no implicit conversion of
+        /// Hash into String".
+        /// </summary>
+        public void String_InitializeKeywords1() {
+            TestOutput(@"
+require 'ruby4'
+def t; yield; rescue Exception => e; e; end
+s = +'abc'
+p t { s.send(:initialize, capacity: 10) }, s
+p t { s.send(:initialize, 'xy', encoding: 'euc-jp', capacity: 3) }, s.encoding
+p t { s.send(:initialize, foo: 1, bar: 2) }, t { s.send(:initialize, 1, capacity: 1) }, t { s.send(:initialize, 'a', capacity: 'x') }
+f = 'x'.freeze
+p t { f.send(:initialize, capacity: 1) }, t { f.send(:initialize, encoding: 'utf-8') }, t { f.send(:initialize, foo: 1) }, t { f.send(:initialize) }
+class S2 < String; def initialize(*a, **k); super; @x = 1; end; end
+p S2.new('abc', capacity: 5), S2.new(encoding: 'euc-jp').encoding
+", @"
+""""
+""""
+""xy""
+#<Encoding:EUC-JP>
+#<ArgumentError: unknown keywords: :foo, :bar>
+#<TypeError: no implicit conversion of Integer into String>
+#<TypeError: no implicit conversion of String into Integer>
+#<FrozenError: can't modify frozen String: ""x"">
+#<FrozenError: can't modify frozen String: ""x"">
+#<ArgumentError: unknown keyword: :foo>
+""x""
+""abc""
+#<Encoding:EUC-JP>
+");
+        }
+
+        /// <summary>
+        /// to_i, hex and oct read digits as ASCII bytes and refuse an encoding that does not write them so, as MRI's
+        /// rb_must_asciicompat does: "0" in UTF-32LE was 0.
+        /// </summary>
+        public void String_ToIntAsciiIncompatible1() {
+            TestOutput(@"
+require 'ruby4'
+def t; yield; rescue Exception => e; e; end
+p t { '0'.encode('utf-32le').to_i }, t { '12'.encode('utf-16be').to_i(16) }, t { '1'.encode('utf-16le').hex }, t { '7'.dup.force_encoding('ISO-2022-JP').oct }
+p '12'.to_i, '12'.b.to_i(16), 'ff'.hex
+", @"
+#<Encoding::CompatibilityError: ASCII incompatible encoding: UTF-32LE>
+#<Encoding::CompatibilityError: ASCII incompatible encoding: UTF-16BE>
+#<Encoding::CompatibilityError: ASCII incompatible encoding: UTF-16LE>
+#<Encoding::CompatibilityError: ASCII incompatible encoding: ISO-2022-JP>
+12
+18
+255
+");
+        }
+
+        /// <summary>
+        /// String#undump answers UTF-8 once it has read a \u escape, whatever the receiver's encoding, and refuses \u
+        /// next to a \x escape of a non-ASCII byte, as MRI's undump_after_backslash does.
+        /// </summary>
+        public void String_UndumpUnicodeEncoding1() {
+            TestOutput(@"
+require 'ruby4'
+def t; yield; rescue Exception => e; e; end
+p t { '""\\u3042""'.encode('EUC-JP').undump.encoding }, t { '""\\xA4\\xA2""'.encode('EUC-JP').undump.encoding }
+p t { '""\\xE3\\u3042""'.undump }, t { '""\\u3042\\xE3""'.undump }, t { '""\\x41\\u0042""'.undump }
+", @"
+#<Encoding:UTF-8>
+#<Encoding:EUC-JP>
+#<RuntimeError: hex escape and Unicode escape are mixed>
+#<RuntimeError: hex escape and Unicode escape are mixed>
+""AB""
+");
+        }
     }
 }

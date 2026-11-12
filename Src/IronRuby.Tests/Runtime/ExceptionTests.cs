@@ -1399,6 +1399,113 @@ $log.join(""|"")
         }
 
         /// <summary>
+        /// An exception Kernel#raise made goes through compiled ensure-only bodies before any frame has taken its backtrace
+        /// (RubyOps.PassEnsure, RubyExceptionData.EnterPassedEnsure): the backtrace an ensure clause reads in $! - after calls that
+        /// reuse the records of the frames left, in a recursion, as the cause of an exception the clause raises - and the one the
+        /// frame that rescues it reads, from a method, a block, a rescue that does not match, a rescue modifier and a thread; an
+        /// ensure clause that ends the exception with a jump. A throw through a catch of another tag, and the ensure clause it
+        /// passes. The expected output is CRuby 4.0's. Run interpreted, compiled from the
+        /// first call and as the default engine compiles.
+        /// </summary>
+        public void Exception_EnsurePassUntraced1() {
+            const string script = @"$log = []
+def bt(e) = e.backtrace.map { |f| f[/:\d+:in '[^']*'/] }.join("","")
+def noise = [1].map { |v| v + 1 }
+def d; raise ""x""; end
+def e1; d; ensure; noise; end
+def e2; e1; ensure; noise; $log << bt($!); end
+def e3; e2; ensure; noise; end
+begin; e3; rescue => e; $log << bt(e); end
+def er(n); n == 0 ? d : er(n - 1); ensure; noise; $log << bt($!) if n == 1; end
+begin; er(3); rescue => e; $log << bt(e); end
+def ef; e1; ensure; noise; raise IOError, ""f""; end
+begin; ef; rescue => e; $log << ""#{bt(e)} / #{bt(e.cause)}""; end
+def eg; e1; ensure; return 7; end
+$log << eg
+def eh; [1].each { begin; e1; ensure; next; end }; :h; end
+$log << eh
+def ei; [1].each { begin; e1; rescue => e; $log << bt(e); end }; end
+ei
+def ej; e1; rescue TypeError; end
+begin; ej; rescue => e; $log << bt(e); end
+$log << (e1 rescue bt($!))
+t = Thread.new { begin; e1; rescue => e; bt(e); end }
+$log << t.value
+$log << catch(:a) { catch(:b) { begin; throw :a, 1; ensure; $log << ""ens""; end } }
+$log << catch(:a) { catch(:b) { throw :b, 2 }; 3 }
+$log.join(""|"")
+";
+            const string expected = ":4:in 'Object#d',:5:in 'Object#e1',:6:in 'Object#e2',:7:in 'Object#e3',:8:in '<main>'|:4:in 'Object#d',:5:in 'Object#e1',:6:in 'Object#e2',:7:in 'Object#e3',:8:in '<main>'|:4:in 'Object#d',:9:in 'Object#er',:9:in 'Object#er',:9:in 'Object#er',:9:in 'Object#er',:10:in '<main>'|:4:in 'Object#d',:9:in 'Object#er',:9:in 'Object#er',:9:in 'Object#er',:9:in 'Object#er',:10:in '<main>'|:11:in 'Object#ef',:12:in '<main>' / :4:in 'Object#d',:5:in 'Object#e1',:11:in 'Object#ef',:12:in '<main>'|7|h|:4:in 'Object#d',:5:in 'Object#e1',:17:in 'block in Object#ei',:17:in 'Array#each',:17:in 'Object#ei',:18:in '<main>'|:4:in 'Object#d',:5:in 'Object#e1',:19:in 'Object#ej',:20:in '<main>'|:4:in 'Object#d',:5:in 'Object#e1',:21:in '<main>'|:4:in 'Object#d',:5:in 'Object#e1',:22:in 'block in <main>'|ens|1|3";
+
+            var interpreting = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = Int32.MaxValue; });
+            AreEqual(interpreting.CreateScriptSourceFromString(script, "pass9.rb", SourceCodeKind.File).Execute().ToString(), expected);
+            var compiling = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = 0; });
+            AreEqual(compiling.CreateScriptSourceFromString(script, "pass9.rb", SourceCodeKind.File).Execute().ToString(), expected);
+            AreEqual(Engine.CreateScriptSourceFromString(script, "pass9.rb", SourceCodeKind.File).Execute().ToString(), expected);
+        }
+
+        /// <summary>
+        /// An interpreted class body that catches an exception gets its backtrace wrong when the frames the exception came out of
+        /// did not catch it, so an exception does not go through a compiled ensure clause without a backtrace while such a body is
+        /// on the stack (RubyExceptionData.CanPassUntraced): the compiled method's ensure clause takes it, as before. The expected
+        /// output is CRuby 4.0's.
+        /// </summary>
+        public void Exception_EnsurePassUntracedModuleBody1() {
+            const string script = @"def bt(e) = e.backtrace.map { |f| f[/:\d+:in '[^']*'/] }.join("","")
+def m5; raise ArgumentError; ensure; $z = 2; end
+def m3; eval ""class ::Foo\n begin\n  m5\n ensure\n  $z = 1\n end\nend""; end
+def top; m3; rescue => e; bt(e); end
+r = []; 30.times { r << top }; r.uniq.join(""|"")
+";
+            const string expected = ":2:in 'Object#m5',:3:in '<class:Foo>',:1:in 'Object#m3',:3:in 'Kernel#eval',:3:in 'Object#m3',:4:in 'Object#top',:5:in 'block in <main>',:5:in 'Integer#times',:5:in '<main>'";
+
+            var interpreting = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = Int32.MaxValue; });
+            AreEqual(interpreting.CreateScriptSourceFromString(script, "pass10.rb", SourceCodeKind.File).Execute().ToString(), expected);
+            var compiling = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = 1; });
+            AreEqual(compiling.CreateScriptSourceFromString(script, "pass10.rb", SourceCodeKind.File).Execute().ToString(), expected);
+        }
+
+        /// <summary>
+        /// An ensure clause that calls a block - a block literal, a block passed (&amp;:to_s), a yield, a zsuper, a define_method
+        /// with a block - has a jump of the DLR's out of it (the label a break from the block returns through), which the DLR's
+        /// FlowControlRewriter makes a catch and a `throw' again of the exception: its CLR trace then has the frame twice, so the
+        /// exception does not go through such a clause without a backtrace (Body.GotoFinder). And `raise ""message""', which no
+        /// #new marks handled, does go through the other ensure clauses; a backtrace an ensure clause sets is the one an outer clause
+        /// reads in $@. Each case is run 40 times, so that the methods are
+        /// compiled. The expected output is CRuby 4.0's.
+        /// </summary>
+        public void Exception_EnsurePassUntracedJumps1() {
+            const string script = @"def bt(e) = e.backtrace.map { |f| f[/:\d+:in '[^']*'/] }.join("","")
+class B; def s; end; def take(&b) = b; end
+class C < B
+  def s; raise ArgumentError, ""a""; ensure; super; end
+  def amp; raise ArgumentError, ""a""; ensure; take(&:to_s); end
+  def dm; raise ArgumentError, ""a""; ensure; Class.new.send(:define_method, :zz) { }; end
+  def blk; raise ArgumentError, ""a""; ensure; [1].each { }; end
+  def yld; raise ArgumentError, ""a""; ensure; yield; end
+  def str; raise ""a""; ensure; $z = 1; end
+  def str_exposed; raise ""a""; ensure; $seen = bt($!); end
+  def sb_inner; raise ArgumentError, ""a""; ensure; $!.set_backtrace([""custom:1:in 'x'""]); end
+  def sb; sb_inner; ensure; $sb = $@; end
+end
+def run(m); C.new.send(m) { }; rescue => e; bt(e); end
+r = []
+[:s, :amp, :dm, :blk, :yld, :str, :str_exposed, :sb].each { |m| seen = []; 40.times { seen << run(m) }; r << ""#{m} #{seen.uniq.join("" / "")}"" }
+r << $seen << $sb.inspect
+r.join(""|"")
+";
+            const string expected = "s :4:in 'C#s',:14:in 'Object#run',:16:in 'block (2 levels) in <main>',:16:in 'Integer#times',:16:in 'block in <main>',:16:in 'Array#each',:16:in '<main>'|amp :5:in 'C#amp',:14:in 'Object#run',:16:in 'block (2 levels) in <main>',:16:in 'Integer#times',:16:in 'block in <main>',:16:in 'Array#each',:16:in '<main>'|dm :6:in 'C#dm',:14:in 'Object#run',:16:in 'block (2 levels) in <main>',:16:in 'Integer#times',:16:in 'block in <main>',:16:in 'Array#each',:16:in '<main>'|blk :7:in 'C#blk',:14:in 'Object#run',:16:in 'block (2 levels) in <main>',:16:in 'Integer#times',:16:in 'block in <main>',:16:in 'Array#each',:16:in '<main>'|yld :8:in 'C#yld',:14:in 'Object#run',:16:in 'block (2 levels) in <main>',:16:in 'Integer#times',:16:in 'block in <main>',:16:in 'Array#each',:16:in '<main>'|str :9:in 'C#str',:14:in 'Object#run',:16:in 'block (2 levels) in <main>',:16:in 'Integer#times',:16:in 'block in <main>',:16:in 'Array#each',:16:in '<main>'|str_exposed :10:in 'C#str_exposed',:14:in 'Object#run',:16:in 'block (2 levels) in <main>',:16:in 'Integer#times',:16:in 'block in <main>',:16:in 'Array#each',:16:in '<main>'|sb :1:in 'x'|:10:in 'C#str_exposed',:14:in 'Object#run',:16:in 'block (2 levels) in <main>',:16:in 'Integer#times',:16:in 'block in <main>',:16:in 'Array#each',:16:in '<main>'|[\"custom:1:in 'x'\"]";
+
+            var interpreting = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = Int32.MaxValue; });
+            AreEqual(interpreting.CreateScriptSourceFromString(script, "pass11.rb", SourceCodeKind.File).Execute().ToString(), expected);
+            var compiling = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = 0; });
+            AreEqual(compiling.CreateScriptSourceFromString(script, "pass11.rb", SourceCodeKind.File).Execute().ToString(), expected);
+            var synchronous = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = 1; });
+            AreEqual(synchronous.CreateScriptSourceFromString(script, "pass11.rb", SourceCodeKind.File).Execute().ToString(), expected);
+            AreEqual(Engine.CreateScriptSourceFromString(script, "pass11.rb", SourceCodeKind.File).Execute().ToString(), expected);
+        }
+
+        /// <summary>
         /// The walk of the stack below a rescuing frame waits only for an exception Kernel#raise made itself: C# code may keep the
         /// exception it throws and hand it to Ruby code after the frame is gone (Encoding::Converter#last_error is the one convert
         /// threw), and so may a CLR exception thrown again. Their backtraces must keep the callers of the rescuing frame, and no

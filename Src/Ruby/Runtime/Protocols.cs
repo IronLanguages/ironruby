@@ -551,17 +551,57 @@ namespace IronRuby.Runtime {
         public static object CoerceAndApplyBitwise(BinaryOpStorage/*!*/ coercionStorage,
             BinaryOpStorage/*!*/ binaryOpStorage, string/*!*/ binaryOp, object self, object other) {
 
+            // MRI's rb_num_coerce_bit: the pair #coerce answered is used whatever it holds, provided its first
+            // element has the operator (rb_check_funcall); a Float, which has no #&, is the TypeError about the
+            // original operands. An object coercing itself into its own class does its own bitwise operation.
             IList pair;
-            if (!TryCoerce(coercionStorage, self, other, out pair) || !IsIntegerValue(pair[0]) || !IsIntegerValue(pair[1])) {
-                throw RubyExceptions.MakeCoercionError(coercionStorage.Context, other, self);
+            var context = coercionStorage.Context;
+            if (!TryCoerce(coercionStorage, self, other, out pair)) {
+                throw RubyExceptions.MakeCoercionError(context, other, self);
             }
 
-            var opSite = binaryOpStorage.GetCallSite(binaryOp);
-            return opSite.Target(opSite, pair[0], pair[1]);
+            // rb_check_funcall: an operator the receiver does not define still goes to its method_missing, unless
+            // that is BasicObject's (which could only raise) or a respond_to? of its own says no; a NoMethodError
+            // for the operator that comes back from method_missing is "no such operator" as well.
+            bool defined = context.ResolveMethod(pair[0], binaryOp, VisibilityContext.AllVisible).Found;
+            if (!defined) {
+                var missing = context.GetImmediateClassOf(pair[0]).ResolveMethod("method_missing", VisibilityContext.AllVisible);
+                if (!missing.Found || (missing.Info.DeclaringModule == context.BasicObjectClass && missing.Info is RubyLibraryMethodInfo)) {
+                    throw RubyExceptions.MakeCoercionError(context, other, self);
+                }
+                // (the context's own respond_to? site: binaryOpStorage holds one site, which is the operator's)
+                if (HasUserDefinedRespondTo(context, pair[0]) && !context.RespondTo(pair[0], binaryOp)) {
+                    throw RubyExceptions.MakeCoercionError(context, other, self);
+                }
+            }
+
+            // rb_exec_recursive_paired around the call (num_funcall_bit_1): a #coerce that hands the Integer back
+            // as the receiver - [1, other] for `1 & other' - would come straight back here, and kept doing so until
+            // the stack overflowed and took the process with it. MRI raises a NameError that shows the operation.
+            using (IDisposable handle = _BitwiseCoercionTracker.TrackPair(pair[0], pair[1])) {
+                if (handle == null) {
+                    // NameError#name is the operator; there is no receiver
+                    var error = RubyExceptions.CreateNameError("{0}{1}{2}", BitwiseOperand(context, pair[0]), binaryOp, BitwiseOperand(context, pair[1]));
+                    RubyExceptionData.GetInstance(error).Name = context.CreateSymbol(binaryOp, RubyEncoding.UTF8);
+                    throw error;
+                }
+                var opSite = binaryOpStorage.GetCallSite(binaryOp);
+                try {
+                    return opSite.Target(opSite, pair[0], pair[1]);
+                } catch (MissingMethodException e) when (!defined && IsUndefinedMethod(context, e, binaryOp, pair[0])) {
+                    throw RubyExceptions.MakeCoercionError(context, other, self);
+                }
+            }
         }
 
-        private static bool IsIntegerValue(object value) {
-            return value is int || value is long || value is BigInteger;
+        [Microsoft.Scripting.MultiRuntimeAware]
+        private static readonly RubyUtils.PairRecursionTracker _BitwiseCoercionTracker = new RubyUtils.PairRecursionTracker();
+
+        private static string/*!*/ BitwiseOperand(RubyContext/*!*/ context, object obj) {
+            // the operand's #to_s, as the %PRIsVALUE of MRI's message
+            var site = context.GetClassOf(obj).ToStringSite;
+            var str = site.Target(site, obj) as MutableString;
+            return (str ?? RubyUtils.ObjectToMutableString(context, obj)).ToString();
         }
 
         private static bool TryCoerceAndApply(
@@ -679,13 +719,18 @@ namespace IronRuby.Runtime {
         /// NoMethodError raised from inside a #coerce that does exist.
         /// </summary>
         private static bool IsUndefinedCoerce(RubyContext/*!*/ context, MissingMethodException/*!*/ e, object other) {
+            return IsUndefinedMethod(context, e, "coerce", other);
+        }
+
+        /// <summary>The same for any method name: the NoMethodError is about <paramref name="methodName"/> on <paramref name="other"/>.</summary>
+        private static bool IsUndefinedMethod(RubyContext/*!*/ context, MissingMethodException/*!*/ e, string/*!*/ methodName, object other) {
             var data = RubyExceptionData.TryGetInstance(e);
             if (data == null) {
                 return false;
             }
 
             var name = data.Name as RubySymbol;
-            if (name == null || name.ToString() != "coerce") {
+            if (name == null || name.ToString() != methodName) {
                 return false;
             }
 

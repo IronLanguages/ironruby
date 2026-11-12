@@ -613,8 +613,9 @@ namespace IronRuby.Builtins {
         internal static object Inject(CallSiteStorage<EachSite>/*!*/ each, BlockParam operation, RubyScope scope, string operatorName, object self, object initial) {
             Debug.Assert(operation != null ^ (scope != null && operatorName != null));
 
+            // A public call, as MRI's rb_funcallv_public since [Bug #13592]: inject(:+) does not call a private #+.
             var site = (operatorName == null) ? null : each.Context.GetOrCreateSendSite<Func<CallSite, RubyScope, object, object, object>>(
-                operatorName, new RubyCallSignature(1, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf)
+                operatorName, new RubyCallSignature(1, RubyCallFlags.HasScope)
             );
 
             var list = self as RubyArray;
@@ -666,9 +667,14 @@ namespace IronRuby.Builtins {
                 i = 1;
             }
 
-            if (site != null && operatorName == "+" && IListOps.IsBuiltinMethod(scope.RubyContext.IntegerClass, "+")) {
-                for (; i < list.Count && result is int && list[i] is int; i++) {
-                    result = ClrInteger.Add((int)result, (int)list[i]);
+            if (site != null && operatorName == "+" && i < list.Count && IListOps.IsBuiltinMethod(scope.RubyContext.IntegerClass, "+")) {
+                // the first addition through the call site, which refuses a #+ made private
+                result = site.Target(site, scope, result, list[i++]);
+                // that call ran Ruby code if the first element is not an Integer, and it may have redefined Integer#+
+                if (IListOps.IsBuiltinMethod(scope.RubyContext.IntegerClass, "+")) {
+                    for (; i < list.Count && result is int && list[i] is int; i++) {
+                        result = ClrInteger.Add((int)result, (int)list[i]);
+                    }
                 }
             }
 

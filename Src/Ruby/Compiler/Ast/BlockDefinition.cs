@@ -169,6 +169,7 @@ namespace IronRuby.Compiler.Ast {
                 redoLabel
             );
             gen.CurrentBlock.LexicalDepth = _definedScope.Depth;
+            gen.CurrentBlock.HasOwnCompiledFrame = true;
 
             // the binding of the parameters is one assignment of each, whatever it takes to make it
             gen.BindingParameters = true;
@@ -276,8 +277,23 @@ namespace IronRuby.Compiler.Ast {
                 );
             }
 
+            // A scope-free body keeps its locals in CLR variables: { |x| x } would otherwise allocate their tuple on every call.
+            MSA.Expression registerBody = (lazyScope != null) ? scope.TryUseRegisterLocals(body) : null;
+
             MSA.Expression enterScope;
-            if (reuseScope) {
+            if (registerBody != null) {
+                body = registerBody;
+                enterScope = Ast.Block(
+                    scope.MakeRegisterLocalsStorage(),
+                    Ast.Condition(Methods.EnterScopeFreeBlock.OpCall(),
+                        Methods.TraceBlockCall.OpCall(Methods.CreateBlockScopeLazy.OpCall(
+                            scope.MaterializeLocals(), scope.GetVariableNamesExpression(), blockParameter, selfParameter,
+                            EnterInterpretedFrameExpression.Instance
+                        )),
+                        AstUtils.Constant(null, typeof(RubyBlockScope))
+                    )
+                );
+            } else if (reuseScope) {
                 // the scope to reuse is taken first, its tuple from it (see RubyOps.TakeReusableBlockScope)
                 var reusableScope = scope.DefineHiddenVariable("#reusable", typeof(RubyBlockScope));
                 enterScope = Methods.CreateReusableBlockScope.OpCall(new AstExpressions {

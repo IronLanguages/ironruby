@@ -306,6 +306,8 @@ namespace IronRuby.Builtins {
 
         // Call overloads don't check parameter count, this is done by Proc#call.
 
+        // AggressiveOptimization: see RubyOps.Yield0.
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public object Call(Proc procArg) {
             var blockParam = RubyOps.CreateBfcForProcCall(this);
             try {
@@ -317,6 +319,7 @@ namespace IronRuby.Builtins {
             }
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public object Call(Proc procArg, object arg1) {
             var blockParam = RubyOps.CreateBfcForProcCall(this);
             try {
@@ -333,6 +336,7 @@ namespace IronRuby.Builtins {
             }
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public object Call(Proc procArg, object arg1, object arg2) {
             var blockParam = RubyOps.CreateBfcForProcCall(this);
             try {
@@ -344,6 +348,7 @@ namespace IronRuby.Builtins {
             }
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public object Call(Proc procArg, object arg1, object arg2, object arg3) {
             var blockParam = RubyOps.CreateBfcForProcCall(this);
             try {
@@ -355,6 +360,7 @@ namespace IronRuby.Builtins {
             }
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public object Call(Proc procArg, object arg1, object arg2, object arg3, object arg4) {
             var blockParam = RubyOps.CreateBfcForProcCall(this);
             try {
@@ -366,6 +372,7 @@ namespace IronRuby.Builtins {
             }
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public object Call(Proc procArg, params object[]/*!*/ args) {
             switch (args.Length) {
                 case 0: return Call(procArg);

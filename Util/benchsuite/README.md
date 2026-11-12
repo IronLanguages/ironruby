@@ -98,6 +98,16 @@ tests that passed on each, and the hung/crashed and failing test names;
 `mri-failing.txt` in the output directory lists every IronRuby failure by
 name, for diffing two runs.
 
+A test that starts a Ruby of its own (`assert_separately`, `assert_in_out_err`,
+`assert_normal_exit`) starts `RbConfig.ruby` of the interpreter under test:
+each file runs without `RUBY`, which run.sh exports for the host CRuby and
+test/unit's `EnvUtil.rubybin` would otherwise take. (Runs before 2026-11-12
+started CRuby there, with IronRuby's load path: those tests either failed
+loading IronRuby's rbconfig.rb or passed on CRuby's behalf.) Such a child
+costs an IronRuby startup or two, so files made of them (test_rubyoptions,
+test_process, test_argf, test_allocation) need a generous `--mri-timeout`
+on a loaded machine, and their counts move with the load.
+
 Status: PASS (no failures), RAN (finished, with failures), TIMEOUT / CRASH (it
 never reached its summary even after excluding the tests that hung).
 
@@ -143,26 +153,43 @@ fluentd 1.9x, shipit 5.0x, lobsters 20x, railsbench 23x, ruby-lsp 48x, rubocop
 77x, protoboeuf 243x. Only psych-load and sequel do not run: their Gemfiles
 demand psych 4 and sqlite3 1.x, older majors than IronRuby provides.
 
-**CRuby `test/ruby` (`mri`).** IronRuby passes 4444 of the 10220 tests CRuby
-passes (43.5%): 25 files PASS, 100 RAN, 11 CRASH, 6 N/A (they need CRuby's C
-test extensions). The crashes are mostly a single missing piece that stops a
-whole file before its first test:
+**CRuby `test/ruby` (`mri`).** Measured 2026-11-12 against CRuby 4.0.9's tests,
+IronRuby Release on .NET 10, `--ir-only -j 2 --mri-timeout 300` on one shared
+CPU (the CRuby counts come from a full run of the same day): IronRuby passes
+5430 of the 10230 tests CRuby passes (53.1%): 40 files PASS, 88 RAN, 6
+TIMEOUT, 2 CRASH, 6 N/A (they need CRuby's C test extensions). The same
+measurement of the code before that day's fixes gave 4574 (44.7%; 34 PASS,
+87 RAN, 6 TIMEOUT, 9 CRASH). The 2026-10-29 figure, 4444 of 10220, was taken
+with child Rubies run by CRuby (see above) and is not comparable; measured
+that way the code before the fixes passed 4752.
 
-- no `continuation` library: test_hash (297 tests), test_enum, test_fiber,
-  test_settracefunc, test_beginendblock, test_continuation
-- `RbConfig::CONFIG["EXECUTABLE_EXTS"]` is nil: all of test_rubyoptions
-- `Set::CoreSet` missing: test_set; `RubyVM` missing: test_iseq (expected)
-- test_syntax:219 (`no implicit conversion of nil into Array`), test_thread_queue
-  (`remove_method :marshal_dump` on a Queue subclass)
+The two files that still stop before their first test:
 
-Hangs and process kills that the runner excluded so the rest of each file ran:
-TestArray#test_join2 and TestException#test_stackoverflow (deep recursion still
-ends in "Stack overflow."), TestArray#test_cycle, TestRange#test_count /
-test_comparison_when_recursive / test_cyclic_range_inspect,
-TestModule#test_prepend_after_include / test_include_with_prepend,
-TestThread#test_thread_join_main_thread / test_thread_join_current,
-TestRegexp#test_cache_opcodes_initialize, TestMarshal#test_marshal_dump_recursion,
-TestSuper#test_double_include2.
+- test_syntax:219 (`no implicit conversion of nil into Array`): a block with
+  optional parameters and a rest parameter, `|_, a = 1, *|`, gets nil
+  instead of the defaults when it is passed fewer arguments
+  (BlockDispatcherUnsplatN pads the arguments with nil rather than with the
+  optional parameters' default marker)
+- test_iseq: `RubyVM` is not there (expected)
+
+`continuation` is IronRuby's own library (`Src/StdLib/ironruby/continuation.rb`):
+escaping continuations only, as JRuby's; calling one after its `callcc` has
+returned raises NotImplementedError.
+
+Tests the runner excluded because they ran past the timeout or killed the
+process, beyond the files that ran out of time on child-process startups
+(test_allocation, test_argf, test_optimization, test_process,
+test_require_lib, test_rubyoptions): TestRegexp#test_cache_opcodes_initialize
+and two match-cache tests (Onigmo's memoization against .NET's
+backtracking) and #test_eq_tilde_can_be_overridden, nine TestEnv `*_in_ractor` tests, four TestHashOnly ones
+(memory-leak and hash-randomization checks that start Rubies of their own),
+five TestIO, five TestThread, two TestRefinement, TestGc#test_latest_gc_info_need_major_by
+and TestTrace#test_trace. TestArray#test_join2 and #test_cycle, the TestRange
+recursion tests and TestIO#test_puts_recursive_ary no longer hang or kill the
+process. TestModule#test_prepend_after_include / test_include_with_prepend and
+TestSuper#test_double_include2 run, and fail with SystemStackError: for a
+module that is both prepended and included, `super` from the second copy
+finds the first.
 
 Found through `--verify`, also cosmetic: a recursive object inspects as `...`
 rather than `#<Foo:0x... ...>`; Thread::Queue, SizedQueue, Mutex and

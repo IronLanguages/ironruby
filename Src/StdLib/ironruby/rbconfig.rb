@@ -43,6 +43,8 @@ module RbConfig
   CONFIG["RUBY_PROGRAM_VERSION"] = RUBY_VERSION.dup
   CONFIG["RUBY_API_VERSION"] = "#{CONFIG["MAJOR"]}.#{CONFIG["MINOR"]}"
   CONFIG["EXEEXT"] = windows ? ".exe" : ""
+  # What a PATH search tries after a bare command name: configure.ac sets it on Windows only.
+  CONFIG["EXECUTABLE_EXTS"] = windows ? ".exe .com .cmd .bat" : ""
   # Libraries spawn RbConfig.ruby to run Ruby scripts, so this has to be a file in bindir:
   # the build puts an ironruby apphost beside ir (Ruby.Console.csproj). And Bundler and
   # Rails write it into binstubs as `#!/usr/bin/env ironruby`, which the ironruby launcher

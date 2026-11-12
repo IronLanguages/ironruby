@@ -1571,5 +1571,39 @@ p (2**70 + 12345)[2, 3], (-(2**70 + 12345))[2, 3], (2**70)[69, 2], (-(2**70))[69
 0
 ");
         }
+
+        /// <summary>
+        /// Integer#&amp;, #| and #^ with an operand that is not an Integer coerce it and apply the operator to whatever pair
+        /// #coerce answered, provided its first element has the operator (MRI's rb_num_coerce_bit); otherwise it is the
+        /// TypeError about the original operands. A pair of anything but Integers was refused, and a Bignum receiver
+        /// converted the operand with #to_int instead.
+        /// </summary>
+        public void Integer_BitwiseCoerce1() {
+            TestOutput(@"
+class Box
+  attr_reader :value
+  def initialize(v) = @value = v
+  def coerce(other) = [Box.new(other), self]
+  def &(o) = value & o.value
+  def |(o) = value | o.value
+  def ^(o) = value ^ o.value
+end
+b = Box.new(10)
+p 3 & b, 3 | b, 3 ^ b, (2**70) & Box.new(2**70 + 1)
+o = Object.new
+def o.coerce(x) = [1.5, 2.5]
+def o.to_int = 3
+p((3 & o rescue $!), ((2**70) ^ o rescue $!), (3 | nil rescue $!), ((2**70) & 1.5 rescue $!))
+", @"
+2
+11
+9
+1180591620717411303424
+#<TypeError: Object can't be coerced into Integer>
+#<TypeError: Object can't be coerced into Integer>
+#<TypeError: nil can't be coerced into Integer>
+#<TypeError: 1.5 can't be coerced into Integer>
+");
+        }
     }
 }

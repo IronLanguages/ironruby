@@ -286,21 +286,25 @@ namespace IronRuby.Builtins {
             return Slow(slow, "__ir_eqeq_slow__", self, other);
         }
 
-        // nucomp_hash: a function of the parts and their classes (#eql? tells 1 from 1.0)
+        // nucomp_hash: a function of the parts and their classes (#eql? tells 1 from 1.0), mixed
+        // with the per-process key Integer#hash has (CVE-2011-4815), as Rational#hash is.
         [RubyMethod("hash")]
         public static object Hash(CallSiteStorage<Func<CallSite, object, object>>/*!*/ slow, RubyComplex/*!*/ self) {
             if (self.HasSimpleParts) {
-                return ScriptingRuntimeHelpers.Int32ToObject(unchecked((PartHash(self._real) * 31 + PartHash(self._imaginary)) * 31 + 0x436f6d70));
+                // each part's hash is keyed before the two are combined, as in Rational#hash
+                return ScriptingRuntimeHelpers.Int32ToObject(RubyUtils.GetFixnumHashCode(
+                    unchecked((PartHash(self._real) * 31 + PartHash(self._imaginary)) * 31 + 0x436f6d70)));
             }
             var site = slow.GetCallSite("__ir_hash_slow__", 0);
             return site.Target(site, self);
         }
 
         private static int PartHash(object x) {
-            if (x is double) { return ((double)x).GetHashCode() ^ 0x5a5a5a5a; }
+            // Float#hash and Integer#hash, both keyed; they differ for 1.0 and 1, which #eql? tells apart
+            if (x is double) { return RubyUtils.GetFloatHashCode((double)x); }
             long v;
             TryLong(x, out v);
-            return v.GetHashCode();
+            return RubyUtils.GetIntegerHashCode(v);
         }
 
         // rb_complex_abs

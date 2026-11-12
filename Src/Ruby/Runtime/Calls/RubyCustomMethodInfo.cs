@@ -74,6 +74,17 @@ namespace IronRuby.Runtime.Calls {
             return new RubyCustomMethodInfo(_ruleGenerator, flags, module, _arity);
         }
 
+        /// <summary>
+        /// MRI reports a Struct member writer's parameter by the name `_` ([[:req, :_]]), and the reader's not at all.
+        /// </summary>
+        public override RubyArray/*!*/ GetRubyParameterArray() {
+            if (_arity == 1 && DeclaringModule != null) {
+                var context = DeclaringModule.Context;
+                return new RubyArray { new RubyArray { context.CreateAsciiSymbol("req"), context.CreateAsciiSymbol("_") } };
+            }
+            return base.GetRubyParameterArray();
+        }
+
         public override MemberInfo/*!*/[]/*!*/ GetMembers() {
             return new MemberInfo[] { _ruleGenerator.GetMethodInfo() };
         }

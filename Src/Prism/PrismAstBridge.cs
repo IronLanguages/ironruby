@@ -430,7 +430,38 @@ namespace IronRuby.Prism {
 
         // regex literals become $_ matches, ranges become flip-flops, etc.
         private Expression/*!*/ Condition(Pm.PmNode/*!*/ predicate) {
-            return Expr(predicate).ToCondition(CurrentScope);
+            return UnfrozenDefined(Expr(predicate)).ToCondition(CurrentScope);
+        }
+
+        /// <summary>
+        /// `if defined?(x)', `while defined?(x) && ...': in a condition only whether the answer is nil counts, so the string
+        /// need not be frozen by a call to #freeze (see Freeze) - which CRuby's defined? does not make at all, and which, being a
+        /// call, made the method it is in need its scope (`return ... unless defined?(yield)', MethodDefinition.IsBlockGuard).
+        /// The operands of &amp;&amp;, || and ! in a condition are conditions too: what one of them gives back is only tested.
+        /// </summary>
+        private static Expression/*!*/ UnfrozenDefined(Expression/*!*/ condition) {
+            switch (condition) {
+                case MethodCall call when call.MethodName == "freeze" && call.Target is IsDefinedExpression &&
+                    call.Arguments == null && call.Block == null:
+                    return call.Target;
+
+                case AndExpression and: {
+                    var left = UnfrozenDefined(and.Left);
+                    var right = UnfrozenDefined(and.Right);
+                    return (left == and.Left && right == and.Right) ? condition : new AndExpression(left, right, and.Location);
+                }
+                case OrExpression or: {
+                    var left = UnfrozenDefined(or.Left);
+                    var right = UnfrozenDefined(or.Right);
+                    return (left == or.Left && right == or.Right) ? condition : new OrExpression(left, right, or.Location);
+                }
+                case NotExpression not: {
+                    var operand = UnfrozenDefined(not.Expression);
+                    return (operand == not.Expression) ? condition : new NotExpression(operand, not.Location);
+                }
+                default:
+                    return condition;
+            }
         }
 
         // ---- program / statements ----
@@ -2624,8 +2655,13 @@ namespace IronRuby.Prism {
             var kwVar = CurrentScope.AddVariable("?kw?", span);
             // The default stands for "the caller passed no keywords", so it is marked as keyword
             // arguments itself - that is what tells it apart from a Hash passed positionally - and
-            // as a hash this call alone holds, which **rest takes over rather than copies.
-            optional.Add(new SimpleAssignmentExpression(kwVar, HashConstructor.OmittedKeywords(span), null, span));
+            // as a hash this call alone holds, which **rest takes over rather than copies. A method
+            // without **rest only ever reads it (the checks and bindings below; `super' passes the
+            // keywords on by name), so it gets the runtime's shared empty one instead of a new hash
+            // per call that omits its keywords.
+            bool readOnly = isMethod && !(node.KeywordRest is Pm.KeywordRestParameterNode);
+            optional.Add(new SimpleAssignmentExpression(kwVar,
+                readOnly ? HashConstructor.SharedOmittedKeywords(span) : HashConstructor.OmittedKeywords(span), null, span));
 
             var prologue = new Statements();
             // blocks and lambdas pass nil for parameters the caller omitted, so the
@@ -2852,8 +2888,8 @@ namespace IronRuby.Prism {
                 new SimpleAssignmentExpression(listVar, list, null, span),
                 new UnlessExpression(
                     new MethodCall(listVar, "empty?", null, span),
-                    new Statements(new MethodCall(null, "raise", new Arguments(new Expression[] {
-                        new ConstantVariable("ArgumentError", span), message
+                    new Statements(new MethodCall(KernelModule(span), "__ir_raise__", new Arguments(new Expression[] {
+                        new ConstantVariable(null, "ArgumentError", span), message
                     }), span)),
                     null, span)), span);
         }
@@ -2877,9 +2913,19 @@ namespace IronRuby.Prism {
             return temp;
         }
 
+        /// <summary>
+        /// `::Kernel`, the receiver of the raises this lowering emits. An implicit-self `raise` would run a
+        /// `raise` the surrounding class defines itself (Fiber#raise, Thread#raise, a user's own), and a bare
+        /// `ArgumentError` a constant of that name in the lexical scope.
+        /// The method called on it is Kernel.__ir_raise__, Kernel.raise under a name a program does not redefine.
+        /// </summary>
+        private static Expression/*!*/ KernelModule(SourceSpan span) {
+            return new ConstantVariable(null, "Kernel", span);
+        }
+
         private Expression/*!*/ RaiseError(string/*!*/ className, string/*!*/ message, SourceSpan span) {
-            return new MethodCall(null, "raise", new Arguments(new Expression[] {
-                new ConstantVariable(className, span),
+            return new MethodCall(KernelModule(span), "__ir_raise__", new Arguments(new Expression[] {
+                new ConstantVariable(null, className, span),
                 new StringLiteral(message, _encoding, span)
             }), span);
         }
@@ -2926,10 +2972,10 @@ namespace IronRuby.Prism {
         private Expression/*!*/ RaiseNoMatchingPattern(Expression/*!*/ subject, SourceSpan span) {
             Expression message = _patternFailure == null
                 ? new MethodCall(subject, "inspect", null, span)
-                : new MethodCall(new ConstantVariable("NoMatchingPatternError", span), "__message__",
+                : new MethodCall(new ConstantVariable(null, "NoMatchingPatternError", span), "__message__",
                     new Arguments(new Expression[] { subject, _patternFailure }), span);
-            Expression result = new MethodCall(null, "raise", new Arguments(new Expression[] {
-                new ConstantVariable("NoMatchingPatternError", span),
+            Expression result = new MethodCall(KernelModule(span), "__ir_raise__", new Arguments(new Expression[] {
+                new ConstantVariable(null, "NoMatchingPatternError", span),
                 message
             }), span);
 
@@ -2937,8 +2983,8 @@ namespace IronRuby.Prism {
                 result = new ConditionalExpression(
                     new MethodCall(_patternMissingKey, "nil?", null, span),
                     result,
-                    new MethodCall(null, "raise", new Arguments(
-                        new MethodCall(new ConstantVariable("NoMatchingPatternKeyError", span), "__missing_key__",
+                    new MethodCall(KernelModule(span), "__ir_raise__", new Arguments(
+                        new MethodCall(new ConstantVariable(null, "NoMatchingPatternKeyError", span), "__missing_key__",
                             new Arguments(new Expression[] { subject, _patternMissingKey }), span)
                     ), span),
                     span);
@@ -2978,7 +3024,7 @@ namespace IronRuby.Prism {
             reasonArgs.AddRange(args);
             return new OrExpression(test, new BlockExpression(MakeStatements(new Expression[] {
                 new SimpleAssignmentExpression(_patternFailure,
-                    new MethodCall(new ConstantVariable("NoMatchingPatternError", span), "__reason__",
+                    new MethodCall(new ConstantVariable(null, "NoMatchingPatternError", span), "__reason__",
                         new Arguments(reasonArgs.ToArray()), span), null, span),
                 Literal.False(span)
             }), span), span);

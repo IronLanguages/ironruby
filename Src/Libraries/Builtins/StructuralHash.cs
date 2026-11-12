@@ -41,6 +41,8 @@ namespace IronRuby.Builtins {
     internal static class StructuralHash {
         internal const int RecursiveValue = 0x48415348;
         private const uint ArraySeed = 0x41525259;
+        // An empty Hash does not hash to 0 ([ruby-core:58993] [Bug #9231]).
+        private const uint HashSeed = 0x48534844;
 
         // The objects being hashed on this thread, outermost first; null when no #hash is running.
         [ThreadStatic]
@@ -151,7 +153,7 @@ namespace IronRuby.Builtins {
 
         private static uint HashDigest(UnaryOpStorage/*!*/ hashStorage, ConversionStorage<IntegerValue>/*!*/ toInt, Hash/*!*/ self) {
             int count = self.Count;
-            uint result = Mix32((uint)count);
+            uint result = Mix32(unchecked((uint)count + HashSeed));
             if (count == 0) {
                 return result;
             }

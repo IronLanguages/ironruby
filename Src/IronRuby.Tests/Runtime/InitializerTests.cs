@@ -250,5 +250,86 @@ nil..nil
 #<TypeError: allocator undefined for Proc>
 ", OutputFlags.Match);
         }
+
+        /// <summary>
+        /// `C.new(k: v)' from a JIT keyword call site allocates the instance and calls C's specialized initialize
+        /// directly, without the keyword Hash (JitKeywordCall.ResolveConstruction). Anything that changes what new
+        /// would do - another class at the site, a prepended initialize, a singleton new, private_class_method,
+        /// TracePoint, an error from the prologue, an exception class - is the ordinary call's, as before.
+        /// The output is CRuby 4.0's (whose opt_new reports no c_call for new either).
+        /// </summary>
+        public void NewKeywordsDirect1() {
+            TestOutput(@"
+require 'ruby4'
+class Pt
+  attr_reader :x, :y
+  def initialize(x:, y: 0)
+    @x = x
+    @y = y
+  end
+end
+class Pt3 < Pt
+  def initialize(x:, y: 1)
+    @x = -x
+    @y = y
+  end
+end
+class Cmp
+  include Comparable
+  attr_reader :v
+  def initialize(v:) = @v = v
+  def <=>(o) = v <=> o.v
+end
+def make(c, i) = c.new(x: i, y: 2)
+def make1(c, i) = c.new(x: i)
+def try = yield rescue ""#{$!.class}: #{$!.message}""
+a = 100.times.map { |i| make(Pt, i) }
+p a.last.class, a.last.x, a.last.y, a.map(&:x).sum, a.map(&:object_id).uniq.size
+p 100.times.map { |i| make1(Pt, i).y }.uniq
+p [make(Pt3, 5).x, make(Pt, 5).x, make1(Pt3, 5).y]
+p 100.times.map { |i| Cmp.new(v: i) }.max.v
+p try { Pt.new(x: 1, z: 2) }
+p try { Pt.new(y: 2) }
+p try { make1(Class, 1) }
+Pt.prepend(Module.new { def initialize(x:, y: 0) = (super; @x *= 10) })
+p make(Pt, 3).x
+class << Pt
+  def new(**kw) = ""custom #{kw}""
+end
+p make(Pt, 4)
+class << Pt
+  remove_method :new
+end
+p make(Pt, 5).x
+calls = []
+tp = TracePoint.new(:c_call, :c_return, :call, :return) { |t| calls << [t.event, t.method_id] if [:new, :initialize].include?(t.method_id) }
+tp.enable { make(Pt, 6) }
+p calls
+class Pt; private_class_method :new; end
+p try { make(Pt, 7) }
+class E < StandardError
+  def initialize(msg:) = super(msg)
+end
+p 50.times.map { |i| E.new(msg: ""m#{i}"") }.last.message
+", @"
+Pt
+99
+2
+4950
+100
+[0]
+[-5, 5, 1]
+99
+""ArgumentError: unknown keyword: :z""
+""ArgumentError: missing keyword: :x""
+""TypeError: superclass must be an instance of Class (given an instance of Hash)""
+30
+""custom {x: 4, y: 2}""
+50
+[[:call, :initialize], [:call, :initialize], [:return, :initialize], [:return, :initialize]]
+""NoMethodError: private method 'new' called for class Pt""
+""m49""
+");
+        }
     }
 }

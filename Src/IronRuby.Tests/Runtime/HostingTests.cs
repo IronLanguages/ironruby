@@ -519,6 +519,19 @@ a = 'ba'.gsub /b/, '1'
             new IronRuby.Hosting.RubyOptionsParser().Parse(new[] { "-Elocale:locale", "-e", "1" }, new ScriptRuntimeSetup(), Ruby.CreateRubySetup(), PlatformAdaptationLayer.Default);
         }
 
+        /// <summary>
+        /// --help is MRI's long form of -h: it prints the usage and exits rather than naming a script. test/unit's
+        /// EnvUtil.invoke_ruby runs `ruby --help` before every child Ruby it starts.
+        /// </summary>
+        public void HostingHelpOption1() {
+            foreach (var arg in new[] { "--help", "-h" }) {
+                var parser = new IronRuby.Hosting.RubyOptionsParser();
+                parser.Parse(new[] { arg, "x.rb" }, new ScriptRuntimeSetup(), Ruby.CreateRubySetup(), PlatformAdaptationLayer.Default);
+                Assert(parser.CommonConsoleOptions.PrintUsage && parser.CommonConsoleOptions.Exit);
+                Assert(parser.CommonConsoleOptions.FileName == null);
+            }
+        }
+
         public void Interactive1() {
             ScriptScope scope = Runtime.CreateScope();
             AssertOutput(() => Engine.CreateScriptSourceFromString("", SourceCodeKind.InteractiveCode).Execute(scope), "");

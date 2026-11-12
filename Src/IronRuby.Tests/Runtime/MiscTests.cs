@@ -6735,6 +6735,426 @@ tracepoint ctor: [[:call, :initialize], [:return, :initialize], [:call, :x], [:r
         }
 
         /// <summary>
+        /// A scope-free block and a light-frame method keep their locals in CLR variables rather than in a tuple allocated on
+        /// every call (ScopeBuilder.TryUseRegisterLocals). The tuple is made with the scope, when a TracePoint hook asks for one,
+        /// and from then on the body reads and writes its locals there: a Binding sees the values the body assigned, also one
+        /// kept past the event, and a local set through it is what the body reads next. Interpreted and compiled bodies agree.
+        /// Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Block_RegisterLocals1() {
+            TestOutput(@"
+require 'ruby4'
+class RL
+  def y1(x) = yield(x)
+  def y3 = yield(1, 2, 3)
+  def keep(a, &b) = b
+  def locs(a); b = a; c = b; [a, b, c]; end
+end
+o = RL.new
+r = 40.times.map { |i| [o.y1(i) { |y| y }, o.y3 { |a, b, c| a = b; [a, b, c] }, o.locs(i), o.keep(i) { i }.call] }
+p r.first, r.last
+p o.y3 { |a, b| x = a; x = b if x; x }
+pr = proc { |x| x }
+l = lambda { |x, y| y }
+p 40.times.map { |i| [pr.call(i), pr.call([i, 1]), l.call(1, i)] }.last
+lines = []
+t1 = TracePoint.new(:line) { |t| lines << t.binding.local_variables.select { |v| %i[a b c].include?(v) }.map { |v| t.binding.local_variable_get(v) } if t.path == __FILE__ }
+t1.enable { o.y3 { |a, b, c|
+  a = 9
+  [a, b, c] } }
+p lines.reject(&:empty?)
+v = nil
+t2 = TracePoint.new(:line) { |t| t.binding.local_variable_set(:a, 42) if t.lineno == __LINE__ + 2 }
+t2.enable { o.y1(1) { |a|
+  v = a } }
+p v
+kept = nil
+t3 = TracePoint.new(:line) { |t| kept ||= t.binding if t.lineno == __LINE__ + 2 }
+t3.enable { o.y1(1) { |a|
+  a = 2
+  a = 3 } }
+p kept.local_variable_get(:a)
+calls = []
+t4 = TracePoint.new(:call, :b_call) { |t| calls << [t.event, t.binding.local_variables.first] if t.path == __FILE__ }
+t4.enable { o.y1(5) { |q| q } }
+p calls
+", @"
+[0, [2, 2, 3], [0, 0, 0], 0]
+[39, [2, 2, 3], [39, 39, 39], 39]
+2
+[39, [39, 1], 39]
+[[1, 2, 3], [9, 2, 3]]
+42
+3
+[[:b_call, :o], [:call, :x], [:b_call, :q]]
+");
+        }
+
+        /// <summary>
+        /// A block with optional parameters before a rest parameter evaluates the defaults of the ones the
+        /// caller left out: BlockDispatcherUnsplatN used to pad them with nil. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Block_OptionalBeforeRest1() {
+            TestOutput(@"
+def y0; yield; end
+def y1; yield 1; end
+def y2; yield 1, 2; end
+y0 { |a = 5, *r| p [a, r] }
+y0 { |a, b = 6, *r| p [a, b, r] }
+y1 { |a, b = 6, c = 7, *r| p [a, b, c, r] }
+y2 { |a, b = 6, c = 7, *r| p [a, b, c, r] }
+pr = proc { |a = 1, b = 2, *r| [a, b, r] }
+p pr.call, pr.call(9), pr.call([8]), pr.call(7, 8, 9)
+", @"
+[5, []]
+[nil, 6, []]
+[1, 6, 7, []]
+[1, 2, 7, []]
+[1, 2, []]
+[9, 2, []]
+[8, 2, []]
+[7, 8, [9]]
+");
+        }
+
+        /// <summary>
+        /// The errors the compiler raises itself (unknown keywords, a failed pattern match) go to Kernel#raise
+        /// and name the top-level classes, whatever `raise` and constants the surrounding class defines.
+        /// Expected output is CRuby 4.0's.
+        /// </summary>
+        public void LoweredRaise_IgnoresOwnRaise1() {
+            TestOutput(@"
+require 'ruby4'
+class C
+  def raise(*a) = Kernel.raise(RuntimeError, ""own raise"")
+  def kw(a: 1) = a
+  def pm(x) = (case x; in Integer then 1; end)
+  def dc(x) = (case x; in [a] then a; end)
+end
+class Bad; def deconstruct = 1; end
+c = C.new
+[-> { c.kw(b: 2) }, -> { c.pm(""s"") }, -> { c.dc(Bad.new) }, -> { h = {a: 1}; c.instance_eval { case h; in {b:} then b; end } }].each do |l|
+  begin
+    l.call
+  rescue Exception => e
+    puts ""#{e.class}: #{e.message}""
+  end
+end
+module M
+  ArgumentError = Class.new(StandardError)
+  NoMatchingPatternError = 1
+  def self.f(x) = (case x; in 1 then 1; end)
+  begin; f(2); rescue Exception => e; puts ""#{e.class}: #{e.message}""; end
+end
+", @"
+ArgumentError: unknown keyword: :b
+NoMatchingPatternError: ""s"": Integer === ""s"" does not return true
+TypeError: deconstruct must return Array
+NoMatchingPatternKeyError: {a: 1}: key not found: :b
+NoMatchingPatternError: 2: 1 === 2 does not return true
+");
+        }
+
+        /// <summary>
+        /// Review findings on #212, each checked against CRuby 4.0.9, whose output this is: String#initialize with
+        /// keywords converts as it does without, checks the capacity and only empties for one; a `def Kernel.raise'
+        /// does not swallow an unknown keyword; inject(:+) sees an Integer#+ redefined by its first call; a #coerce
+        /// that hands the Integer back is a NameError, not a stack overflow; Range#== guards pairs of ranges;
+        /// Rational#hash keys its parts; a peeked Enumerator is not advanced from another thread.
+        /// </summary>
+        public void Review212_1() {
+            TestOutput(@"
+require 'ruby4'
+$VERBOSE = nil
+def t(name); r = begin; yield; rescue Exception => e; ""#{e.class}: #{e.message}""; end; puts ""#{name}: #{r.inspect}""; end
+bo = Class.new(BasicObject) { def to_str = ""bo"" }.new
+pv = Class.new { private def to_str = ""pv"" }.new
+t(""str bo"") { String.new(bo, capacity: 10) }
+t(""str pv"") { String.new(pv, capacity: 10) }
+t(""cap big"") { String.new(capacity: 2**70) }
+t(""cap to_int"") { String.new(capacity: Class.new { def to_int = ""x"" }.new).size rescue $!.class }
+t(""enc only"") { s = +""abc""; s.send(:initialize, encoding: Encoding::BINARY); [s, s.encoding] }
+t(""cap only"") { s = +""abc""; s.send(:initialize, capacity: 5); s }
+t(""cap nil"") { s = +""abc""; s.send(:initialize, capacity: nil); s }
+t(""kraise"") { m = Kernel.method(:raise); Kernel.define_singleton_method(:raise) { |*| nil }
+  begin; def f(k: 0) = :ran; f(bad: 1)
+  ensure; Kernel.define_singleton_method(:raise, m); end }
+t(""inject"") { h = Object.new; def h.+(o); Integer.class_eval { alias_method :__p, :+; def +(o) = 100 }; 1; end
+  begin; [h, 1, 2].inject(:+); ensure; Integer.class_eval { alias_method :+, :__p }; end }
+t(""bit rec"") { o = Object.new; def o.coerce(x) = [x, self]; def o.to_s = ""OBJ""; 1 & o }
+t(""bit rec2"") { o = Object.new; def o.coerce(x) = [1, self]; def o.to_s = ""OBJ""; (1 | o) rescue [$!.class, $!.message, $!.name] }
+t(""bit ok"") { o = Object.new; def o.coerce(x) = [6, 3]; [1 & o, 1 | o, 1 ^ o] }
+class P; include Comparable; attr_accessor :o; def <=>(x) = 0; def ==(x) = (o ? o.call : true); end
+t(""range pair"") { p1, p2, p3 = P.new, P.new, P.new; a = (p1..1); b = (p2..1); c = (p3..1); d = (P.new..2)
+  p3.o = -> { a == d }; p1.o = -> { c == d }; [a == b, a.eql?(a.dup)] }
+t(""range self"") { r = Class.new(Range).allocate; r.send(:initialize, 1, 2); x = [r]; [r == r, x == x] }
+t(""rat hash"") { [Rational(2, 4).hash == Rational(1, 2).hash, Complex(1, 2).hash == Complex(1, 2).hash, {Rational(1,3) => 1}[Rational(2,6)], Rational(1, 62).hash == Rational(2, 31).hash] }
+t(""enum next"") { e = [1, 2, 3].each; e.peek; [e.next, Thread.new { e.next rescue $!.class }.value, e.next] }
+", @"
+str bo: ""bo""
+str pv: ""pv""
+cap big: ""RangeError: bignum too big to convert into 'long'""
+cap to_int: TypeError
+enc only: [""abc"", #<Encoding:BINARY (ASCII-8BIT)>]
+cap only: """"
+cap nil: ""abc""
+kraise: ""ArgumentError: unknown keyword: :bad""
+inject: 100
+bit rec: ""NameError: 1&OBJ""
+bit rec2: [NameError, ""1|OBJ"", :|]
+bit ok: [2, 7, 5]
+range pair: [false, true]
+range self: [true, true]
+rat hash: [true, true, 1, false]
+enum next: [1, FiberError, 2]
+");
+        }
+
+        /// <summary>
+        /// The second round of review findings on #212, with CRuby 4.0.9's output: the pair guard knows an Integer that
+        /// was boxed again; Range#hash of a range that contains itself; Enumerator#rewind unwinds the abandoned
+        /// iteration before the receiver's #rewind; a Regexp in an "I" wrapper without an encoding is a 1.8 record;
+        /// capacity: asks #to_int once; a continuation frozen inside callcc.
+        /// </summary>
+        public void Review212_2() {
+            TestOutput(@"
+require 'ruby4'
+$VERBOSE = nil
+def t(name); r = begin; yield; rescue Exception => e; ""#{e.class}: #{e.message.gsub(/0x\h+/, 'XX')}""; end; puts ""#{name}: #{r.inspect}""; end
+o = Object.new; def o.coerce(x) = [x, self]; def o.to_s = ""OBJ""
+t(""bit big"") { 100000 & o }
+t(""bit bignum"") { (2**70) | o }
+t(""range hash"") { r = Marshal.load(""\x04\bo:\nRange\b:\texclF:\nbegin@\x00:\bend0""); [r.begin.equal?(r), r.hash.class, r.hash == r.hash] }
+class Src
+  def initialize; @items = [1, 2, 3]; end
+  attr_reader :items
+  def each; @items.each { |x| yield x }; ensure; @items = []; end
+  def rewind; @items = [7, 8]; end
+end
+t(""rewind"") { s = Src.new; e = s.to_enum; a = e.next; e.rewind; [a, s.items, e.next] }
+t(""marshal 1.8 regexp"") { r = Marshal.load(""\x04\bI/\x07\\u\x00\x06:\n@notei\x06""); [r.source, r.instance_variable_get(:@note)] }
+t(""marshal regexps"") { a = Marshal.load(Marshal.dump([/a\u3042b/i, /a/n])); [a[0].source, a[0].options, a[1].encoding] }
+c = Class.new { def to_int = (@n = @n.to_i + 1) == 1 ? ""x"" : 3 }
+t(""capacity once"") { String.new(capacity: c.new) }
+require 'continuation'
+t(""frozen cont"") { callcc { |k| k.freeze; k.call(:ok) } }
+", @"
+bit big: ""NameError: 100000&OBJ""
+bit bignum: ""NameError: 1180591620717411303424|OBJ""
+range hash: [true, Integer, true]
+rewind: [1, [7, 8], 7]
+marshal 1.8 regexp: [""u"", 1]
+marshal regexps: [""a\\u3042b"", 17, #<Encoding:US-ASCII>]
+capacity once: ""TypeError: can't convert #<Class:XX> to Integer (#<Class:XX>#to_int gives String)""
+frozen cont: :ok
+");
+        }
+
+        /// <summary>
+        /// Marshal.load and the "I" wrapper of a Regexp: it belongs to the Regexp right under it, not to a Regexp
+        /// that is an element of a wrapped Array or Hash subclass; an instance variable that refers to the Regexp
+        /// being read is MRI's "bad link", and to a Regexp subclass's instance the object. CRuby 4.0.9's output.
+        /// </summary>
+        public void Marshal_RegexpWrapper1() {
+            TestOutput(@"
+require 'ruby4'
+def t; r = begin; yield; rescue Exception => e; ""#{e.class}: #{e.message[0,70]}""; end; p r; end
+class MyArr < Array; end
+class MyHash < Hash; end
+class RX < Regexp; end
+t { r = Regexp.new(""ab""); r.instance_variable_set(:@self, r); r.instance_variable_set(:@list, [r, ""x""]); l = Marshal.load(Marshal.dump(r)); [l.source, l.instance_variable_get(:@self).equal?(l), l.instance_variable_get(:@list)[0].equal?(l)] }
+t { a = MyArr.new; a << Regexp.new(""a"", Regexp::NOENCODING) << ""s"" << /b/; a.instance_variable_set(:@n, 5); l = Marshal.load(Marshal.dump(a)); [l.class, l.map(&:class), l[0].source, l[0].encoding, l[1], l.instance_variable_get(:@n)] }
+t { h = MyHash.new; h[Regexp.new(""a"", Regexp::NOENCODING)] = /c/n; h.instance_variable_set(:@n, 6); l = Marshal.load(Marshal.dump(h)); [l.class, l.keys[0].source, l.values[0].source, l.instance_variable_get(:@n)] }
+t { r = RX.new(""q\\d""); r.instance_variable_set(:@me, r); l = Marshal.load(Marshal.dump(r)); [l.class, l.source, l.instance_variable_get(:@me).equal?(l)] }
+t { r = Regexp.new(""x""); s = ""str""; r.instance_variable_set(:@s, s); l = Marshal.load(Marshal.dump([s, r, s])); [l[1].instance_variable_get(:@s).equal?(l[0]), l[2].equal?(l[0])] }
+t { b = Regexp.new(""\xff"".b, Regexp::NOENCODING); a = MyArr.new; a << b << ""s""; a.instance_variable_set(:@n, 5); d = Marshal.dump(a); l = Marshal.load(d); [d.count(""I""), b.encoding, l.class, l[0].source.bytes, l[0].encoding, l[1], l.instance_variable_get(:@n)] }
+", @"
+""ArgumentError: dump format error (bad link)""
+[MyArr, [Regexp, String, Regexp], ""a"", #<Encoding:US-ASCII>, ""s"", 5]
+[MyHash, ""a"", ""c"", 6]
+[RX, ""q\\d"", true]
+[true, true]
+[2, #<Encoding:BINARY (ASCII-8BIT)>, MyArr, [255], #<Encoding:BINARY (ASCII-8BIT)>, ""s"", 5]
+");
+        }
+
+        /// <summary>
+        /// The three review findings on #212 that were first left open, with CRuby 4.0.9's output: Time's factories and
+        /// Time._load allocate a subclass's instance whatever its `allocate' method does; a coerced operand that takes
+        /// &amp;, | or ^ through method_missing gets the call (rb_check_funcall); the hashes of bignums, Rationals and
+        /// Complexes are equal for equal values (they are keyed per process, so only that can be tested).
+        /// </summary>
+        public void Review212_3() {
+            TestOutput(@"
+require 'ruby4'
+$VERBOSE = nil
+def t(n); r = begin; yield; rescue Exception => e; ""#{e.class}: #{e.message.gsub(/0x\h+/, 'XX')[0, 80]}""; end; puts ""#{n}: #{r.inspect}""; end
+class TA < Time; end; class TB < Time; end; class TC < Time; end
+xa = Marshal.dump(TA.at(0)); xb = Marshal.dump(TB.at(0))
+TA.define_singleton_method(:allocate) { raise ""no"" }
+TB.define_singleton_method(:allocate) { 5 }
+t(""load raise"") { Marshal.load(xa).class }
+t(""load other"") { Marshal.load(xb).class }
+t(""at"") { [TA.at(0).class, TB.at(0).class, TA.now.class, TB.utc(2000).class, TA.local(2000).class, TB.new(2000).class] }
+t(""new"") { TA.new.class }
+t(""plain"") { [TC.at(5).class, TC.at(5).to_i, Marshal.load(Marshal.dump(TC.at(5))).class, TC.now.class, Time.at(1).class] }
+o = Object.new; def o.coerce(x) = [self, x]; def o.respond_to_missing?(m, p = false) = [:&, :|].include?(m); def o.method_missing(m, *a) = [:&, :|].include?(m) ? [m, a] : super
+t(""mm &"") { 1 & o }
+t(""mm |"") { (2**70) | o }
+t(""mm ^"") { 1 ^ o }
+q = Object.new; def q.coerce(x) = [self, x]; def q.method_missing(m, *a) = m == :& ? :called : super
+t(""mm no rtm"") { 1 & q }
+z = Object.new; def z.coerce(x) = [self, x]; def z.respond_to?(m, p = false) = m == :^ || super; def z.method_missing(m, *a) = m == :^ ? :viaresp : super
+t(""resp"") { 1 ^ z }
+w = Object.new; def w.coerce(x) = [self, x]; def w.respond_to_missing?(m, p = false) = m == :&
+t(""rtm no mm"") { 1 & w }
+t(""float"") { 1 & 1.5 }
+t(""int64 hash"") { [(2**32 + 1).hash == (2**33 + 2).hash, (2**40).hash == (2**40).hash, {2**40 => 1}[2**40], Rational(2**32 + 1, 1).hash == Rational(2**33 + 2, 1).hash] }
+t(""rat hash"") { [Rational(1, 2).hash == Rational(2, 4).hash, Rational(2**70, 3).hash == Rational(2**70, 3).hash, Complex(1, 2).hash == Complex(1, 2).hash, Complex(1.5, 2).hash == Complex(1.5, 2).hash, (2**70).hash == (2**70).hash, (2**64).hash == (2**64 + 2**32).hash, {2**80 => 1}[2**80], {Rational(1, 3) => 2}[Rational(2, 6)], {Complex(1, 2**70) => 3}[Complex(1, 2**70)]] }
+", @"
+load raise: TA
+load other: TB
+at: [TA, TB, TA, TB, TA, TB]
+new: TA
+plain: [TC, 5, TC, TC, Time]
+mm &: [:&, [1]]
+mm |: [:|, [1180591620717411303424]]
+mm ^: ""TypeError: Object can't be coerced into Integer""
+mm no rtm: :called
+resp: :viaresp
+rtm no mm: ""TypeError: Object can't be coerced into Integer""
+float: ""TypeError: 1.5 can't be coerced into Integer""
+int64 hash: [false, true, 1, false]
+rat hash: [true, true, true, true, true, false, 1, 2, 3]
+");
+        }
+
+        /// <summary>
+        /// A coerced operand with a respond_to? of its own, at one call site several times over: the check must not
+        /// share the operator's call site (it did, and `1 ^ obj' then called respond_to?(1)). CRuby 4.0.9's output.
+        /// </summary>
+        public void Review212_4() {
+            TestOutput(@"
+require 'ruby4'
+$VERBOSE = nil
+def t(n); r = begin; yield; rescue Exception => e; ""#{e.class}: #{e.message.gsub(/0x\h+/, 'XX')[0, 80]}""; end; puts ""#{n}: #{r.inspect}""; end
+z = Object.new; def z.coerce(x) = [self, x]; def z.respond_to?(m, p = false) = m == :^ || m == :coerce || super; def z.method_missing(m, *a) = m == :^ ? [:viaresp, a] : super
+n = Object.new; def n.coerce(x) = [self, x]; def n.respond_to?(m, p = false) = m == :coerce; def n.method_missing(m, *a) = m == :^ ? :never : super
+def xo(a, b) = a ^ b
+3.times { |i| t(""resp #{i}"") { [xo(1, z), xo(2, z)] } }
+3.times { |i| t(""no #{i}"") { xo(1, n) } }
+t(""mixed"") { [xo(3, z), (xo(3, n) rescue $!.class), xo(4, z), xo(5, 6)] }
+", @"
+resp 0: [[:viaresp, [1]], [:viaresp, [2]]]
+resp 1: [[:viaresp, [1]], [:viaresp, [2]]]
+resp 2: [[:viaresp, [1]], [:viaresp, [2]]]
+no 0: ""TypeError: Object can't be coerced into Integer""
+no 1: ""TypeError: Object can't be coerced into Integer""
+no 2: ""TypeError: Object can't be coerced into Integer""
+mixed: [[:viaresp, [3]], TypeError, [:viaresp, [4]], 3]
+");
+        }
+
+        /// <summary>
+        /// Enumerator#rewind when an ensure clause of the abandoned iteration raises: the receiver's #rewind still
+        /// runs and the next iteration starts over, as on CRuby 4.0.9. (The error itself then comes out of #rewind
+        /// here and not on MRI, which runs no such clause; the test does not look at that.)
+        /// </summary>
+        public void Enumerator_RewindEnsureRaises1() {
+            TestOutput(@"
+require 'ruby4'
+class Src2
+  def initialize; @items = [1, 2, 3]; @rew = 0; end
+  attr_reader :items, :rew
+  def each; @items.each { |x| yield x }; ensure; raise ""boom in ensure""; end
+  def rewind; @rew += 1; end
+end
+[RuntimeError, NotImplementedError, Class.new(Exception)].each do |k|
+  c = Class.new(Src2) { define_method(:each) { |&b| begin; @items.each(&b); ensure; raise k, ""x""; end } }
+  s = c.new; e = s.to_enum; e.next
+  begin; e.rewind; rescue Exception; end
+  p [s.rew, (e.next rescue $!.class)]
+end
+", @"
+[1, 1]
+[1, 1]
+[1, 1]
+");
+        }
+
+        /// <summary>
+        /// `defined?' in a condition makes no call to #freeze, as in CRuby: only whether the answer is nil counts, also for an
+        /// operand of &amp;&amp; or || in a condition. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Defined_ConditionNoFreeze1() {
+            TestOutput(@"
+$c = 0
+module CountFreeze; def freeze; $c += 1; super; end; end
+String.prepend(CountFreeze)
+x = 1
+r = []
+r << (defined?(x) ? :a : :b)
+r << :c if defined?(String)
+r << :d unless defined?(zzz)
+r << :e if defined?(@iv)
+r << :f if defined?(x.succ)
+i = 0
+i += 1 while defined?(x) && i < 3
+r << i
+p r, $c
+", @"
+[:a, :c, :d, :f, 3]
+0
+");
+        }
+
+        /// <summary>
+        /// A method whose first statement is `return ... unless defined?(yield)' - Kernel#then, written as CRuby writes it - is
+        /// still a light frame (MethodDefinition.IsBlockGuard): given a block it makes no scope, and without one the guard makes
+        /// the scope on demand for the enumerator it returns. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Method_LightFrameBlockGuard1() {
+            TestOutput(@"
+require 'ruby4'
+p 5.then { |x| x + 1 }, 5.yield_self { |x| x * 2 }
+e = 5.then
+p e.class, e.size, e.each { |x| x * 3 }
+p 3.method(:then).arity, 3.method(:yield_self).name
+def m = 1.then { |x| return x + 100 }
+p m
+p 2.then { |x| break x * 7 }, [1, 2].then(&:sum), 4.then(&->(v) { v - 1 })
+p 40.times.map { |i| i.then { |v| v * v } }.sum
+begin; 1.then { raise ArgumentError, ""x"" }; rescue => ex; p ex.class; end
+class Opt
+  def each_twice
+    return to_enum(:each_twice) { 2 } unless defined?(yield)
+    yield 1
+    yield 2
+  end
+end
+o = Opt.new
+p o.each_twice.to_a, o.each_twice.size, 40.times.map { s = 0; o.each_twice { |v| s += v }; s }.uniq
+", @"
+6
+10
+Enumerator
+1
+15
+0
+:yield_self
+101
+14
+3
+3
+20540
+ArgumentError
+[1, 2]
+2
+[3]
+");
+        }
+
+        /// <summary>
         /// BigDecimal against CRuby 4.0's bigdecimal 4.0.1: a Rational operand of a comparison is expanded as
         /// for arithmetic (== used to recurse through Rational#== until the stack overflowed), #power and #**
         /// take any real exponent and a precision, round takes half:, and a BigDecimal is frozen and has no
@@ -6964,6 +7384,230 @@ true
 true
 false
 true
+");
+        }
+
+        /// <summary>
+        /// RbConfig::CONFIG["EXECUTABLE_EXTS"] was missing, and CRuby's tool/lib/find_executable.rb splits it, which
+        /// stopped test_rubyoptions before its first test. configure sets it on Windows only.
+        /// </summary>
+        public void RbConfig_ExecutableExts1() {
+            TestOutput(@"
+require 'rbconfig'
+p RbConfig::CONFIG['EXECUTABLE_EXTS'].split | [RbConfig::CONFIG['EXEEXT']]
+", Environment.OSVersion.Platform == PlatformID.Win32NT ? @"["".exe"", "".com"", "".cmd"", "".bat""]" : @"[""""]");
+        }
+
+        /// <summary>
+        /// all?, any?, none? and one? given a pattern and a block warn "given block not used" at the line that called
+        /// them, as MRI does. The prelude asked for the location two frames up, past the end of a top-level script's
+        /// backtrace, so the warning had none there, and named the wrong line inside a method.
+        /// </summary>
+        public void Enumerable_PatternUnusedBlockWarning1() {
+            TestOutput(@"
+require 'ruby4'
+err = Object.new
+def err.write(*s) = (($w ||= +'') << s.join; 0)
+$stderr = err
+[1, 2].all?(1) { }
+def m
+  [1].none?(1) { }
+end
+m
+(1..2).one?(1) { }
+$stderr = STDERR
+puts $w.gsub(/^.*?:(\d+): /, 'line \1: ')
+", @"
+line 6: warning: given block not used
+line 8: warning: given block not used
+line 11: warning: given block not used
+");
+        }
+
+        /// <summary>
+        /// Enumerable#tally given a BasicObject to count into raises MRI's TypeError: the prelude asked it #nil? and
+        /// #is_a?, which a BasicObject does not answer, and raised NoMethodError.
+        /// </summary>
+        public void Enumerable_TallyBasicObject1() {
+            TestOutput(@"
+require 'ruby4'
+p(([1].tally(BasicObject.new) rescue $!), ((1..2).tally(BasicObject.new) rescue $!), ([1].tally(Object.new) rescue $!))
+p [1, 1].tally({1 => 1}), (1..2).tally
+", @"
+#<TypeError: no implicit conversion of BasicObject into Hash>
+#<TypeError: no implicit conversion of BasicObject into Hash>
+#<TypeError: no implicit conversion of Object into Hash>
+{1 => 3}
+{1 => 1, 2 => 1}
+");
+        }
+
+        /// <summary>
+        /// inject(:op) calls the operator publicly, as MRI's rb_funcallv_public does since [Bug #13592]: a private #+
+        /// is a NoMethodError, for an Array's fast path too.
+        /// </summary>
+        public void Enumerable_InjectPrivateOp1() {
+            TestOutput(@"
+require 'ruby4'
+k = Class.new { include Enumerable; def each; yield 1; yield 2; yield 3; end }
+%i[+ *].each do |op|
+  begin
+    Integer.class_eval { private op }
+    p((k.new.inject(op) rescue $!), ([1, 2, 3].inject(op) rescue $!), ((1..3).inject(op) rescue $!))
+  ensure
+    Integer.class_eval { public op }
+  end
+end
+p k.new.inject(:+), [1, 2, 3].inject(:+), [1, 2, 3].inject(10, :*)
+", @"
+#<NoMethodError: private method '+' called for an instance of Integer>
+#<NoMethodError: private method '+' called for an instance of Integer>
+#<NoMethodError: private method '+' called for an instance of Integer>
+#<NoMethodError: private method '*' called for an instance of Integer>
+#<NoMethodError: private method '*' called for an instance of Integer>
+#<NoMethodError: private method '*' called for an instance of Integer>
+6
+6
+60
+");
+        }
+
+        /// <summary>
+        /// A Range is an 'o' record of excl, begin and end, and a subclass's instance variables go in an "I" wrapper
+        /// around it, as MRI writes them; they were written into the record and lost on loading. The range is in the
+        /// link table before its ends are read (range_loader), so one that is its own begin and end comes back as one.
+        /// </summary>
+        public void Marshal_RangeRecord1() {
+            TestOutput(@"
+class MyRange < Range; def initialize(v, *args) super(*args); @v = v; end end
+d = Marshal.dump(MyRange.new(4, 5, 8, false))
+p d
+r = Marshal.load(d)
+p r.class, r.instance_variables, r, r.frozen?, Marshal.load(Marshal.dump(1..2)).frozen?
+p Marshal.load(""\x04\bo:\fMyRange\t:\texclF:\nbegini\n:\bendi\r:\a@vi\t"").instance_variables
+class CyclicRange < Range; def <=>(o); true; end; end
+c = CyclicRange.allocate
+c.instance_eval { initialize(c, c) }
+l = Marshal.load(Marshal.dump(c))
+p l.class, l.begin.equal?(l), l.end.equal?(l)
+", @"
+""\x04\bIo:\fMyRange\b:\texclF:\nbegini\n:\bendi\r\x06:\a@vi\t""
+MyRange
+[:@v]
+5..8
+false
+true
+[]
+CyclicRange
+true
+true
+");
+        }
+
+        /// <summary>
+        /// Marshal.load of a Time subclass's dump answers an instance of the subclass (MRI's time_mload allocates the
+        /// receiver of _load); a Regexp record without an encoding is a Ruby 1.8 one, whose escapes of letters 1.8 did
+        /// not define lose their backslash; and a class defined in a singleton class, whose path starts with "#", is
+        /// anonymous to Marshal.dump.
+        /// </summary>
+        public void Marshal_LoadedClasses1() {
+            TestOutput(@"
+class MyTime < Time; def initialize(v, *args) super(*args); @v = v; end end
+t = Marshal.load(Marshal.dump(MyTime.new(10)))
+p t.class, t.instance_variables
+r = Marshal.load(""\004\b/\fa\\u3042\000"")
+p r.source, Marshal.load(Marshal.dump(/a\\u3042/)) == /a\\u3042/
+o = Object.new
+c = class << o; class C; self; end; end
+p((Marshal.dump(c) rescue $!.class), (Marshal.dump(c.new) rescue $!.class))
+", @"
+MyTime
+[:@v]
+""au3042""
+true
+TypeError
+TypeError
+");
+        }
+
+        /// <summary>
+        /// Time.new takes :dst and :std for the zone, as MRI's time_init_args does: a local time, the symbol choosing
+        /// between the two readings of an hour the clocks go back over. They were "can't convert Symbol into an exact
+        /// number", which failed 47 of CRuby's test_time_tz tests.
+        /// </summary>
+        public void Time_NewDstStdZone1() {
+            TestOutput(@"
+local = Time.new(2000, 1, 1, 12, 0, 0)
+p Time.new(2000, 1, 1, 12, 0, 0, :std) == local, Time.new(2000, 1, 1, 12, 0, 0, :dst) == local
+p Time.new(2000, 1, 1, 12, 0, 0, :std).utc?, Time.new(2000, 7, 1, 12, 0, 0, :dst).utc_offset == Time.new(2000, 7, 1, 12, 0, 0).utc_offset
+p((Time.new(2000, 1, 1, 0, 0, 0, :foo) rescue $!))
+p Time.new(2019, 1, 1, 0, 0, 0, 'utc').utc?, Time.new(2019, 1, 1, 0, 0, 0, 'Utc').utc?, (Time.new(2019, 1, 1, 0, 0, 0, 'z') rescue $!.class)
+", @"
+true
+true
+false
+true
+#<TypeError: can't convert Symbol into an exact number>
+true
+true
+ArgumentError
+");
+        }
+
+        /// <summary>
+        /// nil, true and false cannot be cloned unfrozen, as MRI's special_object_p says of them: clone(freeze: false)
+        /// is "can't unfreeze NilClass" and the like, as for an Integer or a Symbol.
+        /// </summary>
+        public void Kernel_CloneSpecialConstants1() {
+            TestOutput(@"
+require 'ruby4'
+p((true.clone(freeze: false) rescue $!), (nil.clone(freeze: false) rescue $!), (false.clone(freeze: false) rescue $!))
+p nil.clone, true.clone(freeze: true), (nil.clone(freeze: 1) rescue $!)
+", @"
+#<ArgumentError: can't unfreeze TrueClass>
+#<ArgumentError: can't unfreeze NilClass>
+#<ArgumentError: can't unfreeze FalseClass>
+nil
+true
+#<ArgumentError: unexpected value for freeze: Integer>
+");
+        }
+
+        /// <summary>
+        /// Struct#inspect and Data#inspect write a member that is not a local or constant name as its Symbol, as MRI's
+        /// rb_struct_inspect does (#&lt;struct :@a=1&gt;); and a Struct member writer reports its parameter as `_`.
+        /// </summary>
+        public void Struct_InspectMemberNames1() {
+            TestOutput(@"
+require 'ruby4'
+k = Struct.new(:@a, :b, :c?, :E, :""f g"")
+p k.new(1, 2, 3, 4, 5)
+d = Data.define(:@a, :b)
+p d.new(1, 2)
+s = Struct.new(:a)
+p s.instance_method(:a=).parameters, s.instance_method(:a).parameters
+", @"
+#<struct :@a=1, b=2, :c?=3, E=4, :""f g""=5>
+#<data :@a=1, b=2>
+[[:req, :_]]
+[]
+");
+        }
+
+        /// <summary>
+        /// "comparison of X with Y failed" names an anonymous class by its #to_s, as MRI's rb_cmperr does (PRIsVALUE):
+        /// a class that says what it is (EnvUtil.labeled_class) is named so, not #&lt;Class:0x...&gt;.
+        /// </summary>
+        public void Comparison_AnonymousClassName1() {
+            TestOutput(@"
+e = Class.new { singleton_class.class_eval { define_method(:to_s) { 'Labeled' }; alias inspect to_s } }
+begin; 1.0 < e.new; rescue => x; puts x.message; end
+begin; 1 < e.new; rescue => x; puts x.message; end
+begin; 1 < nil; rescue => x; puts x.message; end
+", @"
+comparison of Float with Labeled failed
+comparison of Integer with Labeled failed
+comparison of Integer with nil failed
 ");
         }
     }

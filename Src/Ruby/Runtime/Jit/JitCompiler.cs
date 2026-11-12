@@ -26,6 +26,8 @@ namespace IronRuby.Runtime.Jit {
     using Ast = System.Linq.Expressions.Expression;
     using RExpr = IronRuby.Compiler.Ast.Expression;
     using MethodDeclaration = IronRuby.Compiler.Ast.MethodDefinition;
+    // the AST node, not the runtime's variable (IronRuby.Runtime.GlobalVariable)
+    using AstGlobalVariable = IronRuby.Compiler.Ast.GlobalVariable;
 
     /// <summary>The type lattice. Deliberately tiny: this is a prototype.</summary>
     internal enum JT {
@@ -881,6 +883,9 @@ namespace IronRuby.Runtime.Jit {
                 return Ast.Call(JitRuntime.M("GetIVar"), Ast.Constant(_context), _self, Ast.Constant(new InstanceVariableSite(ivar.Name)));
             }
 
+            var gvar = node as AstGlobalVariable;
+            if (gvar != null) { return EmitGlobalRead(gvar, out type); }
+
             var self = node as SelfReference;
             if (self != null) {
                 if (_loop != null && _ivarProfile == null) { throw Bail("self in a loop entered without it"); }
@@ -932,6 +937,57 @@ namespace IronRuby.Runtime.Jit {
 
             throw Bail("node: " + node.GetType().Name);
         }
+
+        /// <summary>
+        /// `$x': an ordinary global variable - one defined, and neither special ($~, $_ and the like are
+        /// the scope's, others have a getter of their own) nor aliased to one - read through a cached
+        /// site of its own, as the generic body reads it but without the scope (JitRuntime.GetGlobal).
+        /// Reading it does nothing observable; a read that finds the name denoting another variable than the
+        /// one it was compiled for (an alias made since) deopts.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitGlobalRead(AstGlobalVariable/*!*/ node, out JT type) {
+            var variable = OrdinaryGlobal(node);
+            if (_globalsWritten != null && _globalsWritten.Contains(variable)) { throw Bail("global variable $" + node.Name + " read and written"); }
+            if (_globalsRead == null) { _globalsRead = new HashSet<GlobalVariable>(); }
+            _globalsRead.Add(variable);
+            _canDeopt = true;
+            type = JT.Obj;
+            return Ast.Call(JitRuntime.M("GetGlobal"), Ast.Constant(_context), Ast.Constant(new GlobalVariableSite(node.Name)),
+                Ast.Constant(variable, typeof(object)));
+        }
+
+        /// <summary>
+        /// `$x = v' of an ordinary global (see EmitGlobalRead), which the body does not also read: a deopt that
+        /// restarts the body (or the iteration) then only stores the same value again - the value the restarted
+        /// code computes from the same state - so the store leaves the body restartable, as a read does. The
+        /// helper never raises: a variable that is no longer ordinary, one trace_var watches, or a non-main
+        /// Ractor deopts before storing, and the generic code assigns it as it always does.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitGlobalWrite(AstGlobalVariable/*!*/ node, RExpr/*!*/ right, out JT type) {
+            var variable = OrdinaryGlobal(node);
+            if (_globalsRead != null && _globalsRead.Contains(variable)) { throw Bail("global variable $" + node.Name + " read and written"); }
+            JT vt;
+            var v = Emit(right, out vt);
+            if (_globalsRead != null && _globalsRead.Contains(variable)) { throw Bail("global variable $" + node.Name + " read and written"); }
+            if (_globalsWritten == null) { _globalsWritten = new HashSet<GlobalVariable>(); }
+            _globalsWritten.Add(variable);
+            _canDeopt = true;
+            type = JT.Obj;
+            return Ast.Call(JitRuntime.M("SetGlobal"), Ast.Constant(_context), Ast.Constant(new GlobalVariableSite(node.Name)),
+                Ast.Constant(variable, typeof(object)), Coerce(v, vt, JT.Obj));
+        }
+
+        // The ordinary global the name denotes now; any other bails. The helpers deopt once the name denotes
+        // another variable (an alias made since), so two names cannot become one unseen.
+        private GlobalVariable/*!*/ OrdinaryGlobal(AstGlobalVariable/*!*/ node) {
+            GlobalVariable variable;
+            if (!_context.TryGetGlobalVariable(node.Name, out variable) || !(variable is GlobalVariableInfo)) {
+                throw Bail("global variable $" + node.Name);
+            }
+            return variable;
+        }
+
+        private HashSet<GlobalVariable> _globalsRead, _globalsWritten;
 
         /// <summary>
         /// `[a, b]': a new Array of boxed values, made by the helper the generic body calls. Building
@@ -1003,6 +1059,12 @@ namespace IronRuby.Runtime.Jit {
                 _ivarWrite = true;
                 type = JT.Obj;
                 return Ast.Call(JitRuntime.M("SetIVar"), Ast.Constant(_context), _self, Coerce(v, vt, JT.Obj), Ast.Constant(new InstanceVariableSite(ivarTarget.Name)));
+            }
+
+            var gvarTarget = node.Left as AstGlobalVariable;
+            if (gvarTarget != null) {
+                if (op != null) { throw Bail("global variable op-assign"); }
+                return EmitGlobalWrite(gvarTarget, node.Right, out type);
             }
 
             var attribute = node.Left as AttributeAccess;
@@ -2093,7 +2155,7 @@ namespace IronRuby.Runtime.Jit {
         /// or a nil/true/false literal never is - `@count + 1' is refused whatever gets profiled.
         /// </summary>
         private bool WalkOperand(RExpr/*!*/ node) {
-            if (node is InstanceVariable || node is SelfReference || node is SymbolLiteral) { return No(node); }
+            if (node is InstanceVariable || node is AstGlobalVariable || node is SelfReference || node is SymbolLiteral) { return No(node); }
             var literal = node as Literal;
             if (literal != null && !(literal.Value is int || literal.Value is long || literal.Value is double)) { return No(node); }
             // a Hash query is a Bool, never a number (an element read is speculated to be one)
@@ -2165,6 +2227,11 @@ namespace IronRuby.Runtime.Jit {
                     if (stored != null && stored.DefinitionLexicalDepth == _scopeDepth) { ++_nodes; return true; }
                     return Walk(assign.Right);
                 }
+                // `$x = v' (JitCompiler.EmitGlobalWrite)
+                if (assign.Left is AstGlobalVariable) {
+                    if (op != null || _inKeywordDefault) { return No(node); }
+                    return Walk(assign.Right);
+                }
                 var target = assign.Left as LocalVariable;
                 if (target == null || target.DefinitionLexicalDepth != _scopeDepth || _inKeywordDefault) { return No(node); }
                 _otherUses.Add(target.Name);
@@ -2216,7 +2283,7 @@ namespace IronRuby.Runtime.Jit {
             var or = node as OrExpression;
             if (or != null) { return WalkCondition(or.Left) && WalkCondition(or.Right); }
 
-            if (node is InstanceVariable || node is SelfReference) { return true; }
+            if (node is InstanceVariable || node is AstGlobalVariable || node is SelfReference) { return true; }
 
             var loop = node as WhileLoopExpression;
             if (loop != null) {

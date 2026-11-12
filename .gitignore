@@ -30,6 +30,9 @@ bin/
 /spec
 /rubyspec_temp/
 
+# Output of Util/sweep-core.sh and friends: a snapshot of one run on one machine.
+/Util/sweep-*.tsv
+
 # Where Util/rubybench/run.sh puts the gems a bundled benchmark needs.
 /.gems
 

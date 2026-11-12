@@ -435,7 +435,9 @@ namespace IronRuby.Builtins {
             }
 
             private void TestForAnonymous(RubyModule/*!*/ theModule) {
-                if (theModule.Name == null) {
+                // MRI's class2path: a module whose path starts with "#" is anonymous too - a class
+                // defined in a singleton class ("#<Class:#<Object:...>>::C") has no name to load by.
+                if (theModule.Name == null || theModule.GetDisplayName(_context, false).ToString().StartsWith("#", StringComparison.Ordinal)) {
                     throw RubyExceptions.CreateTypeError("can't dump anonymous {0} {1}",
                         theModule.IsClass ? "class" : "module",
                         theModule.GetDisplayName(_context, false)
@@ -443,18 +445,17 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            private void WriteRange(Range/*!*/ range, string[]/*!*/ instanceNames) {
+            private void WriteRange(Range/*!*/ range) {
                 WriteObject(range);
-                WriteInt32(3 + instanceNames.Length);
-                // Write the attributes that are implemented in C#. Any user-defined attributes (for subtypes of Range)
-                // are appended afterwards. MRI writes them in the order excl, begin, end.
+                WriteInt32(3);
+                // MRI writes the three attributes, in the order excl, begin, end, as an 'o' record of
+                // their own; the instance variables of a Range subclass's instance go in an "I" wrapper.
                 WriteSymbol("excl", RubyEncoding.Binary);
                 WriteAnObject(range.ExcludeEnd);
                 WriteSymbol("begin", RubyEncoding.Binary);
                 WriteAnObject(range.Begin);
                 WriteSymbol("end", RubyEncoding.Binary);
                 WriteAnObject(range.End);
-                WriteIVarPairs(range, instanceNames);
             }
 
             private void WriteObject(object/*!*/ obj) {
@@ -900,12 +901,12 @@ namespace IronRuby.Builtins {
                                 instanceNames = ArrayUtils.EmptyStrings;
                             }
 
-                            // An 'o' record (a plain object, or a Range) carries its instance data inline
-                            // rather than behind an "I" wrapper.
+                            // An 'o' record (a plain object, or an exception) carries its instance data inline
+                            // rather than behind an "I" wrapper. A Range's record holds its three attributes.
                             bool isObjectRecord =
                                 !(obj is double || obj is float || obj is BigInteger || obj is MutableString ||
                                   obj is RubyArray || obj is Hash || obj is RubyRegex || obj is RubyModule ||
-                                  obj is RubyStruct || isData);
+                                  obj is RubyStruct || obj is Range || isData);
 
                             // Except a Set's: MRI 4.0 writes the 'o' record of the Set of set.rb, holding only
                             // its table, and the instance variables of its own behind an "I" wrapper.
@@ -950,7 +951,7 @@ namespace IronRuby.Builtins {
                             } else if (obj is RubyStruct) {
                                 WriteStruct((RubyStruct)obj, theClass);
                             } else if (obj is Range) {
-                                WriteRange((Range)obj, instanceNames);
+                                WriteRange((Range)obj);
                             } else if (obj is Exception) {
                                 WriteException((Exception)obj, instanceNames);
                             } else {
@@ -1316,9 +1317,50 @@ namespace IronRuby.Builtins {
                 return MutableString.CreateBinary(data, RubyEncoding.Binary);
             }
 
+            // Set while ReadInstanced reads a Regexp whose "I" wrapper follows with its instance variables.
+            private bool _regexHasIVars;
+
+            // The link id of the Regexp ReadInstanced is about to read, and of the one whose instance variables are
+            // being read (-1: none), which a link among them cannot refer to yet.
+            private int _regexRef = -1, _regexBeingRead = -1;
+
+            // Set while ReadInstanced reads a 'C' record under an "I" wrapper, until ReadUserClass has read its type.
+            private bool _userClassHasIVars;
+
+            // The instance variables of that wrapper, which ReadRegex has to read itself (below); ReadInstanced
+            // assigns them once the Regexp exists.
+            private List<KeyValuePair<string, object>> _regexIVars;
+
             private RubyRegex/*!*/ ReadRegex() {
                 MutableString pattern = ReadString();
+                bool wrapped = _regexHasIVars;
+                _regexHasIVars = false;
                 int raw = _reader.ReadByte();
+
+                // MRI's r_object reads the wrapper's instance variables before it looks at the pattern, and takes a
+                // record for a Ruby 1.8 one unless an encoding is among them: an "I" wrapper that only carries
+                // other instance variables (@note) does not make it a 1.9 record.
+                bool hasEncoding = false;
+                if (wrapped) {
+                    var ivars = new List<KeyValuePair<string, object>>();
+                    int count = ReadInt32();
+                    int outer = _regexBeingRead;
+                    _regexBeingRead = _regexRef;
+                    try {
+                        for (int i = 0; i < count; i++) {
+                            string name = ReadIdentifier();
+                            object value = ReadAnObject(false);
+                            hasEncoding |= ParseEncodingIVar(name, value) != null;
+                            ivars.Add(new KeyValuePair<string, object>(name, value));
+                        }
+                    } finally {
+                        _regexBeingRead = outer;
+                    }
+                    _regexIVars = ivars;
+                }
+                if (!hasEncoding) {
+                    pattern = RemoveUndefinedEscapes(pattern);
+                }
                 var flags = (RubyRegexOptions)(raw & (int)(RubyRegexOptions.IgnoreCase | RubyRegexOptions.Extended | RubyRegexOptions.Multiline | RubyRegexOptions.FIXED));
 
                 // The bit MRI writes at 0x10 means "this regexp's encoding is fixed", which is
@@ -1332,6 +1374,37 @@ namespace IronRuby.Builtins {
                 }
 
                 return new RubyRegex(pattern, flags);
+            }
+
+            /// <summary>
+            /// A Regexp record with no encoding (no "I" wrapper) is a Ruby 1.8 one, whose escapes of letters 1.8 did
+            /// not define stood for the letter itself: MRI's r_object drops the backslash of each (an odd run of them)
+            /// before g h i j k l m o p q u y E F H I J K L N O P Q R S T U V X Y, so "a\\u3042" loads as /au3042/.
+            /// </summary>
+            private static MutableString/*!*/ RemoveUndefinedEscapes(MutableString/*!*/ pattern) {
+                byte[] bytes = pattern.ToByteArray();
+                var result = new List<byte>(bytes.Length);
+                int backslashes = 0;
+                foreach (byte b in bytes) {
+                    switch ((char)b) {
+                        case '\\':
+                            backslashes++;
+                            result.Add(b);
+                            continue;
+                        case 'g': case 'h': case 'i': case 'j': case 'k': case 'l':
+                        case 'm': case 'o': case 'p': case 'q': case 'u': case 'y':
+                        case 'E': case 'F': case 'H': case 'I': case 'J': case 'K':
+                        case 'L': case 'N': case 'O': case 'P': case 'Q': case 'R':
+                        case 'S': case 'T': case 'U': case 'V': case 'X': case 'Y':
+                            if ((backslashes & 1) != 0) {
+                                result.RemoveAt(result.Count - 1);
+                            }
+                            break;
+                    }
+                    backslashes = 0;
+                    result.Add(b);
+                }
+                return result.Count == bytes.Length ? pattern : MutableString.CreateBinary(result.ToArray(), RubyEncoding.Binary);
             }
 
             private RubyArray/*!*/ ReadArray(RubyArray/*!*/ result) {
@@ -1455,27 +1528,17 @@ namespace IronRuby.Builtins {
 
                 int count = ReadInt32();
                 Type type = theClass.GetUnderlyingSystemType();
-                if (typeof(Exception).IsAssignableFrom(type) || typeof(Range).IsAssignableFrom(type)) {
+                if (typeof(Range).IsAssignableFrom(type)) {
+                    return ReadRange(theClass, count, objectRef);
+                }
+                if (typeof(Exception).IsAssignableFrom(type)) {
                     // built from its attributes, which are not instance variables of the result
                     var attributes = new Dictionary<string, object>();
                     for (int i = 0; i < count; i++) {
                         string name = ReadIdentifier();
                         attributes[name] = ReadAnObject(false);
                     }
-                    if (typeof(Exception).IsAssignableFrom(type)) {
-                        return CreateException(theClass, attributes);
-                    }
-                    // MRI's range_loader: the two ends have to compare (begin <=> end not nil)
-                    object rangeBegin, rangeEnd;
-                    attributes.TryGetValue("begin", out rangeBegin);
-                    attributes.TryGetValue("end", out rangeEnd);
-                    if (rangeBegin != null && rangeEnd != null) {
-                        var compare = _sites.Compare;
-                        if (compare.Target(compare, rangeBegin, rangeEnd) == null) {
-                            throw RubyExceptions.CreateArgumentError("bad value for range");
-                        }
-                    }
-                    return RubyUtils.CreateObject(theClass, attributes);
+                    return CreateException(theClass, attributes);
                 }
 
                 // The object is in the link table before its instance variables are read, so one
@@ -1499,6 +1562,38 @@ namespace IronRuby.Builtins {
                     Context.SetInstanceVariable(obj, name, value);
                 }
                 return obj;
+            }
+
+            /// <summary>
+            /// MRI's range_loader: the range is allocated, and in the link table, before its attributes are read, so
+            /// a range that is its own begin or end links back to itself; the ends have to compare (begin &lt;=&gt; end
+            /// not nil). Any other pair in the record is ignored, as MRI ignores it (IronRuby used to write a
+            /// subclass's instance variables there).
+            /// </summary>
+            private object/*!*/ ReadRange(RubyClass/*!*/ theClass, int count, int objectRef) {
+                var range = (Range)RubyUtils.CreateObject(theClass);
+                if (objectRef >= 0) {
+                    _objects[objectRef] = range;
+                }
+                object rangeBegin = null, rangeEnd = null;
+                bool excludeEnd = false;
+                for (int i = 0; i < count; i++) {
+                    string name = ReadIdentifier();
+                    object value = ReadAnObject(false);
+                    switch (name) {
+                        case "begin": rangeBegin = value; break;
+                        case "end": rangeEnd = value; break;
+                        case "excl": excludeEnd = RubyOps.IsTrue(value); break;
+                    }
+                }
+                if (rangeBegin != null && rangeEnd != null) {
+                    var compare = _sites.Compare;
+                    if (compare.Target(compare, rangeBegin, rangeEnd) == null) {
+                        throw RubyExceptions.CreateArgumentError("bad value for range");
+                    }
+                }
+                range.InitializeLoaded(rangeBegin, rangeEnd, excludeEnd, theClass == Context.GetClass(typeof(Range)));
+                return range;
             }
 
             private object/*!*/ CreateException(RubyClass/*!*/ theClass, Dictionary<string, object>/*!*/ attributes) {
@@ -1745,8 +1840,29 @@ namespace IronRuby.Builtins {
                     return loaded;
                 }
 
+                // a Regexp, or a Regexp subclass's instance ('C')
+                // The wrapper belongs to the object right under it: a Regexp, or a Regexp subclass's instance ('C',
+                // where ReadUserClass hands it on once it has seen what the subclass wraps). Left set for every 'C',
+                // it reached a Regexp that was an element of an Array subclass, which then took the bytes after
+                // it for instance variables of its own.
+                _regexHasIVars = (typeFlag == '/');
+                // (a Regexp subclass's instance exists before its record is read, and can be linked to)
+                _regexRef = (typeFlag == '/') ? objectRef : -1;
+                _userClassHasIVars = (typeFlag == 'C');
+                _regexIVars = null;
                 object obj = ReadAnObject(typeFlag, objectRef);
-                ReadIVars(obj);
+                _regexHasIVars = false;
+                _userClassHasIVars = false;
+                var read = _regexIVars;
+                _regexIVars = null;
+                if (read != null) {
+                    // ReadRegex has read them already
+                    foreach (var ivar in read) {
+                        SetIVar(obj, ivar.Key, ivar.Value);
+                    }
+                } else {
+                    ReadIVars(obj);
+                }
                 return obj;
             }
 
@@ -1755,12 +1871,16 @@ namespace IronRuby.Builtins {
                 for (int i = 0; i < count; i++) {
                     string name = ReadIdentifier();
                     object value = ReadAnObject(false);
-                    RubyEncoding encoding = ParseEncodingIVar(name, value);
-                    if (encoding != null) {
-                        ForceMarshalEncoding(obj, encoding);
-                    } else {
-                        Context.SetInstanceVariable(obj, name, value);
-                    }
+                    SetIVar(obj, name, value);
+                }
+            }
+
+            private void SetIVar(object obj, string/*!*/ name, object value) {
+                RubyEncoding encoding = ParseEncodingIVar(name, value);
+                if (encoding != null) {
+                    ForceMarshalEncoding(obj, encoding);
+                } else {
+                    Context.SetInstanceVariable(obj, name, value);
                 }
             }
 
@@ -1790,6 +1910,9 @@ namespace IronRuby.Builtins {
                 }
                 bool loaded = false;
                 int typeFlag = _reader.ReadByte();
+                // see ReadInstanced
+                _regexHasIVars = _userClassHasIVars && typeFlag == '/';
+                _userClassHasIVars = false;
                 switch (typeFlag) {
                     case '"':
                         MutableString msc = (obj as MutableString);
@@ -1911,6 +2034,12 @@ namespace IronRuby.Builtins {
                         int link = ReadInt32();
                         if (!_objects.TryGetValue(link, out obj)) {
                             throw RubyExceptions.CreateArgumentError("dump format error (unlinked)");
+                        }
+                        // A Regexp's instance variables are read before the Regexp exists (ReadRegex): one of them
+                        // that refers to it is MRI's "bad link" (r_object's link to an entry that is still Qundef).
+                        // Not any empty slot: a _load that answers nil fills its slot with nil.
+                        if (link == _regexBeingRead) {
+                            throw RubyExceptions.CreateArgumentError("dump format error (bad link)");
                         }
                         // MRI runs the proc over a back-reference too - the proc sees each place
                         // an object appears in the dump, not each object - but only once the

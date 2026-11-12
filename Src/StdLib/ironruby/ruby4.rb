@@ -77,8 +77,10 @@ class FrozenError < RuntimeError; end unless defined?(FrozenError)
 module Kernel
   # #yield_self is an alias of #then (MRI's <internal:kernel>), so the two are one
   # entry, and the original name - the one an Enumerator and Method#name report - is :then.
+  # `defined?(yield)', as MRI writes it, rather than block_given?, which is a call: the
+  # method then runs without a scope when it is given a block (MethodDefinition.IsBlockGuard).
   def then
-    return to_enum(:then) { 1 } unless block_given?
+    return to_enum(:then) { 1 } unless defined?(yield)
     yield self
   end unless method_defined?(:then)
   alias :yield_self :then unless method_defined?(:yield_self)
@@ -238,15 +240,17 @@ module Enumerable
   # The optional Hash counts into it instead of into a fresh one, which also
   # means the frozen check happens before the first element is looked at.
   def tally(counts = nil)
-    if counts.nil?
+    # ::NilClass === and ::Hash ===, not #nil? and #is_a?: a BasicObject answers neither,
+    # and has to be the TypeError MRI's rb_to_hash_type makes of it.
+    if ::NilClass === counts
       return __list_tally__ if __plain_list__?
       result = {}
       each { |*values| item = __enum_item__(values); __tally_store__(result, item, (result[item] || 0) + 1) }
       return result
     end
 
-    hash = counts.is_a?(Hash) ? counts : Hash.try_convert(counts)
-    raise TypeError, "no implicit conversion of #{counts.class} into Hash" if hash.nil?
+    hash = ::Hash === counts ? counts : Hash.try_convert(counts)
+    raise TypeError, "no implicit conversion of #{__ir_class_of__(counts)} into Hash" if hash.nil?
     raise FrozenError.new("can't modify frozen Hash: #{hash.inspect}", receiver: hash) if hash.frozen?
     each do |*values|
       item = __enum_item__(values)
@@ -352,6 +356,8 @@ module Enumerable
       self
     end
   end
+  # Enumerator#next walks [...].each_with_index with a cursor while this is the method.
+  ::Enumerator.__iter_cursor_method__(self, :each_with_index)
 
   # Ruby 2.5 gave the predicates an optional pattern, matched with #===.
   # The built-ins only know the block form, and because they are defined on
@@ -367,9 +373,12 @@ module Enumerable
         raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
       end
       # The pattern wins and the block is never called, which is worth saying out loud.
-      # MRI names the line that called #all? and friends: this helper, then the method, then it.
+      # MRI names the line that called #all? and friends. The prelude's frames stand in a
+      # backtrace as a C method's do, at their caller's line, and this helper's not at all:
+      # #all? is the first frame above #warn and its caller the second. (uplevel 2 went past
+      # the end of a top-level script's backtrace, and the warning had no location.)
       if block && !args.empty? && !$VERBOSE.nil?
-        warn "given block not used", uplevel: 2
+        warn "given block not used", uplevel: 1
       end
     end
     private :__check_pattern_args__
@@ -1594,7 +1603,9 @@ class Hash
   def transform_values!(&block)
     return to_enum(:transform_values!) { size } unless block
     raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
-    keys.each { |k| self[k] = block.call(self[k]) }
+    # Over the hash itself, as MRI's rb_hash_stlike_foreach_with_replace is: the block runs
+    # while the hash is being iterated, so #rehash in it is an error.
+    each_key { |k| self[k] = block.call(self[k]) }
     self
   end unless method_defined?(:transform_values!)
 
@@ -1671,6 +1682,61 @@ class Hash
 end
 
 class String
+  # The library String#initialize takes the string to copy and no keywords; String.new's
+  # encoding: and capacity: are the constructor's. MRI's rb_str_init takes them in
+  # #initialize too, as a subclass's super or a call through #send does: the keywords and
+  # the argument are checked first, then a frozen receiver is a FrozenError, and the string
+  # is emptied when a capacity comes with nothing to copy (capacity is only a size hint).
+  alias_method :__ir_initialize__, :initialize
+  private :__ir_initialize__
+
+  def initialize(*args, **opts)
+    return __ir_initialize__(*args) if opts.empty?
+    if args.size > 1
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
+    end
+    unknown = opts.keys - [:encoding, :capacity]
+    unless unknown.empty?
+      ::Kernel.raise(::ArgumentError,
+        "unknown keyword#{unknown.size > 1 ? 's' : ''}: #{unknown.map(&:inspect).join(', ')}")
+    end
+    encoding = opts[:encoding]
+    encoding = ::Encoding.find(encoding) unless encoding.nil? || encoding.is_a?(::Encoding)
+    # NUM2LONG: a #to_int that answers something else is a TypeError, and a bignum does not fit.
+    capacity = opts[:capacity]
+    unless capacity.nil?
+      capacity = ::Math.__send__(:__int__, capacity)
+      unless ::Integer === capacity
+        # the one #to_int call's answer decides: asking again could get a different one
+        name = __ir_type_name__(opts[:capacity])
+        ::Kernel.raise(::TypeError,
+          "can't convert #{name} to Integer (#{name}#to_int gives #{capacity.class})")
+      end
+      unless capacity >= -0x8000_0000_0000_0000 && capacity <= 0x7fff_ffff_ffff_ffff
+        ::Kernel.raise(::RangeError, "bignum too big to convert into 'long'")
+      end
+    end
+    # The conversion String.new makes without keywords (rb_check_string_type): #to_str is
+    # called whether it is private or the object a BasicObject.
+    unless args.empty? || ::String === args[0]
+      converted = ::String.try_convert(args[0])
+      if converted.nil?
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_type_name__(args[0])} into String")
+      end
+      args = [converted]
+    end
+    ::Kernel.raise(::FrozenError.new("can't modify frozen String: #{inspect}", receiver: self)) if frozen?
+    # Only a capacity empties a string that is given nothing to copy: encoding: alone, or
+    # capacity: nil, leaves the bytes and changes the encoding.
+    if !args.empty?
+      __ir_initialize__(args[0])
+    elsif !capacity.nil?
+      clear
+    end
+    force_encoding(encoding) if encoding
+    self
+  end
+
   # Both take a String or something with #to_str, and both answer a copy when
   # there is nothing to remove - including for an empty affix, where
   # "self[0...-0]" would otherwise answer "".
@@ -2395,7 +2461,8 @@ unless defined?(Fiber)
     def initialize(blocking: false, storage: true, &block)
       # what fiber_t_alloc raises; the handle is registered with its FiberCore only once
       Fiber.__err__(::RuntimeError, "cannot initialize twice") if @__state__
-      @__state__ = State.new(self, blocking: blocking, storage: storage, &block)
+      # positional: keywords cost a Hash and a binding of their own on every Fiber.new
+      @__state__ = State.new(self, blocking, storage, &block)
     end
 
     def initialize_copy(other)
@@ -2473,7 +2540,7 @@ unless defined?(Fiber)
 
       # ---- construction ----------------------------------------------------
 
-      def initialize(handle, blocking: false, storage: true, &block)
+      def initialize(handle, blocking, storage, &block)
         Fiber.__err__(::ArgumentError, "tried to create Proc object without a block") unless block
         cur          = State.current
         @block       = block
@@ -2491,8 +2558,9 @@ unless defined?(Fiber)
         @thread      = nil
         @scheduler   = nil
         @root_fiber  = cur.__root_fiber__
-        loc          = (block.source_location rescue nil)
-        @location    = loc ? "#{loc[0]}:#{loc[1]}" : nil
+        # "path:line" of the block, made when #inspect first wants it: making it here was a
+        # quarter of what Fiber.new cost.
+        @location    = nil
       end
 
       # ---- internal accessors (used across fibers of the same group) --------
@@ -2547,7 +2615,12 @@ unless defined?(Fiber)
                 else                  "resumed"
                 end
         id = "%016x" % (__handle__.object_id.abs << 1)
-        @location ? "#<Fiber:0x#{id} #{@location} (#{state})>" : "#<Fiber:0x#{id} (#{state})>"
+        location = @location
+        if location.nil?
+          loc = @block && (@block.source_location rescue nil)
+          location = @location = loc ? "#{loc[0]}:#{loc[1]}" : false
+        end
+        location ? "#<Fiber:0x#{id} #{location} (#{state})>" : "#<Fiber:0x#{id} (#{state})>"
       end
 
       alias :to_s :inspect
@@ -3029,6 +3102,20 @@ class Numeric
   end
 end
 
+# nil, true and false are special objects too (MRI's special_object_p): they cannot be
+# cloned unfrozen either. The library #clone answered them for freeze: false.
+[::NilClass, ::TrueClass, ::FalseClass].each do |klass|
+  klass.class_eval do
+    def clone(freeze: nil)
+      unless freeze.nil? || freeze == true || freeze == false
+        ::Kernel.raise(::ArgumentError, "unexpected value for freeze: #{freeze.class}")
+      end
+      ::Kernel.raise(::ArgumentError, "can't unfreeze #{self.class}") if freeze == false
+      self
+    end
+  end
+end
+
 module Kernel
   # The built-in warn takes exactly one message and no keywords; 2.5 added
   # multiple messages plus uplevel:, and 3.0 added category:.
@@ -3476,6 +3563,7 @@ class String
     end
     out = +""
     unicode_escape = false
+    hex_escape = false # a \x escape of a non-ASCII byte
     i = 0
     while i < body.length
       c = body[i]
@@ -3502,9 +3590,14 @@ class String
         when "x"
           hex = body[(i + 1), 2]
           ::Kernel.raise(::RuntimeError, "invalid hex escape") unless hex =~ /\A[0-9a-fA-F]{2}\z/
+          if hex.to_i(16) > 0x7f
+            ::Kernel.raise(::RuntimeError, "hex escape and Unicode escape are mixed") if unicode_escape
+            hex_escape = true
+          end
           out << hex.to_i(16).chr
           i += 2
         when "u"
+          ::Kernel.raise(::RuntimeError, "hex escape and Unicode escape are mixed") if hex_escape
           unicode_escape = true
           if body[i + 1] == "{"
             close = body.index("}", i + 1)
@@ -3532,9 +3625,10 @@ class String
       ::Kernel.raise(::RuntimeError, "dumped string contained Unicode escape but used force_encoding")
     end
     # Without a .force_encoding(...) suffix the answer carries the receiver's
-    # own encoding, not UTF-8.
+    # own encoding - or UTF-8 once a \u escape has been read, as MRI's
+    # undump_after_backslash switches it to.
     if out.respond_to?(:force_encoding)
-      out.force_encoding(forced || encoding)
+      out.force_encoding(forced || (unicode_escape ? ::Encoding::UTF_8 : encoding))
     end
     out
   end unless method_defined?(:undump)
@@ -4388,6 +4482,39 @@ class Array
   end
   private :__repeat__
 
+  # MRI's rb_ary_cycle walks the array as it is on each pass, where Enumerable#cycle
+  # yields what the first pass saw: `a.cycle { a.clear }` stops after one element
+  # instead of cycling forever over a copy.
+  def cycle(*args)
+    unless block_given?
+      enum = super(*args)
+      return to_enum(:cycle, *args) { enum.size }
+    end
+    if args.size > 1
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
+    end
+    n = args[0]
+    if n.nil?
+      n = -1
+    else
+      count = n
+      n = ::Math.__send__(:__int__, count)
+      unless n.is_a?(::Integer)
+        ::Kernel.raise(::TypeError,
+          "can't convert #{count.class} to Integer (#{count.class}#to_int gives #{__ir_conversion_result_name__(n)})")
+      end
+      return nil if n <= 0
+    end
+    while size > 0 && (n < 0 || (n -= 1) >= 0)
+      i = 0
+      while i < size
+        yield self[i]
+        i += 1
+      end
+    end
+    nil
+  end
+
   def to_h
     result = {}
     each_with_index do |pair, index|
@@ -5076,10 +5203,12 @@ class Enumerator
   alias :to_s :inspect
 
   # --- external iteration ------------------------------------------------
-  # #next has to suspend `each` half way through, which needs a coroutine.
-  # Fiber is a background thread plus a mailbox here. A native iteration source
-  # is detached from the public enumerator, so dropping the latter can collect
-  # its fiber handle and release the worker.
+  # #next, #peek, #next_values, #peek_values and #feed are C# (Enumerator.cs). They walk a
+  # built-in method over one of its own receivers - Array#each, Hash#each_pair, Integer#times... -
+  # with a cursor, and hand everything else to __iter_slow__ here, which suspends `each` half way
+  # through in a fiber: a background thread plus a mailbox here. A native iteration source is
+  # detached from the public enumerator, so dropping the latter can collect its fiber handle and
+  # release the worker.
   def __iter_fiber__
     @__fiber__ ||= begin
       @__iter_done__ = false
@@ -5097,10 +5226,17 @@ class Enumerator
   end
   private :__iter_fiber__
 
+  # get_next_values: the end is raised once as such, and from then on as a new
+  # StopIteration whose cause is that first one.
   def __iter_stop__
     error = ::StopIteration.new("iteration reached an end")
     error.__set_result__(@__iter_result__)
-    ::Kernel.raise(error)
+    first = @__iter_stop_exc__
+    unless first
+      @__iter_stop_exc__ = error
+      ::Kernel.raise(error)
+    end
+    ::Kernel.raise(error, cause: first)
   end
   private :__iter_stop__
 
@@ -5109,23 +5245,11 @@ class Enumerator
   def __iter_advance__
     return if @__peeked__
     __iter_stop__ if @__iter_done__
-    # The built-in Array#each over an Array needs no fiber: a cursor walks it by
-    # index the way #each would (Enumerator#__ir_array_cursor__ says when).
-    cursor = @__iter_cursor__
-    if cursor.nil? && @__fiber__.nil?
-      cursor = @__iter_cursor__ = __ir_array_cursor__
-      @__iter_started__ = false
-    end
-    return __iter_cursor_advance__(cursor) if cursor
     fiber = __iter_fiber__
     fed = nil
     # A fed value is what the suspended yield returns, so it waits while the
     # fiber has not reached a yield yet.
-    if @__iter_started__
-      fed = @__feed__
-      @__feed__ = nil
-      @__has_feed__ = false
-    end
+    fed = __iter_take_feed__ if @__iter_started__
     @__iter_started__ = true
     begin
       tag, payload = fiber.resume(fed)
@@ -5141,62 +5265,26 @@ class Enumerator
       @__iter_done__ = true
       @__iter_result__ = payload
       @__fiber__ = nil
+      __iter_take_feed__
       __iter_stop__
     end
   end
   private :__iter_advance__
 
-  def __iter_cursor_advance__(cursor)
-    values = __ir_array_cursor_next__(cursor)
-    # false: the iteration belongs to another thread, as a fiber would
-    ::Kernel.raise(::FiberError, "fiber called across threads") if values.equal?(false)
-    if @__iter_started__
-      @__feed__ = nil
-      @__has_feed__ = false
-    end
-    @__iter_started__ = true
-    if values
-      @__peek__ = values
-      @__peeked__ = true
-    else
-      @__iter_done__ = true
-      @__iter_result__ = __ir_array_cursor_source__(cursor)
-      @__iter_cursor__ = nil
-      __iter_stop__
-    end
-  end
-  private :__iter_cursor_advance__
-
-  def next_values
+  # The fiber's half of #next (op 0: the values of the next step, taken), #peek
+  # (op 1: the same values, left for the next #next; the caller copies them) - and
+  # the FiberError of a cursor another thread started (op 2).
+  def __iter_slow__(op)
+    ::Kernel.raise(::FiberError, "fiber called across threads") if op == 2
     __iter_advance__
     values = @__peek__
-    @__peeked__ = false
-    @__peek__ = nil
+    if op == 0
+      @__peeked__ = false
+      @__peek__ = nil
+    end
     values
   end
-
-  def peek_values
-    __iter_advance__
-    @__peek__.dup
-  end
-
-  def next
-    values = next_values
-    values.size <= 1 ? values[0] : values
-  end
-
-  def peek
-    values = peek_values
-    values.size <= 1 ? values[0] : values
-  end
-
-  # The value the *suspended* `yield` inside the source method will return.
-  def feed(value)
-    ::Kernel.raise(::TypeError, "feed value already set") if @__has_feed__
-    @__has_feed__ = true
-    @__feed__ = value
-    nil
-  end
+  private :__iter_slow__
 
   # MRI refuses to copy an enumerator whose external iteration (#next, #peek) is under
   # way; a fresh or finished one copies as a fresh enumerator.
@@ -5208,43 +5296,58 @@ class Enumerator
       ::Kernel.raise(::TypeError, "can't copy execution context")
     end
     __enum_initialize_copy__(other)
-    @__fiber__ = nil
-    @__iter_cursor__ = nil
-    @__iter_done__ = false
-    @__iter_result__ = nil
-    @__iter_started__ = false
-    @__peeked__ = false
-    @__peek__ = nil
-    @__feed__ = nil
-    @__has_feed__ = false
+    __iter_forget__
     self
   end
   private :initialize_copy
 
+  def __iter_forget__
+    __iter_reset__
+    @__fiber__ = nil
+    @__iter_done__ = false
+    @__iter_result__ = nil
+    @__iter_stop_exc__ = nil
+    @__iter_started__ = false
+    @__peeked__ = false
+    @__peek__ = nil
+  end
+  private :__iter_forget__
+
   def __iter_in_progress__
+    # a built-in method walked by a cursor (Enumerator.cs) is under way just as a fiber is
+    cursor = __iter_cursor_in_progress__
+    return cursor unless cursor.nil?
     return false if @__iter_done__ || !(@__iter_started__ || @__peeked__)
-    # an Array walked by a cursor (__iter_advance__) is under way just as a fiber is
-    return true if @__iter_cursor__
     fiber = @__fiber__
     !fiber.nil? && fiber.alive?
   end
   private :__iter_in_progress__
 
+  # enumerator_rewind: the receiver's #rewind (rb_check_funcall, which finds a private one
+  # too), then the iteration is forgotten.
   def rewind
-    fiber = @__fiber__
-    @__fiber__ = nil
-    @__iter_cursor__ = nil
-    @__iter_done__ = false
-    @__iter_result__ = nil
-    @__peeked__ = false
-    @__peek__ = nil
-    @__feed__ = nil
-    @__has_feed__ = false
-    # Unwind the abandoned fiber so its ensure blocks run and its thread exits.
-    fiber.kill if fiber && fiber.alive?
+    if frozen?
+      ::Kernel.raise(::FrozenError.new("can't modify frozen #{self.class}: #{inspect}", receiver: self))
+    end
     target = (@__generator__ ? nil : __enum_target__)
     receiver = target && target[0]
-    receiver.rewind if receiver && receiver.respond_to?(:rewind)
+    # Unwind the abandoned fiber, so that its thread exits. That runs the ensure clauses of the
+    # receiver's #each, which MRI never runs (it only forgets the fiber): before the receiver's
+    # #rewind, so that an ensure cannot undo what #rewind sets up. The price is that the iteration
+    # is forgotten even when #rewind raises, where MRI's would go on. An error one of those ensure
+    # clauses raises does not stop the receiver's #rewind, and then comes out of this method, where MRI
+    # has none to show: it cannot be told from a Thread#raise that reached this thread while the fiber
+    # ran, which must not be lost.
+    fiber = @__fiber__
+    begin
+      begin
+        fiber.kill if fiber && fiber.alive?
+      ensure
+        receiver.__send__(:rewind) if receiver && receiver.respond_to?(:rewind, true)
+      end
+    ensure
+      __iter_forget__
+    end
     self
   end
 
@@ -5260,7 +5363,7 @@ class Enumerator
       unless block
         ::Kernel.raise(::ArgumentError, "tried to call lazy new without a block")
       end
-      @__generator__ = lambda { |y, *args| obj.each(*args) { |*values| block.call(y, *values) } }
+      @__generator__ = lambda { |y, *args| obj.each(*args) { |*values| block.call(y, *values) }; nil }
       @__size__ = size
       __set_inspect__(obj, :each)
       self
@@ -5298,8 +5401,10 @@ class Enumerator
       self
     end
 
+    # A lazy operation's #each answers nil (MRI's lazy_add_method), and so does
+    # StopIteration#result at the end of its #next, whatever the source answers.
     def __chain__(size = nil, &generator)
-      Lazy.__raw__(size, &generator)
+      Lazy.__raw__(size) { |y, *args| generator.call(y, *args); nil }
     end
     private :__chain__
 
@@ -5803,6 +5908,8 @@ class Enumerator
 
   # --- Enumerator::Chain -------------------------------------------------
   class Chain < Enumerator
+    # MRI undefines external iteration for it (enumerator.c, Init_Enumerator).
+    undef_method :next, :next_values, :peek, :peek_values, :feed
     def initialize(*enums)
       @__enums__ = enums
       @__iterated__ = 0
@@ -5852,6 +5959,8 @@ class Enumerator
   # --- Enumerator::Product -----------------------------------------------
   # The cartesian product of its arguments, leftmost varying slowest.
   class Product < Enumerator
+    # MRI undefines external iteration for it (enumerator.c, Init_Enumerator).
+    undef_method :next, :next_values, :peek, :peek_values, :feed
     # MRI accepts anything here -- the arguments are only required to answer
     # #each_entry at the point #each actually walks them, which is what lets
     # Product wrap a plain Object that defines each_entry and nothing else.
@@ -6149,11 +6258,9 @@ class String
 
     return empty? ? [] : [__ir_chomp_line__(__ir_each_line_all__(nil), nil, chomp)] if separator.nil?
 
-    if separator.empty?
-      lines = __ir_paragraphs__(__ir_each_line_all__(newline), newline)
-    else
-      lines = __ir_each_line_all__(separator)
-    end
+    # paragraph mode chomps as it splits
+    return __ir_paragraphs__(__ir_each_line_all__(newline), newline, chomp) if separator.empty?
+    lines = __ir_each_line_all__(separator)
     return lines unless chomp
     lines.map { |line| __ir_chomp_line__(line, separator, chomp) }
   end
@@ -6169,8 +6276,10 @@ class String
 
   # Paragraph mode: a paragraph ends at the first blank line after some
   # content, that blank line is kept, and every further blank line of the run
-  # is dropped.
-  def __ir_paragraphs__(physical, newline)
+  # is dropped. With chomp: a paragraph that ended so loses its last newline and
+  # the blank line, and the last paragraph, which no blank line ended, is left as
+  # it is, trailing newline and all (rb_str_enumerate_lines' chomp_rslen).
+  def __ir_paragraphs__(physical, newline, chomp = false)
     result = []
     buffer = nil
     skipping = false
@@ -6182,7 +6291,11 @@ class String
         skipping = false
       end
       if blank && buffer
-        result << (buffer + line)
+        if chomp
+          result << buffer[0, buffer.length - (buffer.end_with?(crlf) ? crlf.length : newline.length)]
+        else
+          result << (buffer + line)
+        end
         buffer = nil
         skipping = true
       elsif buffer
@@ -6556,15 +6669,21 @@ class String
       return self
     end
 
-    return self if length > stop.length || (length == stop.length && self > stop)
-
-    current = self
-    loop do
-      break if exclusive && current == stop
+    # MRI's str_upto_each: the block gets a copy of the receiver and then each
+    # #succ, and the next string is worked out before the block runs, so a block that
+    # changes the string it was given changes neither the receiver nor the walk. The
+    # walk ends at stop.succ, or once a string is longer than stop in bytes.
+    n = self <=> stop
+    return self if n > 0 || (exclusive && n == 0)
+    after_end = stop.succ
+    current = ::String.new(self)
+    until current == after_end
+      following = (exclusive || current != stop) ? current.succ : nil
       block.call(current)
-      break if current == stop
-      current = current.succ
-      break if current.bytesize > stop.bytesize
+      break if following.nil?
+      current = following
+      break if exclusive && current == stop
+      break if current.bytesize > stop.bytesize || current.bytesize == 0
     end
     self
   end
@@ -7102,11 +7221,13 @@ class Data
     return "#<data #{path}:...>" if stack.any? { |seen| seen.equal?(self) }
     stack.push(self)
     begin
-      out = "#<data "
+      out = +"#<data "
       out << path if named
       __data_members__.each_with_index do |name, i|
         out << (i > 0 ? ", " : (named ? " " : ""))
-        out << "#{name}=#{__data_value__(name).inspect}"
+        # a member that is not a local or constant name shows as its Symbol (:@a=1), as in MRI
+        label = name.to_s.match?(/\A[[:alpha:]_][[:alnum:]_]*\z/) ? name.to_s : name.to_sym.inspect
+        out << "#{label}=#{__data_value__(name).inspect}"
       end
       out << ">"
     ensure
@@ -9248,6 +9369,28 @@ class IO
 
     # MRI names nil/true/false by value rather than by class in the TypeErrors
     # rb_builtin_class_name produces.
+    # MRI warns the first time a buffer is allocated in the process, and only
+    # then: the experimental category is read at that moment and not again
+    # (io_buffer_experimental), so code that allocates one with the category off
+    # silences the warning for good. Every allocation goes through new or
+    # allocate here.
+    EXPERIMENTAL_WARNED__ = [false]
+    __hide_constant__ :EXPERIMENTAL_WARNED__
+
+    def self.__experimental__
+      return if EXPERIMENTAL_WARNED__[0]
+      EXPERIMENTAL_WARNED__[0] = true
+      return unless ::Warning[:experimental]
+      loc = caller_locations(1).find { |l| l.path != __FILE__ }
+      ::Kernel.warn("#{"#{loc.path}:#{loc.lineno}: " if loc}warning: IO::Buffer is experimental and both the Ruby and C interface may change in the future!",
+                    category: :experimental)
+    end
+
+    def self.allocate
+      __experimental__
+      super
+    end
+
     def self.__class_name__(value)
       case value
       when nil then "nil"
@@ -9375,6 +9518,7 @@ class IO
     end
 
     def initialize(size = DEFAULT_SIZE, *flags)
+      self.class.__experimental__
       size = self.class.__integer_arg__(size)
       ::Kernel.raise(::ArgumentError, "Size can't be negative!") if size < 0
 
@@ -10968,7 +11112,11 @@ class Hash
   # mutually recursive hashes terminate.
   def eql?(other)
     return true if equal?(other)
-    return false unless other.is_a?(Hash)
+    unless other.is_a?(Hash)
+      # rb_hash_eql hands an object that converts to a Hash the question the other way round
+      return false unless other.respond_to?(:to_hash)
+      return other.eql?(self) ? true : false
+    end
     return false if size != other.size
     # two non-empty hashes of different kinds (one compares by identity) are never eql
     return false if size != 0 && compare_by_identity? != other.compare_by_identity?
@@ -11037,7 +11185,9 @@ class Hash
       elsif block
         block.call(k)
       else
-        raise KeyError.new("key not found: #{k.inspect}", receiver: self, key: k)
+        desc = k.inspect
+        desc = "#{desc[0, 62]}..." if desc.length > 65 # rb_hash_fetch's rb_str_ellipsize
+        raise KeyError.new("key not found: #{desc}", receiver: self, key: k)
       end
     end
   end
@@ -11148,6 +11298,8 @@ class Struct
     return to_enum(:each) unless block
     __struct_each__(&block)
   end
+  # Enumerator#next walks a struct with a cursor while this is the method.
+  ::Enumerator.__iter_cursor_method__(self, :each)
 
   # each_pair yields one [name, value] array, so that a single-parameter block
   # receives the pair rather than just the name

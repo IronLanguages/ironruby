@@ -229,5 +229,38 @@ true
 bad value for range
 ", 2);
         }
+
+        /// <summary>
+        /// A range that contains itself: inspect writes "(... .. ...)" where it recurs and == and eql? answer
+        /// true there, as MRI's rb_exec_recursive does. All three overflowed the stack, which killed CRuby's
+        /// test_range.
+        /// </summary>
+        public void Range_Recursive1() {
+            TestOutput(@"
+class CyclicRange < Range
+  def <=>(other); true; end
+end
+x = CyclicRange.allocate; x.send(:initialize, x, 1)
+y = CyclicRange.allocate; y.send(:initialize, y, 1)
+z = CyclicRange.allocate; z.send(:initialize, z, :another)
+e = CyclicRange.allocate; e.send(:initialize, e, 1, true)
+p x, e
+p x == y, x.eql?(y), x == z, x.eql?(z)
+a = CyclicRange.allocate
+b = CyclicRange.allocate
+a.send(:initialize, b, 1)
+b.send(:initialize, a, 1)
+p a == b, a.eql?(b)
+", @"
+(... .. ...)..1
+(... ... ...)...1
+true
+true
+false
+false
+true
+true
+");
+        }
     }
 }
