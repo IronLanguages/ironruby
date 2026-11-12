@@ -1277,6 +1277,7 @@ namespace IronRuby.Tests {
                 Kernel_ConversionKeywordEntry1,
                 Integer_BignumBitsSlice1,
                 Continuation_Escape1,
+                Continuation_CrossThread1,
                 RbConfig_ExecutableExts1,
                 IOBuffer_ExperimentalWarning1,
                 Array_Cycle1,
