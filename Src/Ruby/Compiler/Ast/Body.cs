@@ -36,7 +36,8 @@ namespace IronRuby.Compiler.Ast {
     // end
     public partial class Body : Expression {
         private static readonly System.Reflection.MethodInfo/*!*/ _ExposeException = typeof(RubyOps).GetMethod(nameof(RubyOps.ExposeException));
-        private static readonly System.Reflection.MethodInfo/*!*/ _CanRescueDeferTrace = typeof(RubyOps).GetMethod(nameof(RubyOps.CanRescueDeferTrace));
+        private static readonly System.Reflection.MethodInfo/*!*/ _CanRescueDeferTrace = typeof(RubyOps).GetMethod(nameof(RubyOps.CanRescueDeferTrace),
+            new[] { typeof(RubyScope), typeof(Exception), typeof(int) });
         private static readonly System.Reflection.MethodInfo/*!*/ _RescuePassUnwinder = typeof(RubyOps).GetMethod(nameof(RubyOps.RescuePassUnwinder));
         private static readonly System.Reflection.MethodInfo/*!*/ _RescuePassMayTest = typeof(RubyOps).GetMethod(nameof(RubyOps.RescuePassMayTest));
         private static readonly System.Reflection.MethodInfo/*!*/ _RescueSiteCannotMatch = typeof(RubyOps).GetMethod(nameof(RubyOps.RescueSiteCannotMatch));
@@ -45,6 +46,66 @@ namespace IronRuby.Compiler.Ast {
         private static readonly System.Reflection.MethodInfo/*!*/ _CanRescueAfterClauses = typeof(RubyOps).GetMethod(nameof(RubyOps.CanRescueAfterClauses));
         private static readonly System.Reflection.MethodInfo/*!*/ _SetCauseLeavingEnsure = typeof(RubyOps).GetMethod(nameof(RubyOps.SetCauseLeavingEnsure));
         private static readonly System.Reflection.MethodInfo/*!*/ _SetCauseLeavingInterpretedEnsure = typeof(RubyOps).GetMethod(nameof(RubyOps.SetCauseLeavingInterpretedEnsure));
+
+        /// <summary>
+        /// Whether an ensure clause may jump out of itself - return, break, next, redo, retry - which the DLR makes a catch of
+        /// every exception around the frame's statements and a `throw' of it again after the clause (FlowControlRewriter): that
+        /// starts the exception's CLR trace over, so the trace no longer has the frames it came out of. A jump of a block or
+        /// method defined in the clause is a jump of that lambda's own, or an exception.
+        /// </summary>
+        private sealed class EnsureJumpFinder : Walker {
+            private bool _found;
+
+            internal static bool MayJump(Statements/*!*/ statements) {
+                var finder = new EnsureJumpFinder();
+                foreach (var statement in statements) {
+                    statement.Walk(finder);
+                }
+                return finder._found;
+            }
+
+            public override bool Enter(ReturnStatement/*!*/ node) { _found = true; return false; }
+            public override bool Enter(BreakStatement/*!*/ node) { _found = true; return false; }
+            public override bool Enter(NextStatement/*!*/ node) { _found = true; return false; }
+            public override bool Enter(RedoStatement/*!*/ node) { _found = true; return false; }
+            public override bool Enter(RetryStatement/*!*/ node) { _found = true; return false; }
+            public override bool Enter(BlockDefinition/*!*/ node) { return false; }
+            public override bool Enter(MethodDefinition/*!*/ node) { return false; }
+        }
+
+        /// <summary>
+        /// Whether the transformed ensure clause has a jump (a GotoExpression) of its own: what the DLR's FlowControlRewriter turns
+        /// into the catch and `throw saved' EnsureJumpFinder is about, wherever it comes from - a call with a block (literal or
+        /// passed) or a yield or a zsuper returns through a label after it, which a break from the block jumps to. A jump within the
+        /// clause counts too, which is the safe side. Not those of the lambdas defined in it; extension nodes are looked into as the
+        /// rewriter sees them, reduced.
+        /// </summary>
+        private sealed class GotoFinder : MSA.ExpressionVisitor {
+            private bool _found;
+
+            internal static bool Has(MSA.Expression/*!*/ node) {
+                var finder = new GotoFinder();
+                finder.Visit(node);
+                return finder._found;
+            }
+
+            public override MSA.Expression Visit(MSA.Expression node) {
+                return _found ? node : base.Visit(node);
+            }
+
+            protected override MSA.Expression/*!*/ VisitGoto(MSA.GotoExpression/*!*/ node) {
+                _found = true;
+                return node;
+            }
+
+            protected override MSA.Expression/*!*/ VisitLambda<T>(MSA.Expression<T>/*!*/ node) {
+                return node;
+            }
+
+            protected override MSA.Expression/*!*/ VisitExtension(MSA.Expression/*!*/ node) {
+                return node.CanReduce ? Visit(node.Reduce()) : node;
+            }
+        }
 
         // RescuePassUnwinder(scope, e) || RescuePassMayTest(scope, e) && <each class of each clause cannot match> && RescuePassCommit(scope, e)
         private static MSA.Expression/*!*/ MakeRescuePass(MSA.Expression/*!*/ scope, MSA.Expression/*!*/ exception, ConstantSiteCache[][]/*!*/ clauses) {
@@ -288,6 +349,8 @@ namespace IronRuby.Compiler.Ast {
             // runs once the frames are gone. Without rescue clauses the handler only takes note.
             MSA.Expression guarded;
             MSA.ParameterExpression passingVariable = null;
+            // the index of the frame's record, which the walk of the stack below it waits for (RubyExceptionData.TryDeferCatchSite)
+            var frameDepth = gen.CurrentCompiledFrameDepth;
             if (rescueSites != null) {
                 // The exception the filter lets through, which the filter around the else clause lets through as well. Reset once
                 // the statements are left any other way: an exception thrown later in the frame is not the one that went through.
@@ -297,7 +360,7 @@ namespace IronRuby.Compiler.Ast {
                     new RubyFilterExpression(
                         Ast.Block(transformedBody, AstUtils.Empty()),
                         exceptionVariable,
-                        Ast.Call(_CanRescueDeferTrace, gen.CurrentScopeVariable, exceptionVariable),
+                        Ast.Call(_CanRescueDeferTrace, gen.CurrentScopeVariable, exceptionVariable, frameDepth),
                         Ast.Block(Ast.Assign(exceptionThrownVariable, AstUtils.Constant(true)), AstUtils.Empty()),
                         Ast.Block(
                             Ast.Assign(passingVariable, Ast.Condition(
@@ -325,7 +388,7 @@ namespace IronRuby.Compiler.Ast {
                     AstUtils.Try(
                         Ast.Block(transformedBody, AstUtils.Empty())
                     ).Filter(exceptionVariable = Ast.Parameter(typeof(Exception), "#e"),
-                        Ast.Call(_CanRescueDeferTrace, gen.CurrentScopeVariable, exceptionVariable),
+                        Ast.Call(_CanRescueDeferTrace, gen.CurrentScopeVariable, exceptionVariable, frameDepth),
 
                         Ast.Assign(exceptionThrownVariable, AstUtils.Constant(true)),
                         AstUtils.Empty()
@@ -342,9 +405,12 @@ namespace IronRuby.Compiler.Ast {
                     leaveRescue
                 );
             } else if (_elseStatements == null) {
-                // ensure only: compiled, an exception that the handler would only take note of and throw again goes through
+                // ensure only: compiled, an exception that the handler would only take note of and throw again goes through, and
+                // one whose backtrace is still to be taken may go through as well where nothing in the frame throws it again
+                // (RubyOps.PassEnsure)
                 guarded = new EnsureGuardExpression(
-                    Ast.Block(transformedBody, AstUtils.Empty()), gen.CurrentScopeVariable, exceptionThrownVariable, exceptionRethrowVariable
+                    Ast.Block(transformedBody, AstUtils.Empty()), gen.CurrentScopeVariable, exceptionThrownVariable, exceptionRethrowVariable,
+                    (EnsureJumpFinder.MayJump(_ensureStatements) || GotoFinder.Has(transformedEnsure)) ? AstUtils.Constant(-1) : gen.CurrentCompiledFrameDepth
                 );
             } else {
                 guarded = AstUtils.Try(

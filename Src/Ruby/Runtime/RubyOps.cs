@@ -3331,7 +3331,7 @@ namespace IronRuby.Runtime {
         /// </summary>
         [Emitted]
         public static bool CanRescue(RubyScope/*!*/ scope, Exception/*!*/ exception) {
-            return CanRescueCore(scope, exception, false, null);
+            return CanRescueCore(scope, exception, false, null, -1);
         }
 
         /// <summary>
@@ -3341,7 +3341,16 @@ namespace IronRuby.Runtime {
         /// Not so an ensure clause, which may end the exception with a jump and leave it in $!.
         /// </summary>
         public static bool CanRescueDeferTrace(RubyScope/*!*/ scope, Exception/*!*/ exception) {
-            return CanRescueCore(scope, exception, true, null);
+            return CanRescueCore(scope, exception, true, null, -1);
+        }
+
+        /// <summary>
+        /// CanRescueDeferTrace of a frame whose record in PrecompiledFrames has the index <paramref name="frameDepth"/>
+        /// (CompiledFrameDepthExpression; -1 if it has none): the frame's record is known to be the innermost one - the frame has
+        /// caught the exception - without reading the exception's CLR trace (see RubyExceptionData.TryDeferCatchSite).
+        /// </summary>
+        public static bool CanRescueDeferTrace(RubyScope/*!*/ scope, Exception/*!*/ exception, int frameDepth) {
+            return CanRescueCore(scope, exception, true, null, frameDepth);
         }
 
         /// <summary>
@@ -3352,7 +3361,7 @@ namespace IronRuby.Runtime {
         /// rescue class list that is not a class (`rescue 42').
         /// </summary>
         public static bool CanRescueAfterClauses(RubyScope/*!*/ scope, Exception/*!*/ exception, Exception handled) {
-            return CanRescueCore(scope, exception, false, handled);
+            return CanRescueCore(scope, exception, false, handled, -1);
         }
 
         /// <summary>
@@ -3388,7 +3397,7 @@ namespace IronRuby.Runtime {
             return false;
         }
 
-        private static bool CanRescueCore(RubyScope/*!*/ scope, Exception/*!*/ exception, bool deferTrace, Exception handled) {
+        private static bool CanRescueCore(RubyScope/*!*/ scope, Exception/*!*/ exception, bool deferTrace, Exception handled, int frameDepth) {
             // A CLR finally may replace the reclaim signal with an ordinary exception.
             // That still belongs to a discarded stack and must not enter a Ruby rescue.
             if (RubyUtils.IsReclaimingFiber) {
@@ -3402,6 +3411,10 @@ namespace IronRuby.Runtime {
             if (lje != null && lje.SkipFrame == scope.FlowControlScope) {
                 return false;
             }
+
+            // What ensure clauses the exception went through took of its backtrace (RubyExceptionData.EnterPassedEnsure), which this
+            // frame completes: taken over before $! - still the exception, which the clauses ran for - is read below.
+            var passed = RubyExceptionData.TryGetInstance(exception)?.TakePassedEnsureCapture();
 
             // Only an exception nothing can have kept: one Kernel#raise made itself. One C# threw may be kept by C# code that hands
             // it to Ruby later (Encoding::Converter#last_error), and so may a CLR exception thrown again.
@@ -3427,7 +3440,7 @@ namespace IronRuby.Runtime {
             }
 
             scope.RubyContext.CurrentException = exception;
-            data.CaptureExceptionTrace(scope, deferTrace);
+            data.CaptureExceptionTrace(scope, deferTrace, frameDepth, passed);
             return true;
         }
 
@@ -3456,8 +3469,17 @@ namespace IronRuby.Runtime {
         /// captured - its throw-site trace is not needed again, and a throw again would only start it over. The cause is decided
         /// here rather than in CanRescue, from the same $!: the ensure clauses that ran in between restore it. And there is room
         /// on the stack: a finally block runs on top of the frames the exception came out of, a catch below them (#128).
+        ///
+        /// An exception Kernel#raise made whose backtrace no frame has taken yet goes through as well, in a frame whose record in
+        /// PrecompiledFrames is known (<paramref name="frameDepth"/>) and in which nothing throws it again (EnsureJumpFinder): the
+        /// catch only took the backtrace, and that waits until the exception is caught or exposed (RubyExceptionData.EnterPassedEnsure).
+        /// The walk of the whole stack the catch took was most of what a raise through an ensure clause cost.
         /// </summary>
         public static Exception PassEnsure(RubyScope/*!*/ scope, Exception/*!*/ exception) {
+            return PassEnsure(scope, exception, -1);
+        }
+
+        public static Exception PassEnsure(RubyScope/*!*/ scope, Exception/*!*/ exception, int frameDepth) {
             // A stack overflow, or a stack thousands of frames deep: one CLR dispatch across thousands of frames with filters costs
             // more than a catch and a throw again per frame (SystemStackError through 10k ensure clauses: 2.5-4x slower than
             // the catch on net8.0).
@@ -3475,10 +3497,13 @@ namespace IronRuby.Runtime {
                 return PassEnsureWithoutCurrentException;
             }
 
+            // `raise ""message""' makes a RuntimeError that no #new has marked handled: CanRescue would only mark it (IsHandledInPlace)
             var data = RubyExceptionData.TryGetInstance(exception);
-            if (data == null || !data.Handled || !(data.HasBacktrace || data.RaiseBacktrace != null)) {
+            if (data == null || !(data.Handled || frameDepth >= 0 && RubyExceptionData.IsHandledInPlace(scope.RubyContext, exception)) ||
+                !(data.HasBacktrace || data.RaiseBacktrace != null || frameDepth >= 0 && data.CanPassUntraced(scope, frameDepth))) {
                 return null;
             }
+            data.Handled = true;
 
             data.TrySetCause(scope.RubyContext.CurrentException);
             // the ensure clause will run Ruby code before an outer frame's rescue clauses are matched (see RescuePassMayTest)
@@ -3491,11 +3516,22 @@ namespace IronRuby.Runtime {
         /// ensure clause sees it in $!, as it would had CanRescue caught it.
         /// </summary>
         public static void EnterPassedEnsure(RubyScope/*!*/ scope, Exception passing) {
+            EnterPassedEnsure(scope, passing, -1);
+        }
+
+        /// <param name="frameDepth">The index of the frame's record, as PassEnsure had it.</param>
+        public static void EnterPassedEnsure(RubyScope/*!*/ scope, Exception passing, int frameDepth) {
             if (passing != null && passing != PassEnsureWithoutCurrentException) {
                 scope.RubyContext.CurrentException = passing;
                 var data = RubyExceptionData.TryGetInstance(passing);
-                if (data != null && data.PendingPassedEnsures > 0) {
-                    data.PendingPassedEnsures--;
+                if (data != null) {
+                    if (data.PendingPassedEnsures > 0) {
+                        data.PendingPassedEnsures--;
+                    }
+                    if (frameDepth >= 0) {
+                        // the ensure clause may expose the exception: where its backtrace is still to be taken, it is this frame's
+                        data.EnterPassedEnsure(scope, frameDepth);
+                    }
                 }
             }
         }
