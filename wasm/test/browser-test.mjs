@@ -162,7 +162,7 @@ shapes.first(2).sum(&:area).round(3)`);
   r = await run('[defined?(x), kept, KEPT]');
   check('reset drops locals, keeps methods and constants', r.ok && r.result === '[nil, :kept, 1]', r);
   r = await run('y = 1; raise "after reset"');
-  check('no frame after reset names the session method', !r.ok && r.error.message === 'after reset' && !/__ironruby_wasm_session__/.test(JSON.stringify(r)), r);
+  check('a frame after reset reads <main>, not the top level of the session file', !r.ok && r.error.message === 'after reset' && !/top \(required\)/.test(JSON.stringify(r)) && r.error.backtrace.some(l => l.includes("in '<main>'")), r);
 
   // a call after terminate() is refused at once (it used to wait for an answer that never comes)
   const late = await within(30000, 'a call after terminate()', wpage.evaluate(() => window.ir.run('1').then(() => 'finished', e => e.message)));
