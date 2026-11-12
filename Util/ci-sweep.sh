@@ -18,7 +18,8 @@
 #   rerun.tsv     suite, file, exit status and log of each file of the third pass
 # (the logs' paths relative to OUT_DIR)
 # Util/sweep-check.rb reads OUT_DIR (or several, one per shard) and compares it with
-# Util/spec-known-failures.txt; this script only runs the specs and always exits 0 once they ran.
+# Util/spec-known-failures.txt; this script only runs the specs and exits 0 once they ran, or 1
+# when the file-by-file pass could not run all of its files.
 set -u
 cd "$(dirname "$0")/.."
 
@@ -65,7 +66,13 @@ while read -r suite job files; do
   mkdir -p "$OUT/$suite/$job.recheck"
   for f in $files; do echo "$suite $job $f"; done >> "$OUT/recheck-files.txt"
 done < "$OUT/jobs.txt"
-xargs -r -P "$JOBS" -L 1 bash -c 'run_file "$@"' _ < "$OUT/recheck-files.txt"
+# run_file's status is its printf's, so a failing or crashing spec file does not make xargs
+# fail: a nonzero status here means a worker could not be started or did not finish, and some
+# files may have no row in recheck.tsv. The list of files is kept, to see which.
+if ! xargs -r -P "$JOBS" -L 1 bash -c 'run_file "$@"' _ < "$OUT/recheck-files.txt"; then
+  echo "running the files one at a time failed; the files are in $OUT/recheck-files.txt" >&2
+  exit 1
+fi
 rm -f "$OUT/recheck-files.txt"
 
 if [ -s "$OUT/recheck.tsv" ]; then

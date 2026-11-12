@@ -128,6 +128,11 @@ ARGV.each do |out|
         files.each { |f| s.crashed << [f, "?", "#{suite}/#{job} left no summary line and was not run again"] }
         next
       end
+      # A file pass that stopped partway (or a worker that never started) leaves some files
+      # without a row, and their examples would vanish from the counts without a word.
+      (files - runs.map(&:first)).each do |f|
+        s.crashed << [f, "?", "#{suite}/#{job} left no summary line and this file was not run again"]
+      end
     end
     runs.each do |file, status, log|
       text = File.file?(log) ? read_log(log) : ""
@@ -176,7 +181,10 @@ passed_alone = lambda do |s, name|
     _, log = s.rerun[f]
     next false unless log && File.file?(log)
     text = read_log(log)
-    SUMMARY.match?(text) && failures_in(text).none? { |n, _| n == name }
+    # A run that ran no example (it was all filtered out, or mspec loaded nothing) says nothing
+    # about whether this one passes.
+    tally = text.scan(SUMMARY).last
+    tally && tally[1].to_i > 0 && failures_in(text).none? { |n, _| n == name }
   end
 end
 

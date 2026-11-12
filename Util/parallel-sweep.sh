@@ -31,10 +31,10 @@ JOBS=${JOBS:-8}
 SUITES=${SUITES:-"core library language command_line security"}
 SHARD=${SHARD:-1/1}
 JOB_TIMEOUT=${JOB_TIMEOUT:-3600}
-case "$SHARD" in
-  [1-9]*/[1-9]*) ;;
-  *) echo "SHARD must be K/N, not $SHARD" >&2; exit 2 ;;
-esac
+# Checked before OUT_DIR is touched: a bad SHARD must not clear an earlier sweep's logs.
+if ! [[ $SHARD =~ ^([1-9][0-9]*)/([1-9][0-9]*)$ ]] || ((BASH_REMATCH[1] > BASH_REMATCH[2])); then
+  echo "SHARD must be K/N with 1 <= K <= N, not $SHARD" >&2; exit 2
+fi
 
 mkdir -p "$OUT"
 jobs_file="$OUT/jobs.txt"
@@ -69,7 +69,7 @@ start=$(date +%s)
 awk '{ print NF, $0 }' "$jobs_file" | sort -s -k1,1nr | cut -d' ' -f2- |
   awk -v k="${SHARD%/*}" -v n="${SHARD#*/}" '(NR - 1) % n == k - 1' > "$jobs_file.run"
 mv "$jobs_file.run" "$jobs_file"
-xargs -P "$JOBS" -L 1 -s 1000000 bash -c 'run_job "$@"' _ < "$jobs_file"
+xargs -r -P "$JOBS" -L 1 -s 1000000 bash -c 'run_job "$@"' _ < "$jobs_file"
 end=$(date +%s)
 
 for s in $SUITES; do
