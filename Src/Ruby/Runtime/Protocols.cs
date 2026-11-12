@@ -569,11 +569,9 @@ namespace IronRuby.Runtime {
                 if (!missing.Found || (missing.Info.DeclaringModule == context.BasicObjectClass && missing.Info is RubyLibraryMethodInfo)) {
                     throw RubyExceptions.MakeCoercionError(context, other, self);
                 }
-                if (HasUserDefinedRespondTo(context, pair[0])) {
-                    var respondTo = binaryOpStorage.GetCallSite("respond_to?");
-                    if (!RubyOps.IsTrue(respondTo.Target(respondTo, pair[0], context.CreateSymbol(binaryOp, RubyEncoding.UTF8)))) {
-                        throw RubyExceptions.MakeCoercionError(context, other, self);
-                    }
+                // (the context's own respond_to? site: binaryOpStorage holds one site, which is the operator's)
+                if (HasUserDefinedRespondTo(context, pair[0]) && !context.RespondTo(pair[0], binaryOp)) {
+                    throw RubyExceptions.MakeCoercionError(context, other, self);
                 }
             }
 

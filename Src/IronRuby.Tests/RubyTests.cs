@@ -1077,6 +1077,7 @@ namespace IronRuby.Tests {
                 Review212_1,
                 Review212_2,
                 Review212_3,
+                Review212_4,
                 Marshal_RegexpWrapper1,
                 Method_LightFrameBlockGuard1,
                 BigDecimal_Ruby4_1,

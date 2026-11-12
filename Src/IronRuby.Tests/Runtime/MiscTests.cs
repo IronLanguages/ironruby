@@ -7028,6 +7028,32 @@ rat hash: [true, true, true, true, true, false, 1, 2, 3]
         }
 
         /// <summary>
+        /// A coerced operand with a respond_to? of its own, at one call site several times over: the check must not
+        /// share the operator's call site (it did, and `1 ^ obj' then called respond_to?(1)). CRuby 4.0.9's output.
+        /// </summary>
+        public void Review212_4() {
+            TestOutput(@"
+require 'ruby4'
+$VERBOSE = nil
+def t(n); r = begin; yield; rescue Exception => e; ""#{e.class}: #{e.message.gsub(/0x\h+/, 'XX')[0, 80]}""; end; puts ""#{n}: #{r.inspect}""; end
+z = Object.new; def z.coerce(x) = [self, x]; def z.respond_to?(m, p = false) = m == :^ || m == :coerce || super; def z.method_missing(m, *a) = m == :^ ? [:viaresp, a] : super
+n = Object.new; def n.coerce(x) = [self, x]; def n.respond_to?(m, p = false) = m == :coerce; def n.method_missing(m, *a) = m == :^ ? :never : super
+def xo(a, b) = a ^ b
+3.times { |i| t(""resp #{i}"") { [xo(1, z), xo(2, z)] } }
+3.times { |i| t(""no #{i}"") { xo(1, n) } }
+t(""mixed"") { [xo(3, z), (xo(3, n) rescue $!.class), xo(4, z), xo(5, 6)] }
+", @"
+resp 0: [[:viaresp, [1]], [:viaresp, [2]]]
+resp 1: [[:viaresp, [1]], [:viaresp, [2]]]
+resp 2: [[:viaresp, [1]], [:viaresp, [2]]]
+no 0: ""TypeError: Object can't be coerced into Integer""
+no 1: ""TypeError: Object can't be coerced into Integer""
+no 2: ""TypeError: Object can't be coerced into Integer""
+mixed: [[:viaresp, [3]], TypeError, [:viaresp, [4]], 3]
+");
+        }
+
+        /// <summary>
         /// `defined?' in a condition makes no call to #freeze, as in CRuby: only whether the answer is nil counts, also for an
         /// operand of &amp;&amp; or || in a condition. Expected output is CRuby 4.0's.
         /// </summary>
