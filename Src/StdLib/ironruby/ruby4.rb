@@ -5332,16 +5332,16 @@ class Enumerator
     # receiver's #each, which MRI never runs (it only forgets the fiber): before the receiver's
     # #rewind, so that an ensure cannot undo what #rewind sets up. The price is that the iteration
     # is forgotten even when #rewind raises, where MRI's would go on. An error one of those ensure
-    # clauses raises is dropped: it comes from code MRI does not run, and #rewind has to go ahead.
+    # clauses raises does not stop the receiver's #rewind, and then comes out of this method, where MRI
+    # has none to show: it cannot be told from a Thread#raise that reached this thread while the fiber
+    # ran, which must not be lost.
     fiber = @__fiber__
     begin
       begin
         fiber.kill if fiber && fiber.alive?
-      rescue ::Exception => e
-        # whatever its class (a ScriptError, a direct subclass of Exception); a signal is this thread's own
-        ::Kernel.raise if ::SignalException === e
+      ensure
+        receiver.__send__(:rewind) if receiver && receiver.respond_to?(:rewind, true)
       end
-      receiver.__send__(:rewind) if receiver && receiver.respond_to?(:rewind, true)
     ensure
       __iter_forget__
     end
