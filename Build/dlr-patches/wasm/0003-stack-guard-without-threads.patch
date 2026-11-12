@@ -1,0 +1,22 @@
+diff --git a/src/core/Microsoft.Dynamic/Utils/StackGuard.cs b/src/core/Microsoft.Dynamic/Utils/StackGuard.cs
+index c13c23d..abdf083 100644
+--- a/src/core/Microsoft.Dynamic/Utils/StackGuard.cs
++++ b/src/core/Microsoft.Dynamic/Utils/StackGuard.cs
+@@ -32,6 +32,17 @@ namespace Microsoft.Scripting.Utils {
+         /// original stack trace.
+         /// </summary>
+         public static T RunOnFreshStack<T>(Func<T> action) {
++#if NET
++            if ((OperatingSystem.IsBrowser() || OperatingSystem.IsWasi())) {
++                // browser-wasm has one thread and cannot start another. The caller is here because this
++                // stack is nearly used up, and its action asks again before anything else: run on this
++                // stack it came straight back until the stack overflowed, which ends the runtime.
++                if (!RuntimeHelpers.TryEnsureSufficientExecutionStack()) {
++                    throw new InsufficientExecutionStackException();
++                }
++                return action();
++            }
++#endif
+             T result = default;
+             ExceptionDispatchInfo error = null;
+             CultureInfo culture = CultureInfo.CurrentCulture, uiCulture = CultureInfo.CurrentUICulture;

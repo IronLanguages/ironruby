@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>IronRuby (wasm)</title></head>
+<body><pre id="out">booting...</pre>
+<script type="module">
+import { bootIronRuby } from './ironruby.js';
+const out = document.getElementById('out');
+try {
+  const ir = await bootIronRuby({});
+  out.textContent = JSON.stringify(ir.bootInfo, null, 2) + "\n" + JSON.stringify(ir.run('puts "Hello from #{RUBY_ENGINE} #{RUBY_VERSION}"; [1,2,3].map { _1 * 2 }'), null, 2);
+  window.ir = ir;
+} catch (e) {
+  // a missing or broken stdlib.zip or runtime: say so rather than stay at "booting..."
+  out.textContent = 'IronRuby did not boot: ' + (e && e.message || e);
+}
+</script></body></html>

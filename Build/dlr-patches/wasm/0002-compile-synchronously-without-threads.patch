@@ -1,0 +1,25 @@
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/Interpreter.cs b/src/core/Microsoft.Dynamic/Interpreter/Interpreter.cs
+index 9c4fb4a..232f212 100644
+--- a/src/core/Microsoft.Dynamic/Interpreter/Interpreter.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/Interpreter.cs
+@@ -64,7 +64,19 @@ namespace Microsoft.Scripting.Interpreter {
+ 
+         internal int LocalCount { get; }
+ 
+-        internal bool CompileSynchronously => _compilationThreshold <= 1;
++        internal bool CompileSynchronously => _compilationThreshold <= 1 || !BackgroundCompilation;
++
++        /// <summary>
++        /// False where there is no other thread to compile on: on single-threaded browser-wasm a
++        /// Task only runs once the code that started it has returned to the JavaScript event loop,
++        /// so a long-running loop would never get its compiled version.
++        /// </summary>
++        internal static readonly bool BackgroundCompilation =
++#if NET
++            !(OperatingSystem.IsBrowser() || OperatingSystem.IsWasi());
++#else
++            true;
++#endif
+ 
+         internal InstructionArray Instructions { get; }
+ 

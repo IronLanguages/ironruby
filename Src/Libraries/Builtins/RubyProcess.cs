@@ -573,7 +573,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("pid", RubyMethodAttributes.PublicSingleton)]
         public static int GetPid(RubyModule/*!*/ self) {
-            return Process.GetCurrentProcess().Id;
+            return OperatingSystem.IsBrowser() ? Environment.ProcessId : Process.GetCurrentProcess().Id;
         }
 
         [RubyMethod("setproctitle", RubyMethodAttributes.PublicSingleton)]
@@ -596,10 +596,16 @@ namespace IronRuby.Builtins {
         // setrlimit
         // setsid
 
+        private static readonly DateTime _StartTime = DateTime.UtcNow;
+
         [RubyMethod("times", RubyMethodAttributes.PublicSingleton)]
         public static RubyStruct/*!*/ GetTimes(RubyModule/*!*/ self) {
             var result = RubyStruct.Create(GetTmsClass(self.Context));
-            using (var process = Process.GetCurrentProcess()) {
+            if (OperatingSystem.IsBrowser()) {
+                // no process accounting in the browser: report the time since start as user time
+                result[0] = (DateTime.UtcNow - _StartTime).TotalSeconds;
+                result[1] = 0.0;
+            } else using (var process = Process.GetCurrentProcess()) {
                 result[0] = process.UserProcessorTime.TotalSeconds;
                 result[1] = process.PrivilegedProcessorTime.TotalSeconds;
             }

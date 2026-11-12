@@ -179,7 +179,10 @@ module Kernel
   private
 
   def require_relative(path)
-    caller_path = caller.first.split(/:\d/, 2).first
+    # caller(0), not caller: this method's own frame is reported with its caller's file and
+    # line, and where the CLR stack cannot be walked (AOT-compiled browser-wasm) the frame of a
+    # method the DLR has compiled is missing altogether - caller(1) would then skip the caller.
+    caller_path = caller(0).first.split(/:\d/, 2).first
     # Relative to where the file really is: through a symlink, the link's target, and for a
     # file run by a relative path, where it was before any chdir.
     if !File.file?(caller_path) || File.symlink?(caller_path)
@@ -2022,7 +2025,7 @@ module Kernel
   private
 
   def __dir__
-    file = caller.first
+    file = caller(0).first   # see require_relative
     file = file.split(/:\d/, 2).first if file
     # Only a real file has a directory. Code that came from a string - an eval, the console -
     # names itself "(eval)" or the like, and MRI answers nil for those rather than pointing at

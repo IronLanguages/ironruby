@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>IronRuby wasm test page</title></head>
+<body>
+<pre id="log">booting...</pre>
+<script type="module">
+// Boots the bundle from / (wasm/dist) and leaves the API on window.ir for test/browser-test.mjs.
+import { bootIronRuby } from '/ironruby.js';
+window.streamed = [];
+window.irReady = bootIronRuby({ onOutput: (fd, text) => window.streamed.push([fd, text]) })
+  .then(ir => { window.ir = ir; document.getElementById('log').textContent = JSON.stringify(ir.bootInfo, null, 2); return ir.bootInfo; },
+        e => { document.getElementById('log').textContent = 'boot failed: ' + e; throw e; });
+</script>
+</body></html>

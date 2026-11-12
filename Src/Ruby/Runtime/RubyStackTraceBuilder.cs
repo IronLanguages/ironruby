@@ -121,7 +121,66 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// False where a CLR stack walk sees no frames at all: .NET on WebAssembly with the assemblies
+        /// AOT-compiled (wasm code carries no unwind information). Backtraces are then made of the
+        /// interpreter's own frame chain alone, so frames of compiled code (the method JIT, lambdas the
+        /// interpreter compiled) and of library methods are missing from them.
+        /// IR_INTERPRETED_BACKTRACES=1 asks for the same anywhere, to test it.
+        /// </summary>
+        internal static readonly bool ClrStackAvailable =
+            new StackTrace(false).FrameCount > 0 && Environment.GetEnvironmentVariable("IR_INTERPRETED_BACKTRACES") != "1";
+
+        private static IList<InterpretedFrameInfo> CurrentInterpretedFrames() {
+            var frame = InterpretedFrame.CurrentFrame.Value;
+            return frame != null ? new List<InterpretedFrameInfo>(frame.GetStackTraceDebugInfo()) : null;
+        }
+
+        // The interpreted-frames-only backtrace (see ClrStackAvailable), innermost first.
+        private void AddInterpretedBacktrace(IList<InterpretedFrameInfo> frames, int skipFrames) {
+            if (frames == null) {
+                return;
+            }
+            bool skippedAny = false;
+            foreach (var info in frames) {
+                string methodName = info.MethodName;
+                string file = info.DebugInfo != null ? info.DebugInfo.FileName : null;
+                int line = info.DebugInfo != null ? info.DebugInfo.StartLine : 0;
+                if (methodName == InterpretedCallSiteName || !TryParseRubyMethodName(ref methodName, ref file, ref line)) {
+                    continue;
+                }
+                // the rules of the CLR stack's walk: "<internal:...>" files too, and no frame for a helper method
+                if (!_keepInternalFrames && IsInternalFrameFile(file)) {
+                    // and the frames it drops still count for caller(n), as in AddBacktrace
+                    int dropped = AddInternalFrame(methodName);
+                    if (_trace.Count == 0 && !skippedAny) {
+                        skipFrames = Math.Max(0, skipFrames - dropped);
+                    }
+                    continue;
+                }
+                foreach (var deferred in _deferredMethodNames) {
+                    if (skipFrames == 0) {
+                        _trace.Add(CreateFrame(FormatFrame(file, line, deferred)));
+                    } else {
+                        skipFrames--;
+                        skippedAny = true;
+                    }
+                }
+                _deferredMethodNames.Clear();
+                if (skipFrames == 0) {
+                    _trace.Add(CreateFrame(FormatFrame(file, line, methodName)));
+                } else {
+                    skipFrames--;
+                    skippedAny = true;
+                }
+            }
+        }
+
         private void AddExceptionBacktrace(StackTrace/*!*/ throwSiteTrace, StackTrace catchSiteTrace, bool isCatchSiteInterpreted) {
+            if (!ClrStackAvailable) {
+                AddInterpretedBacktrace(_interpretedFrames, 0);
+                return;
+            }
             var throwFrames = throwSiteTrace.GetFrames();
             AddBacktrace(throwFrames, 0, false);
 
@@ -318,6 +377,10 @@ namespace IronRuby.Runtime {
             // from the first one, and would get a .cs file of the runtime instead of the caller's.
             _exceptionDetail = false;
 
+            if (!ClrStackAvailable) {
+                AddInterpretedBacktrace(CurrentInterpretedFrames(), skipFrames);
+                return;
+            }
             var trace = GetClrStackTrace(null, _needsClrFileInfo);
 
             _interpretedFrames = InterpretedFrame.CurrentFrame.Value != null ?

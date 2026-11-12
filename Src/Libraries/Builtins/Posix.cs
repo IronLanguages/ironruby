@@ -23,7 +23,9 @@ namespace IronRuby.Builtins {
     internal static class Posix {
         internal static readonly bool IsAvailable =
             System.IO.Path.DirectorySeparatorChar == '/' &&
-            !RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
+            !RuntimeInformation.IsOSPlatform(OSPlatform.OSX) &&
+            // browser-wasm: there is no libc to P/Invoke (the managed fallbacks are used)
+            !OperatingSystem.IsBrowser();
 
         /// <summary>
         /// flock(2) is the same call with the same operation bits on every Unix, so it is

@@ -635,7 +635,8 @@ namespace IronRuby.Builtins {
                 return MutableString.CreateMutable(path.Encoding).Append((char)path.GetLastChar());
             }
 
-            bool isWindows = Environment.OSVersion.Platform != PlatformID.Unix && Environment.OSVersion.Platform != PlatformID.MacOSX;
+            bool isWindows = Environment.OSVersion.Platform != PlatformID.Unix && Environment.OSVersion.Platform != PlatformID.MacOSX &&
+                !OperatingSystem.IsBrowser();
             if (isWindows) {
                 string first = parts[0];
                 if (strPath.Length >= 2 && IsDirectorySeparator(strPath[0]) && IsDirectorySeparator(strPath[1])) {

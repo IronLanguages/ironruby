@@ -1004,7 +1004,8 @@ namespace IronRuby.Runtime {
                     return MakeWindowsPlatformName();
 
                 default:
-                    return "unknown";
+                    // browser-wasm reports PlatformID.Other
+                    return OperatingSystem.IsBrowser() ? "wasm32-browser" : "unknown";
             }
         }
 

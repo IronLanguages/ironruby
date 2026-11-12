@@ -1,0 +1,75 @@
+<Project Sdk="Microsoft.NET.Sdk.WebAssembly">
+  <!-- IronRuby on browser-wasm (Mono runtime, single-threaded). See ../README.md. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>IronRuby.Wasm</AssemblyName>
+    <RootNamespace>IronRuby.Wasm</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Nullable>disable</Nullable>
+    <!-- Trimming: partial mode only touches the framework's own (IsTrimmable) assemblies, so
+         IronRuby, the DLR and NuGet packages stay whole. IronRuby binds .NET members by name at
+         run time (CLR interop, the DLR binders), so the framework assemblies Ruby code is likely
+         to reach through interop are rooted whole as well (IronRubyRootAssemblies); the rest of
+         the framework is trimmed to what is referenced, and unreferenced assemblies dropped. -->
+    <PublishTrimmed Condition="'$(RunAOTCompilation)' == 'true'">true</PublishTrimmed>
+    <!-- The interpreter-only build is not trimmed: once ILLink has processed CoreLib, Mono's
+         interpreter stops in RubyContext..cctor ("NIY encountered"), while the same code AOT-compiled
+         is fine. (AOT needs the trimmer, so the AOT build is trimmed.) -->
+    <PublishTrimmed Condition="'$(RunAOTCompilation)' != 'true'">false</PublishTrimmed>
+    <RunAOTCompilation Condition="'$(RunAOTCompilation)' == ''">false</RunAOTCompilation>
+    <TrimMode>partial</TrimMode>
+    <SuppressTrimAnalysisWarnings>true</SuppressTrimAnalysisWarnings>
+    <!-- AOT (RunAOTCompilation=true) compiles only these to WebAssembly - the interpreter's hot
+         code: IronRuby, the DLR and the BCL parts they lean on. Everything else stays IL and runs
+         on Mono's interpreter, which keeps the download from growing by the whole framework. -->
+    <IronRubyAotAssemblies>;IronRuby;IronRuby.Libraries;IronRuby.Prism;IronRuby.Wasm;Microsoft.Dynamic;Microsoft.Scripting;System.Private.CoreLib;System.Linq.Expressions;System.Linq;System.Collections;System.Collections.Concurrent;System.Text.RegularExpressions;System.Runtime.Numerics;System.ObjectModel;System.Memory;</IronRubyAotAssemblies>
+    <!-- Ruby's encodings: Shift_JIS/EUC-JP/... come from the code-pages provider, UTF-7 is
+         off by default in .NET 5+ and has to be switched back on in the runtime config. -->
+    <EnableUnsafeUTF7Encoding>true</EnableUnsafeUTF7Encoding>
+    <InvariantGlobalization Condition="'$(InvariantGlobalization)' == ''">true</InvariantGlobalization>
+    <WasmEnableThreads>false</WasmEnableThreads>
+    <!-- prism.a (native) is linked into dotnet.native.wasm -->
+    <WasmBuildNative>true</WasmBuildNative>
+    <WasmEmitSymbolMap Condition="'$(WasmEmitSymbolMap)' == ''">false</WasmEmitSymbolMap>
+    <EmccInitialHeapSize>134217728</EmccInitialHeapSize>
+    <EmccMaximumHeapSize>2147483648</EmccMaximumHeapSize>
+    <WasmFingerprintAssets>false</WasmFingerprintAssets>
+    <CompressionEnabled>true</CompressionEnabled>
+    <!-- IronRuby.Prism is an Exe (the prism dump tool); here it is only a library -->
+    <ValidateExecutableReferencesMatchSelfContained>false</ValidateExecutableReferencesMatchSelfContained>
+    <NoWarn>$(NoWarn);CA1416;NU1510;IL2026;IL2072;IL2075;IL3050</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\Src\Ruby\Ruby.csproj" />
+    <ProjectReference Include="..\..\Src\Libraries\IronRuby.Libraries.csproj" />
+    <ProjectReference Include="..\..\Src\Prism\IronRuby.Prism.csproj" />
+    <ProjectReference Include="$(DlrSourceDir)\Microsoft.Scripting\Microsoft.Scripting.csproj" />
+    <ProjectReference Include="$(DlrSourceDir)\Microsoft.Dynamic\Microsoft.Dynamic.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Microsoft.Scripting references it with PrivateAssets=all (ScriptRuntimeSetup.ReadConfiguration,
+         unused here); the AOT compiler still has to resolve it. -->
+    <PackageReference Include="System.Configuration.ConfigurationManager" Version="10.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="boot.rb" LogicalName="boot.rb" />
+  </ItemGroup>
+  <ItemGroup>
+    <NativeFileReference Include="..\native\build\prism.a" />
+  </ItemGroup>
+  <PropertyGroup>
+    <IronRubyRootAssemblies>System.Private.CoreLib;System.Runtime;netstandard;mscorlib;System;System.Core;System.Collections;System.Collections.Concurrent;System.Collections.Immutable;System.Collections.NonGeneric;System.Collections.Specialized;System.Linq;System.Linq.Expressions;System.Text.RegularExpressions;System.Text.Json;System.Text.Encoding.CodePages;System.Text.Encodings.Web;System.Runtime.Numerics;System.Numerics.Vectors;System.Memory;System.ObjectModel;System.Console;System.Runtime.InteropServices;System.Runtime.InteropServices.JavaScript;System.Private.Uri;System.Web.HttpUtility;System.Security.Cryptography;System.IO.Compression;System.Xml;System.Xml.ReaderWriter;System.Private.Xml;System.Private.Xml.Linq;System.Xml.Linq;System.Xml.XDocument;System.ComponentModel;System.ComponentModel.Primitives;System.ComponentModel.TypeConverter;System.Drawing.Primitives;System.Drawing;System.Net.Primitives;System.Threading;System.Runtime.Extensions;System.Globalization;System.Reflection.Emit;System.Reflection.Emit.Lightweight;System.Reflection.Emit.ILGeneration;System.Reflection.Primitives;System.Reflection.Metadata;System.Runtime.Loader</IronRubyRootAssemblies>
+  </PropertyGroup>
+  <Target Name="IronRubyRootAssemblies" BeforeTargets="PrepareForILLink">
+    <ItemGroup>
+      <TrimmerRootAssembly Include="$(IronRubyRootAssemblies)" />
+    </ItemGroup>
+  </Target>
+  <Target Name="IronRubySelectAotAssemblies" BeforeTargets="_WasmAotCompileApp" Condition="'$(RunAOTCompilation)' == 'true'">
+    <ItemGroup>
+      <_AOT_InternalForceInterpretAssemblies Include="@(_WasmAssembliesInternal)" Condition="!$(IronRubyAotAssemblies.Contains(';%(Filename);'))" />
+    </ItemGroup>
+    <Message Importance="High" Text="interpreted (not AOT): @(_AOT_InternalForceInterpretAssemblies->'%(Filename)', ' ')" />
+  </Target>
+</Project>

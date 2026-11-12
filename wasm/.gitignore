@@ -1,0 +1,5 @@
+dist/
+native/build/
+test/fixtures/
+IronRuby.Wasm/bin/
+IronRuby.Wasm/obj/

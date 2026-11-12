@@ -1350,6 +1350,11 @@ namespace IronRuby.Builtins {
         /// Thread is a plain CLR thread whose Ruby class is recorded by RubyContext.AdoptClrObject.
         /// </summary>
         private static Thread/*!*/ AllocateThread(RubyContext/*!*/ context, RubyClass subclass, out ThreadStarter/*!*/ starter) {
+            if (OperatingSystem.IsBrowser()) {
+                // single-threaded WebAssembly: Thread.Start would throw PlatformNotSupportedException
+                throw RubyExceptions.CreateNotImplementedError(
+                    "Thread.new is not available in the browser: .NET on WebAssembly runs on a single thread (so do Fiber and Enumerator#next, which are built on threads)");
+            }
             RubyThreadInfo creator = RubyThreadInfo.FromThread(Thread.CurrentThread);
             ThreadGroup group = creator.Group;
             ThreadStarter s = starter = new ThreadStarter();
