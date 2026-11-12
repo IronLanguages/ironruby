@@ -35,7 +35,10 @@ env:
 jobs:
   wasm:
     name: browser-wasm ${{ matrix.aot == '1' && 'AOT' || 'interpreter' }}
-    runs-on: ubuntu-latest
+    # Not ubuntu-latest: the Chromium test's Playwright installs the browser's system packages, and has
+    # none for a release newer than it knows (ubuntu-latest became 26.04: "Playwright does not support
+    # chromium on ubuntu26.04-x64"). Move this and the Playwright version below together.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
