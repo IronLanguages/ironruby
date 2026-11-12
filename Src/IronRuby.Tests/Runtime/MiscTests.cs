@@ -6791,6 +6791,71 @@ p calls
         }
 
         /// <summary>
+        /// A block with optional parameters before a rest parameter evaluates the defaults of the ones the
+        /// caller left out: BlockDispatcherUnsplatN used to pad them with nil. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Block_OptionalBeforeRest1() {
+            TestOutput(@"
+def y0; yield; end
+def y1; yield 1; end
+def y2; yield 1, 2; end
+y0 { |a = 5, *r| p [a, r] }
+y0 { |a, b = 6, *r| p [a, b, r] }
+y1 { |a, b = 6, c = 7, *r| p [a, b, c, r] }
+y2 { |a, b = 6, c = 7, *r| p [a, b, c, r] }
+pr = proc { |a = 1, b = 2, *r| [a, b, r] }
+p pr.call, pr.call(9), pr.call([8]), pr.call(7, 8, 9)
+", @"
+[5, []]
+[nil, 6, []]
+[1, 6, 7, []]
+[1, 2, 7, []]
+[1, 2, []]
+[9, 2, []]
+[8, 2, []]
+[7, 8, [9]]
+");
+        }
+
+        /// <summary>
+        /// The errors the compiler raises itself (unknown keywords, a failed pattern match) go to Kernel#raise
+        /// and name the top-level classes, whatever `raise` and constants the surrounding class defines.
+        /// Expected output is CRuby 4.0's.
+        /// </summary>
+        public void LoweredRaise_IgnoresOwnRaise1() {
+            TestOutput(@"
+require 'ruby4'
+class C
+  def raise(*a) = Kernel.raise(RuntimeError, ""own raise"")
+  def kw(a: 1) = a
+  def pm(x) = (case x; in Integer then 1; end)
+  def dc(x) = (case x; in [a] then a; end)
+end
+class Bad; def deconstruct = 1; end
+c = C.new
+[-> { c.kw(b: 2) }, -> { c.pm(""s"") }, -> { c.dc(Bad.new) }, -> { h = {a: 1}; c.instance_eval { case h; in {b:} then b; end } }].each do |l|
+  begin
+    l.call
+  rescue Exception => e
+    puts ""#{e.class}: #{e.message}""
+  end
+end
+module M
+  ArgumentError = Class.new(StandardError)
+  NoMatchingPatternError = 1
+  def self.f(x) = (case x; in 1 then 1; end)
+  begin; f(2); rescue Exception => e; puts ""#{e.class}: #{e.message}""; end
+end
+", @"
+ArgumentError: unknown keyword: :b
+NoMatchingPatternError: ""s"": Integer === ""s"" does not return true
+TypeError: deconstruct must return Array
+NoMatchingPatternKeyError: {a: 1}: key not found: :b
+NoMatchingPatternError: 2: 1 === 2 does not return true
+");
+        }
+
+        /// <summary>
         /// `defined?' in a condition makes no call to #freeze, as in CRuby: only whether the answer is nil counts, also for an
         /// operand of &amp;&amp; or || in a condition. Expected output is CRuby 4.0's.
         /// </summary>

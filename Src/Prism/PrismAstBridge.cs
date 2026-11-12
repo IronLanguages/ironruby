@@ -2888,8 +2888,8 @@ namespace IronRuby.Prism {
                 new SimpleAssignmentExpression(listVar, list, null, span),
                 new UnlessExpression(
                     new MethodCall(listVar, "empty?", null, span),
-                    new Statements(new MethodCall(null, "raise", new Arguments(new Expression[] {
-                        new ConstantVariable("ArgumentError", span), message
+                    new Statements(new MethodCall(KernelModule(span), "raise", new Arguments(new Expression[] {
+                        new ConstantVariable(null, "ArgumentError", span), message
                     }), span)),
                     null, span)), span);
         }
@@ -2913,9 +2913,18 @@ namespace IronRuby.Prism {
             return temp;
         }
 
+        /// <summary>
+        /// `::Kernel`, the receiver of the raises this lowering emits. An implicit-self `raise` would run a
+        /// `raise` the surrounding class defines itself (Fiber#raise, Thread#raise, a user's own), and a bare
+        /// `ArgumentError` a constant of that name in the lexical scope.
+        /// </summary>
+        private static Expression/*!*/ KernelModule(SourceSpan span) {
+            return new ConstantVariable(null, "Kernel", span);
+        }
+
         private Expression/*!*/ RaiseError(string/*!*/ className, string/*!*/ message, SourceSpan span) {
-            return new MethodCall(null, "raise", new Arguments(new Expression[] {
-                new ConstantVariable(className, span),
+            return new MethodCall(KernelModule(span), "raise", new Arguments(new Expression[] {
+                new ConstantVariable(null, className, span),
                 new StringLiteral(message, _encoding, span)
             }), span);
         }
@@ -2962,10 +2971,10 @@ namespace IronRuby.Prism {
         private Expression/*!*/ RaiseNoMatchingPattern(Expression/*!*/ subject, SourceSpan span) {
             Expression message = _patternFailure == null
                 ? new MethodCall(subject, "inspect", null, span)
-                : new MethodCall(new ConstantVariable("NoMatchingPatternError", span), "__message__",
+                : new MethodCall(new ConstantVariable(null, "NoMatchingPatternError", span), "__message__",
                     new Arguments(new Expression[] { subject, _patternFailure }), span);
-            Expression result = new MethodCall(null, "raise", new Arguments(new Expression[] {
-                new ConstantVariable("NoMatchingPatternError", span),
+            Expression result = new MethodCall(KernelModule(span), "raise", new Arguments(new Expression[] {
+                new ConstantVariable(null, "NoMatchingPatternError", span),
                 message
             }), span);
 
@@ -2973,8 +2982,8 @@ namespace IronRuby.Prism {
                 result = new ConditionalExpression(
                     new MethodCall(_patternMissingKey, "nil?", null, span),
                     result,
-                    new MethodCall(null, "raise", new Arguments(
-                        new MethodCall(new ConstantVariable("NoMatchingPatternKeyError", span), "__missing_key__",
+                    new MethodCall(KernelModule(span), "raise", new Arguments(
+                        new MethodCall(new ConstantVariable(null, "NoMatchingPatternKeyError", span), "__missing_key__",
                             new Arguments(new Expression[] { subject, _patternMissingKey }), span)
                     ), span),
                     span);
@@ -3014,7 +3023,7 @@ namespace IronRuby.Prism {
             reasonArgs.AddRange(args);
             return new OrExpression(test, new BlockExpression(MakeStatements(new Expression[] {
                 new SimpleAssignmentExpression(_patternFailure,
-                    new MethodCall(new ConstantVariable("NoMatchingPatternError", span), "__reason__",
+                    new MethodCall(new ConstantVariable(null, "NoMatchingPatternError", span), "__reason__",
                         new Arguments(reasonArgs.ToArray()), span), null, span),
                 Literal.False(span)
             }), span), span);
