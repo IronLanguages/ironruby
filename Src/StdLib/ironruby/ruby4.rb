@@ -5320,19 +5320,25 @@ class Enumerator
   end
   private :__iter_in_progress__
 
-  # enumerator_rewind: the receiver's #rewind first (rb_check_funcall, which finds a
-  # private one too), then the iteration is forgotten.
+  # enumerator_rewind: the receiver's #rewind (rb_check_funcall, which finds a private one
+  # too), then the iteration is forgotten.
   def rewind
     if frozen?
       ::Kernel.raise(::FrozenError.new("can't modify frozen #{self.class}: #{inspect}", receiver: self))
     end
     target = (@__generator__ ? nil : __enum_target__)
     receiver = target && target[0]
-    receiver.__send__(:rewind) if receiver && receiver.respond_to?(:rewind, true)
+    # Unwind the abandoned fiber, so that its thread exits. That runs the ensure clauses of the
+    # receiver's #each, which MRI never runs (it only forgets the fiber): before the receiver's
+    # #rewind, so that an ensure cannot undo what #rewind sets up. The price is that the iteration
+    # is forgotten even when #rewind raises, where MRI's would go on.
     fiber = @__fiber__
-    __iter_forget__
-    # Unwind the abandoned fiber so its ensure blocks run and its thread exits.
-    fiber.kill if fiber && fiber.alive?
+    begin
+      fiber.kill if fiber && fiber.alive?
+      receiver.__send__(:rewind) if receiver && receiver.respond_to?(:rewind, true)
+    ensure
+      __iter_forget__
+    end
     self
   end
 

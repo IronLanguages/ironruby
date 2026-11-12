@@ -598,13 +598,23 @@ namespace IronRuby.Builtins {
         public static int GetHashCode(UnaryOpStorage/*!*/ hashStorage, Range/*!*/ self) {
             // MRI: Ruby treatment of hash return value is inconsistent. 
             // No conversions happen here (unlike e.g. Array.hash).
-            var hashSite = hashStorage.GetCallSite("hash");
-            return unchecked(
-                Protocols.ToHashCode(hashSite.Target(hashSite, self.Begin)) ^
-                Protocols.ToHashCode(hashSite.Target(hashSite, self.End)) ^ 
-                (self.ExcludeEnd ? 179425693 : 1794210891)
-            );
+            // A range that contains itself (Marshal.load can make one) hashes without its ends where it comes
+            // back to itself, as MRI's recursive_hash: asking them again overflowed the stack.
+            using (IDisposable handle = _HashTracker.TrackObject(self)) {
+                if (handle == null) {
+                    return self.ExcludeEnd ? 179425693 : 1794210891;
+                }
+                var hashSite = hashStorage.GetCallSite("hash");
+                return unchecked(
+                    Protocols.ToHashCode(hashSite.Target(hashSite, self.Begin)) ^
+                    Protocols.ToHashCode(hashSite.Target(hashSite, self.End)) ^ 
+                    (self.ExcludeEnd ? 179425693 : 1794210891)
+                );
+            }
         }
+
+        [MultiRuntimeAware]
+        private static readonly RubyUtils.RecursionTracker _HashTracker = new RubyUtils.RecursionTracker();
 
         #endregion
 

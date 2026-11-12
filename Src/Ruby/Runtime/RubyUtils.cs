@@ -1243,11 +1243,22 @@ namespace IronRuby.Runtime {
         public class PairRecursionTracker {
             private sealed class PairComparer : IEqualityComparer<KeyValuePair<object, object>> {
                 public bool Equals(KeyValuePair<object, object> x, KeyValuePair<object, object> y) {
-                    return ReferenceEquals(x.Key, y.Key) && ReferenceEquals(x.Value, y.Value);
+                    return Same(x.Key, y.Key) && Same(x.Value, y.Value);
                 }
 
                 public int GetHashCode(KeyValuePair<object, object> pair) {
-                    return unchecked(RuntimeHelpers.GetHashCode(pair.Key) * 31 + RuntimeHelpers.GetHashCode(pair.Value));
+                    return unchecked(Hash(pair.Key) * 31 + Hash(pair.Value));
+                }
+
+                // An Integer or a Float is its value: each boxing of one outside the cache of small integers is a new
+                // object, and an operand that came back in a new box would never be recognized (Integer#& with a
+                // #coerce that hands 1000 back recursed until the stack overflowed).
+                private static bool Same(object x, object y) {
+                    return ReferenceEquals(x, y) || (x is ValueType && x.Equals(y));
+                }
+
+                private static int Hash(object obj) {
+                    return obj is ValueType ? obj.GetHashCode() : RuntimeHelpers.GetHashCode(obj);
                 }
             }
 
